@@ -1,0 +1,2 @@
+DefinePlayerTypes("person", "computer")
+PresentMap("Pytest Lifecycle Cleanup", 2, 32, 32, 1)

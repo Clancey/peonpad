@@ -1,0 +1,165 @@
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+index 787d87c0..642a0e23 100644
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -20,6 +20,18 @@ if(CMAKE_CROSSCOMPILING OR CMAKE_TOOLCHAIN_FILE)
+     )
+   endif()
+ endif()
++if(APPLE)
++  foreach(APPLE_CMAKE_VARIABLE
++      CMAKE_OSX_ARCHITECTURES
++      CMAKE_OSX_DEPLOYMENT_TARGET
++      CMAKE_OSX_SYSROOT)
++    if(DEFINED ${APPLE_CMAKE_VARIABLE} AND
++        NOT "${${APPLE_CMAKE_VARIABLE}}" STREQUAL "")
++      list(APPEND STRATAGUS_EXTERNAL_CMAKE_ARGS
++        "-D${APPLE_CMAKE_VARIABLE}:STRING=${${APPLE_CMAKE_VARIABLE}}")
++    endif()
++  endforeach()
++endif()
+ set(STRATAGUS_EXTERNAL_CMAKE_ARGS "${STRATAGUS_EXTERNAL_CMAKE_ARGS}" PARENT_SCOPE)
+ 
+ macro(vendored_lua)
+@@ -70,8 +82,9 @@ macro(vendored_zlib)
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+       CMAKE_CACHE_ARGS -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
+       INSTALL_COMMAND cmake -E copy ${ZLIB_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/zlib/src/zlib-build/"
+-      # the SDL included version of zlib is patched to rename zconf.h -> zconf.h.included, but that leaves the tree dirty...
+-      TEST_COMMAND cmake -E rename "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib/zconf.h.included" "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib/zconf.h"
++      # The generated build-tree zconf.h is sufficient. Never rename the
++      # archived zconf.h.included inside the staged source tree.
++      TEST_COMMAND ""
+     )
+     set(ZLIB_FOUND TRUE)
+ 
+@@ -91,6 +91,10 @@ macro(vendored_png)
+   if(NOT DEFINED USE_VENDORED_PNG)
+     set(USE_VENDORED_PNG true)
+ 
++    if(APPLE)
++      set(EXTRA_PNG_CMAKE_CACHE_ARGS -DPNG_ARM_NEON:STRING=on)
++    endif()
++
+     file(GLOB PNG_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/libpng/*.h")
+ 
+     ExternalProject_Add(png
+@@ -99,7 +103,7 @@ macro(vendored_png)
+       INSTALL_COMMAND cmake -E copy ${PNG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/png/src/png-build/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+       CMAKE_CACHE_ARGS -DZLIB_FOUND:STRING=1 -DZLIB_INCLUDE_DIR:PATH=${ZLIB_INCLUDE_DIR} -DZLIB_LIBRARY:FILEPATH=${ZLIB_LIBRARIES}
+-      -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
++      -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON ${EXTRA_PNG_CMAKE_CACHE_ARGS}
+     )
+ 
+     add_dependencies(png zlib)
+@@ -330,6 +334,14 @@ macro(vendored_sdl)
+     if(MINGW)
+       list(APPEND EXTRA_SDL_CMAKE_ARGS -DHAVE_WINDOWS_GAMING_INPUT_H=OFF)
+     endif()
++    # Xcode 26 correctly diagnoses mixed declarations in SDL's bundled macOS
++    # HIDAPI source. SDL 2.0.22 enables that diagnostic as an error after its
++    # compiler probe, although the bundled HIDAPI code intentionally uses the
++    # C99 form. Keep the warning, but do not promote it to an error.
++    if(APPLE)
++      list(APPEND EXTRA_SDL_CMAKE_ARGS
++        -DHAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT=OFF)
++    endif()
+     ExternalProject_Add(SDL2
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/SDL2/"
+@@ -401,7 +426,9 @@ macro(vendored_sdl_mixer)
+       INSTALL_COMMAND ""
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS} -DSDL2MIXER_VENDORED=ON -DBUILD_SHARED_LIBS=OFF -DSDL2MIXER_DEPS_SHARED=OFF
+       -DSDL2MIXER_SAMPLES=OFF
+-      -DSDL2MIXER_FLAC=OFF
++      -DSDL2MIXER_FLAC=ON
++      -DSDL2MIXER_FLAC_LIBFLAC=OFF
++      -DSDL2MIXER_FLAC_DRFLAC=ON
+       -DSDL2MIXER_OPUS=OFF
+       -DSDL2MIXER_MOD=OFF
+       -DSDL2MIXER_MIDI=ON
+diff --git a/third-party/SDL_mixer/src/music.c b/third-party/SDL_mixer/src/music.c
+--- a/third-party/SDL_mixer/src/music.c
++++ b/third-party/SDL_mixer/src/music.c
+@@ -543,6 +543,9 @@ Mix_MusicType detect_music_type(SDL_RWops *src)
+         if (SDL_memcmp(magic, "OpusHead", 8) == 0) {
+             return MUS_OPUS;
+         }
++        if (magic[0] == 0x7F && SDL_memcmp(magic + 1, "FLAC", 4) == 0) {
++            return MUS_FLAC;
++        }
+         return MUS_OGG;
+     }
+ 
+@@ -621,7 +624,8 @@ Mix_Music *Mix_LoadMUS(const char *file)
+                     SDL_strcasecmp(ext, "KAR") == 0) {
+             type = MUS_MID;
+         } else if (SDL_strcasecmp(ext, "OGG") == 0) {
+-            type = MUS_OGG;
++            /* Ogg is a container; sniff it to distinguish Vorbis and FLAC. */
++            type = MUS_NONE;
+         } else if (SDL_strcasecmp(ext, "OPUS") == 0) {
+             type = MUS_OPUS;
+         } else if (SDL_strcasecmp(ext, "FLAC") == 0) {
+diff --git a/third-party/SDL_image/external/zlib/CMakeLists.txt b/third-party/SDL_image/external/zlib/CMakeLists.txt
+--- a/third-party/SDL_image/external/zlib/CMakeLists.txt
++++ b/third-party/SDL_image/external/zlib/CMakeLists.txt
+@@ -67,14 +67,10 @@ if(MSVC)
+ endif()
+ 
+ if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
+-    # If we're doing an out of source build and the user has a zconf.h
+-    # in their source tree...
++    # Keep archived source inputs immutable. The build directory's generated
++    # zconf.h is first on the include path and is the header this build uses.
+     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h)
+-        message(STATUS "Renaming")
+-        message(STATUS "    ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h")
+-        message(STATUS "to 'zconf.h.included' because this file is included with zlib")
+-        message(STATUS "but CMake generates it automatically in the build directory.")
+-        file(RENAME ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h.included)
++        message(STATUS "Preserving source-tree zconf.h; using generated build-tree header")
+   endif()
+ endif()
+ 
+diff --git a/third-party/SDL_image/external/zlib/zlib.h b/third-party/SDL_image/external/zlib/zlib.h
+--- a/third-party/SDL_image/external/zlib/zlib.h
++++ b/third-party/SDL_image/external/zlib/zlib.h
+@@ -31,7 +31,7 @@
+ #ifndef ZLIB_H
+ #define ZLIB_H
+ 
+-#include "zconf.h"
++#include <zconf.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+diff --git a/third-party/SDL_image/external/zlib/zutil.h b/third-party/SDL_image/external/zlib/zutil.h
+index 0d0bc1ad..a6a79f69 100644
+--- a/third-party/SDL_image/external/zlib/zutil.h
++++ b/third-party/SDL_image/external/zlib/zutil.h
+@@ -137,7 +137,7 @@ extern z_const char * const z_errmsg[10]; /* indexed by 2-zlib_error */
+ #  endif
+ #endif
+ 
+-#if defined(MACOS) || defined(TARGET_OS_MAC)
++#if (defined(MACOS) || defined(TARGET_OS_MAC)) && !defined(__APPLE__)
+ #  define OS_CODE  7
+ #  ifndef Z_SOLO
+ #    if defined(__MWERKS__) && __dest_os != __be_os && __dest_os != __win32_os
+diff --git a/third-party/SDL_image/external/libpng/pngpriv.h b/third-party/SDL_image/external/libpng/pngpriv.h
+index ae5650c2..2fa0659a 100644
+--- a/third-party/SDL_image/external/libpng/pngpriv.h
++++ b/third-party/SDL_image/external/libpng/pngpriv.h
+@@ -517,8 +517,9 @@ typedef void (PNGCBAPI *png_unknown_chunk_ptr) PNGARG((png_structp,
+ #  include <float.h>
+ 
+ #  if (defined(__MWERKS__) && defined(macintosh)) || defined(applec) || \
+-    defined(THINK_C) || defined(__SC__) || defined(TARGET_OS_MAC)
++    defined(THINK_C) || defined(__SC__) || \
++    (defined(TARGET_OS_MAC) && !defined(__APPLE__))
+    /* We need to check that <math.h> hasn't already been included earlier
+     * as it seems it doesn't agree with <fp.h>, yet we should really use
+     * <fp.h> if possible.
+     */

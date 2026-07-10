@@ -1,0 +1,54 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -49,6 +49,9 @@ else()
+ endif()
+ 
+ option(ENABLE_VENDORED_LIBS OFF)
++option(PEONPAD_IOS_DATA_LIBRARY
++  "Build only the Wargus data-layer archive for the PeonPad iOS app"
++  OFF)
+ 
+ # Wargus sources
+ 
+@@ -76,5 +79,20 @@ set(wargus_SRCS
+ 	wargus.cpp
+ )
+ 
++if(PEONPAD_IOS_DATA_LIBRARY)
++	if(NOT STRATAGUS_INCLUDE_DIR)
++		message(FATAL_ERROR
++		  "PEONPAD_IOS_DATA_LIBRARY requires STRATAGUS_INCLUDE_DIR")
++	endif()
++	add_library(wargus_data STATIC ${wargus_SRCS})
++	target_include_directories(wargus_data PRIVATE ${STRATAGUS_INCLUDE_DIR})
++	target_compile_definitions(wargus_data PRIVATE
++		PEONPAD_IOS=1
++		DATA_PATH=""
++		SCRIPTS_PATH=""
++		STRATAGUS_BIN="")
++	return()
++endif()
++
+ if(WIN32)
+ 	set(wargus_SRCS
+diff --git a/wargus.cpp b/wargus.cpp
+--- a/wargus.cpp
++++ b/wargus.cpp
+@@ -62,4 +62,16 @@ const char* SRC_PATH() { return __FILE__; }
+ #define TITLE_PNG "%s/graphics/ui/title.png"
+ #endif
+ 
++#ifdef PEONPAD_IOS
++extern "C" const char *PeonPadWargusGameIdentifier()
++{
++	return GAME;
++}
++
++extern "C" const char *PeonPadWargusDisplayName()
++{
++	return GAME_NAME;
++}
++#else
+ #include <stratagus-game-launcher.h>
++#endif

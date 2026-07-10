@@ -1,0 +1,105 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -50,6 +50,7 @@
+ set(STRATAGUS_HOST_TOLUAPP "" CACHE FILEPATH "Host tolua++ executable to use when cross compiling with vendored Lua")
+ set(PEONPAD_IOS_INFO_PLIST "" CACHE FILEPATH "PeonPad iOS app Info.plist template")
+ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bundle")
++set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
+ option(BUILD_VENDORED_SDL OFF)
+ option(BUILD_VENDORED_MEDIA_LIBS OFF)
+ option(DOWNLOAD_FREEPATS OFF)
+@@ -841,7 +842,15 @@
+ endif()
+ 
+ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++	if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
++		message(FATAL_ERROR "PEONPAD_APPLE_PLATFORM_DIR must identify the PeonPad platform/apple directory")
++	endif()
++	enable_language(OBJCXX)
+ 	add_definitions(-DPEONPAD_IOS)
++	list(APPEND stratagus_SRCS
++		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadViewportGeometry.cpp"
++		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
++	include_directories("${PEONPAD_APPLE_PLATFORM_DIR}/ios")
+ elseif(APPLE)
+ 	add_definitions(-DUSE_MAC)
+ 	set(SDL2_LIBRARY ${SDL2_LIBRARY} SDL2main)
+diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
+--- a/src/video/sdl.cpp
++++ b/src/video/sdl.cpp
+@@ -56,6 +56,10 @@
+ 
+ #include <SDL.h>
+ #include <SDL_syswm.h>
++
++#ifdef PEONPAD_IOS
++#include "PeonPadIOSViewport.h"
++#endif
+ 
+ #ifdef USE_BEOS
+ #include <sys/socket.h>
+@@ -327,6 +331,12 @@
+ void InitVideoSdl()
+ {
+ 	Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
++
++#ifdef PEONPAD_IOS
++	// Keep the game immersive while requiring a deliberate second swipe for
++	// the Home gesture. The rendered viewport still honors safe-area insets.
++	SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, "2");
++#endif
+ 
+ 	if (SDL_WasInit(SDL_INIT_VIDEO) == 0) {
+ 		// Fix tablet input in full-screen mode
+@@ -413,7 +423,11 @@
+ 		           SDL_GetError());
+ 		exit(1);
+ 	}
++#ifdef PEONPAD_IOS
++	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "metal");
++#else
+ 	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
++#endif
+ 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+ 	int rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
+ 	if (!Parameters::Instance.benchmark) {
+@@ -421,6 +435,10 @@
+ 	}
+ 	if (!TheRenderer) {
+ 		TheRenderer = SDL_CreateRenderer(TheWindow, -1, rendererFlags);
++	}
++	if (!TheRenderer) {
++		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
++		exit(1);
+ 	}
+ 	SDL_RendererInfo rendererInfo;
+ 	if (!SDL_GetRendererInfo(TheRenderer, &rendererInfo)) {
+@@ -434,6 +452,11 @@
+ 	}
+ 	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
+ 	Video.ResizeScreen(Video.Width, Video.Height);
++#ifdef PEONPAD_IOS
++	PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
++	                                Video.Width,
++	                                static_cast<int>(Video.Height * Video.VerticalPixelSize));
++#endif
+ 
+ // #ifdef USE_WIN32
+ // 	HWND hwnd = nullptr;
+@@ -621,8 +644,13 @@
+ 		case SDL_WINDOWEVENT:
+ 			switch (event.window.event) {
+ 				case SDL_WINDOWEVENT_SIZE_CHANGED:
+-				SizeChangeCounter++;
+-				break;
++					SizeChangeCounter++;
++#ifdef PEONPAD_IOS
++					PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
++					                                Video.Width,
++					                                static_cast<int>(Video.Height * Video.VerticalPixelSize));
++#endif
++					break;
+ 
+ 				case SDL_WINDOWEVENT_ENTER:
+ 				case SDL_WINDOWEVENT_LEAVE:

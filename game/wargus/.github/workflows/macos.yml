@@ -1,0 +1,107 @@
+name: macOS
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**'
+      - '!.github/**'
+      - '!**.yml'
+      - '.github/workflows/macos.yml'
+      - '!**.md'
+      - '!.vscode/**'
+      - '!doc/**'
+
+  pull_request:
+    paths:
+      - '**'
+      - '!.github/**'
+      - '!**.yml'
+      - '.github/workflows/macos.yml'
+      - '!**.md'
+      - '!.vscode/**'
+      - '!doc/**'
+
+jobs:
+  macOS:
+    
+    strategy:
+      matrix:
+        include:
+            - runner: macos-latest
+              suffix: arm64
+            - runner: macos-15-intel
+              suffix: x86
+    runs-on: ${{ matrix.runner}}
+
+    steps:
+    - name: Checkout Wargus
+      uses: actions/checkout@v7
+      with:
+        repository: Wargus/wargus
+        submodules: recursive
+        path: wargus
+        
+    - name: Checkout Stratagus
+      uses: actions/checkout@v7
+      with: 
+        repository: Wargus/stratagus
+        submodules: recursive
+        path: stratagus
+
+    - name: Install dependencies
+      run: brew install dylibbundler sdl2 sdl2_mixer sdl2_image lua ffmpeg
+
+    - name: cmake --version
+      run: cmake --version
+
+    - name: Build Stratagus
+      run: |
+        cmake stratagus -B stratagus/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_FIND_FRAMEWORK=LAST \
+        -DBUILD_VENDORED_LUA=ON \
+        -DBUILD_VENDORED_SDL=OFF \
+        -DBUILD_VENDORED_MEDIA_LIBS=OFF \
+        -DBUILD_TESTING=1
+        cmake --build stratagus/build --config Release
+    
+    - name: Build Wargus
+      run: |
+        cmake wargus -B wargus/build \
+        -DCMAKE_FIND_FRAMEWORK=LAST \
+        -DSTRATAGUS_INCLUDE_DIR=../stratagus/gameheaders \
+        -DSTRATAGUS=../stratagus/build/stratagus 
+        cmake --build wargus/build --config Release
+
+    - name: Create Wargus app bundle
+      run: |
+        export STRATAGUS_INCLUDE_DIR=stratagus/gameheaders
+        export STRATAGUS=stratagus/build/stratagus
+        wargus/mac/bundle.sh
+        
+        dylibbundler -of -cd -b -x wargus/mac/Wargus.app/Contents/MacOS/stratagus -d wargus/mac/Wargus.app/Contents/libs/
+        dylibbundler -of -cd -b -x wargus/mac/Wargus.app/Contents/MacOS/wartool -d wargus/mac/Wargus.app/Contents/libs/
+        
+        codesign --force --deep --sign - wargus/mac/Wargus.app
+        
+    - name: Create dmg
+      run: |
+        output="Wargus-${{ matrix.suffix }}"
+        rm -f "$output" "$output.dmg"
+        for attempt in 1 2 3; do
+          hdiutil detach "/Volumes/Wargus" -force || true
+          if hdiutil create -volname "Wargus" -srcfolder "wargus/mac/Wargus.app" "$output"; then
+            exit 0
+          fi
+          rm -f "$output" "$output.dmg"
+          sleep $((attempt * 10))
+        done
+        hdiutil create -volname "Wargus" -srcfolder "wargus/mac/Wargus.app" "$output"
+    
+    - name: Upload artifacts - macOS ${{ matrix.suffix }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: Wargus-macOS-${{ matrix.suffix }}
+        path: Wargus-${{ matrix.suffix }}.dmg
+        if-no-files-found: error

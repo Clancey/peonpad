@@ -1,0 +1,63 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -50,6 +50,8 @@
+ set(STRATAGUS_HOST_TOLUAPP "" CACHE FILEPATH "Host tolua++ executable to use when cross compiling with vendored Lua")
+ set(PEONPAD_IOS_INFO_PLIST "" CACHE FILEPATH "PeonPad iOS app Info.plist template")
+ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bundle")
++set(PEONPAD_IOS_LAUNCH_IMAGE "" CACHE FILEPATH "PeonPad launch image copied into the iOS bundle")
++set(PEONPAD_IOS_ICON_DIR "" CACHE PATH "PeonPad iPad icon files copied into the iOS bundle")
+ set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
+ option(BUILD_VENDORED_SDL OFF)
+ option(BUILD_VENDORED_MEDIA_LIBS OFF)
+@@ -1260,8 +1262,24 @@
+ 			set_target_properties(stratagus PROPERTIES
+ 				MACOSX_BUNDLE_INFO_PLIST "${PEONPAD_IOS_INFO_PLIST}")
+ 		endif()
+-		if(PEONPAD_IOS_DATA_DIR)
++		if(CMAKE_GENERATOR STREQUAL "Xcode"
++		   AND PEONPAD_IOS_DATA_DIR
++		   AND PEONPAD_IOS_LAUNCH_IMAGE
++		   AND PEONPAD_IOS_ICON_DIR)
++			set(PEONPAD_XCODE_RESOURCE_SCRIPT
++				"${PEONPAD_APPLE_PLATFORM_DIR}/ios/copy-xcode-bundle-resources.sh")
++			if(NOT EXISTS "${PEONPAD_XCODE_RESOURCE_SCRIPT}")
++				message(FATAL_ERROR "Missing PeonPad Xcode resource-copy script")
++			endif()
+ 			add_custom_command(TARGET stratagus POST_BUILD
++				COMMAND "${PEONPAD_XCODE_RESOURCE_SCRIPT}"
++					"${CMAKE_COMMAND}"
++					"${PEONPAD_IOS_DATA_DIR}"
++					"${PEONPAD_IOS_LAUNCH_IMAGE}"
++					"${PEONPAD_IOS_ICON_DIR}"
++				VERBATIM)
++		elseif(PEONPAD_IOS_DATA_DIR)
++			add_custom_command(TARGET stratagus POST_BUILD
+ 				COMMAND "${CMAKE_COMMAND}" -E rm -rf
+ 					"$<TARGET_BUNDLE_DIR:stratagus>/Aleona"
+ 				COMMAND "${CMAKE_COMMAND}" -E copy_directory
+@@ -1269,6 +1287,25 @@
+ 					"$<TARGET_BUNDLE_DIR:stratagus>/Aleona"
+ 				VERBATIM)
+ 		endif()
++		if(NOT CMAKE_GENERATOR STREQUAL "Xcode" AND PEONPAD_IOS_LAUNCH_IMAGE)
++			add_custom_command(TARGET stratagus POST_BUILD
++				COMMAND "${CMAKE_COMMAND}" -E copy_if_different
++					"${PEONPAD_IOS_LAUNCH_IMAGE}"
++					"$<TARGET_BUNDLE_DIR:stratagus>/PeonPadLaunch.png"
++				VERBATIM)
++		endif()
++		if(NOT CMAKE_GENERATOR STREQUAL "Xcode" AND PEONPAD_IOS_ICON_DIR)
++			foreach(PEONPAD_IOS_ICON IN ITEMS
++				PeonPadIcon76.png
++				PeonPadIcon76@2x.png
++				PeonPadIcon83.5@2x.png)
++				add_custom_command(TARGET stratagus POST_BUILD
++					COMMAND "${CMAKE_COMMAND}" -E copy_if_different
++						"${PEONPAD_IOS_ICON_DIR}/${PEONPAD_IOS_ICON}"
++						"$<TARGET_BUNDLE_DIR:stratagus>/${PEONPAD_IOS_ICON}"
++					VERBATIM)
++			endforeach()
++		endif()
+ 	elseif(APPLE)
+ 		set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} -ObjC -framework AppKit -framework Carbon -framework AudioToolbox -framework Cocoa -framework CoreAudio -framework CoreGraphics -framework CoreFoundation -framework CoreVideo -framework CoreHaptics -framework GameController -framework ForceFeedback -framework IOKit -framework Metal -liconv")
+ 	endif()

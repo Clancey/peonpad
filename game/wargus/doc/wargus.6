@@ -1,0 +1,53 @@
+.TH WARGUS 6 "Feb 2016" "Wargus v2.4"
+.SH NAME
+wargus \- Warcraft II data game set for the Stratagus engine
+.SH "DESCRIPTION"
+Wargus is data game set for Stratagus engine. This is only launcher and wrapper
+for Stratagus, and shares most of its commandline arguments.
+.TP
+Wargus has specific command line arguments to quickstart a single player game.
+.TP
+.B -c singleplayer -G map=(path-to-map),type=0,aiplayers=1,aiscripts=(wc2-land-attack|wc2-air-attack|...),[reveal]
+These arguments start a single player game with one AI opponent using the
+selected AI script.
+.TP
+.B -c singleplayer -G map=(path-to-map),type=2,aiplayers=2,aiscripts=wc2-land-attack:wc2-air-attack
+These arguments start a quick machine vs machine game, pitting the land attack
+vs the air attack AI. This way of running the game can be very useful for
+evaluating different AIs quickly against each other, as well as for training
+external AI agents that interface through some other means with the game. This
+has been used (for example) to train a reinforcement learning AI to play the
+game.
+.TP
+Wargus has specific command line arguments to start multiplayer games:
+.TP
+.B -c multiplayer -G server,numplayers=(number),map=(path-to-map)[,dedicated,race=(orc|human),player=(nick),fow=(1|0),reveal=(0|1),resources=(low|medium|high),units=1]
+These arguments start a multiplayer server. It will directly select the passed
+map and wait for numplayers players to join and become ready (including the
+server), before automatically starting the game. The numplayers and map
+arguments are required, the race, player nickname, fow (Fog of war), reveal
+(Reveal map), resources and units options are optional. Note that if there are
+spaces or other characters that must be escaped in the nickname or map path,
+you must escape them (or enclose the entire argument in quotes). If the
+dedicated option is passed, the server will itself only be an AI player, and
+wait for numplayers clients to connect (excluding the server).
+.TP
+.B -c multiplayer -G client,ip=(server-ip)[,race=(orc|human),player=(nick)]
+These arguments start a multiplayer game as client. It will directly join the
+specified server and announce itself as ready. The ip argument is required, the
+race and player nickname are optional. Note that if there are spaces or other
+characters that must be escaped in the nickname, you must escape them (or
+enclose the entire argument in quotes).
+.TP
+See \fIstratagus\fP(6) for a full list of command line arguments.
+.SH "SEE ALSO"
+.PD 0
+.TP
+\fIstratagus\fP(6), \fIwartool\fP(6), \fIpudconvert\fP(6)
+.SH NOTES
+Warcraft II is a registered trademark of Blizzard Entertainment.
+.SH AUTHOR
+Wargus launcher is written by Pali Rohár <pali.rohar@gmail.com> .
+.PP
+This manual page was written by Pali Rohár <pali.rohar@gmail.com> and Tim
+Felgentreff <timfelgentreff@gmail.com>.

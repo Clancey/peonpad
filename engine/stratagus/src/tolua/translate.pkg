@@ -1,0 +1,5 @@
+$#include "translate.h"
+
+extern std::string Translate(std::string str);
+extern void LoadPO(std::string file);
+extern void SetTranslationsFiles(std::string stratagusfile, std::string gamefile);

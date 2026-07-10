@@ -1,0 +1,76 @@
+-- Test-only map for victory cleanup and map reload lifecycle crashes.
+print("PYTEST_LIFECYCLE_MAP_LOADED")
+
+SetStartView(0, 8, 8)
+SetPlayerData(0, "Resources", "gold", 2000)
+SetPlayerData(0, "Resources", "wood", 2000)
+SetPlayerData(0, "Resources", "oil", 1000)
+SetPlayerData(0, "RaceName", "human")
+
+SetStartView(1, 22, 22)
+SetPlayerData(1, "Resources", "gold", 2000)
+SetPlayerData(1, "Resources", "wood", 2000)
+SetPlayerData(1, "Resources", "oil", 1000)
+SetPlayerData(1, "RaceName", "orc")
+SetAiType(1, "ai-passive")
+
+SetPlayerData(15, "RaceName", "neutral")
+
+LoadTileModels("scripts/tilesets/summer.lua")
+for y = 0, 31 do
+  for x = 0, 31 do
+    SetTile(96, x, y, 0)
+  end
+end
+
+if (MapUnitsInit ~= nil) then MapUnitsInit() end
+
+CreateUnit("unit-town-hall", 0, {3, 3})
+CreateUnit("unit-great-hall", 1, {24, 24})
+
+local transient_units = {}
+local function add_unit(unit_type, player, x, y)
+  table.insert(transient_units, CreateUnit(unit_type, player, {x, y}))
+end
+
+for y = 8, 15 do
+  for x = 5, 12 do
+    add_unit("unit-footman", 0, x, y)
+  end
+end
+
+for y = 16, 23 do
+  for x = 18, 25 do
+    add_unit("unit-grunt", 1, x, y)
+  end
+end
+
+for i = 0, 5 do
+  add_unit("unit-peasant", 0, 5 + i, 20)
+  add_unit("unit-peon", 1, 20 + i, 5)
+end
+
+local released_units = false
+AddTrigger(
+  function() return not released_units and GameCycle >= 5 end,
+  function()
+    released_units = true
+    print("PYTEST_LIFECYCLE_RELEASE_UNITS")
+    for _, unit in ipairs(transient_units) do
+      RemoveUnit(unit)
+    end
+    for i = 1, 20 do
+      local unit = CreateUnit("unit-footman", 0, {10 + (i % 6), 10 + (i % 4)})
+      RemoveUnit(unit)
+    end
+    return false
+  end)
+
+local completed_map = false
+AddTrigger(
+  function() return not completed_map and GameCycle >= 20 end,
+  function()
+    completed_map = true
+    print("PYTEST_LIFECYCLE_VICTORY")
+    return ActionVictory()
+  end)

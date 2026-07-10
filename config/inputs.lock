@@ -1,0 +1,158 @@
+# PeonPad input manifest. Update only after validating an immutable input.
+# Source revisions marked MISSING are hard preflight failures, not placeholders
+# that a build is allowed to resolve from the network.
+
+schema_version = 1
+captured_at = "2026-07-10T12:29:31-05:00"
+
+[reference]
+path = "ref"
+policy = "read-only; local-only; never tracked or copied into build output"
+regular_file_count = 21257
+regular_file_bytes = 2220448058
+# SHA-256 over sorted `sha256sum` records for substantive regular files.
+# Volatile .git metadata and Finder .DS_Store files are deliberately excluded;
+# repository commits and clean-worktree checks cover source identity.
+tree_sha256 = "c1782ea011559049ce65b739c6cbe5825a4db3b1c8d2afaea0dbcb54e7357f8f"
+
+[reference.extractor]
+path = "ref/Extractor script.sh"
+sha256 = "d76b3cc2d1eb3974516026dd9fbbe9438e0762a6f81d59d4c4f184a0774d93cd"
+
+[reference.wargus_app]
+path = "ref/Wargus.app"
+bundle_version = "3.3.3"
+architecture = "arm64"
+stratagus_runtime_revision = "3d87c93f7fd8c0b62ee1be5df0a6d9efc72ca6cc"
+stratagus_sha256 = "fdd0225a7fd1afd67e5938ff2177731e92c4f4e91beddc9c91d31a845542a48b"
+wargus_sha256 = "59b6c482e4f8f87eef11b535605dc0a6f255c3b3cb4b710c6b80faa73f6fcd26"
+wartool_sha256 = "7c784bf722a95889afd5bb1b297a9ece897dac596b36a36725dbea63a4b82174"
+evidence = "Info.plist, Mach-O inspection, and ref/wargus-launch.log"
+note = "Runtime revision evidence does not replace a source repository lock."
+
+[reference.wc2_installer]
+exe_sha256 = "ad8dfae76e79fd07c78d2786b1594ba01d33ed57ca242efa510e2ded6417ed63"
+bin_sha256 = "5b488a84889d7231b32997fadc646768280363f7be7f767ed7cf6ac52b3a0c49"
+
+[reference.launch_log]
+path = "ref/wargus-launch.log"
+sha256 = "be3a1fe8fb403d3906f772c282f23ffcb46ddd54484105030401da735fc7a9f5"
+
+[sources.stratagus]
+expected_path = "ref/stratagus"
+remote = "https://github.com/Wargus/stratagus.git"
+revision = "3d87c93f7fd8c0b62ee1be5df0a6d9efc72ca6cc"
+dependencies_revision = "58de69c9ef44d1bc915fce9924333d395c7a40d2"
+license = "GPL-2.0-or-later"
+license_sha256 = "db296f2f7f35bca3a174efb0eb392b3b17bd94b341851429a3dff411b1c2fc73"
+
+[sources.wargus]
+expected_path = "ref/wargus"
+remote = "https://github.com/Wargus/wargus.git"
+revision = "cde1a0718a0058cc651ecd56ff8149fc39f624e9"
+dependencies_revision = "18ec9f6d0e0c5ebfebb75eba4c473fbe00078c5c"
+license = "GPL-2.0-or-later"
+license_sha256 = "32b1062f7da84967e7019d01ab805935caa7ab7321a7ced0e30ebe75e5df1670"
+third_party_notice_sha256 = "36dcd5fafb9c3eb0984a2e404d0c015ec23ea95449b6e921f90e547884867d93"
+
+[sources.stratagus_vita]
+expected_path = "ref/stratagus-vita"
+remote = "https://github.com/Northfear/stratagus-vita.git"
+revision = "5454452ec3ef9f6a14e51a57be8fe13e44893cdf"
+license = "GPL-2.0-or-later"
+license_sha256 = "db296f2f7f35bca3a174efb0eb392b3b17bd94b341851429a3dff411b1c2fc73"
+
+[assets.aleonas_tales]
+expected_path = "ref/aleonas-tales"
+remote = "https://github.com/Wargus/Timeless-Tales.git"
+revision = "695d3ed6464cfa186c42e4804ee1e2c4e88f6e09"
+license = "GPL-2.0 for vendor/wyrmsun; per-asset attribution sidecars elsewhere"
+license_sha256 = "e6d6a009505e345fe949e1310334fcb0747f28dae2856759de102ab66b722cb4"
+license_status = "REVIEW_REQUIRED_BEFORE_BUNDLING"
+note = "Complete content tree is present; repository root has no blanket license file, so Goal 1 must finish the per-asset audit before distribution."
+
+[dependencies.bundle]
+stratagus_revision = "58de69c9ef44d1bc915fce9924333d395c7a40d2"
+wargus_revision = "18ec9f6d0e0c5ebfebb75eba4c473fbe00078c5c"
+remote = "https://github.com/Wargus/dependencies"
+note = "The component Git trees below are identical in both locked bundle revisions."
+
+[dependencies.sdl2]
+revision = "2.0.22"
+git_tree = "cd761811c5cbe907635aca6f81b9b9425872a3b6"
+source_sha256 = "af728cf8ec4ff79493a761149361c7ef89d93857dac90f7113579c8a0f620f19"
+license = "Zlib"
+
+[dependencies.sdl2_image]
+revision = "2.6.1"
+git_tree = "d082484e78c47dae0236a7aa8bd226b55528d9dc"
+source_sha256 = "daf98ff92d33f28979dd893a14aca9ecabf6cb1cf41d8d141ff13f37fff21c46"
+license = "Zlib"
+
+[dependencies.sdl2_mixer]
+revision = "2.6.1"
+git_tree = "c02f0b170012c9fb98f1e577e42e9cf3547d17b7"
+source_sha256 = "c3daefc0f810b67a7f62a84b336691a60cc1d089ad1208cc2f515f3e1bf61961"
+license = "Zlib"
+
+[dependencies.lua_5_1]
+revision = "5.1.5"
+git_tree = "9df643dfc75f5fdcb5a66ae0612bdf73b3c2688e"
+source_sha256 = "b6803dc3b372bc9ff010793059f3e1fa7bd8f7aebf7a1a8d80f1b8156b9f24f7"
+license = "MIT"
+
+[dependencies.tolua_plus_plus]
+revision = "1.0.92"
+git_tree = "6d125f1e078e79768b939e4640cea2dfaec2dba4"
+source_sha256 = "9b1f9a3eae934f7a61f1fca2b191d4ff3280727baed9700027f2f944623bc12b"
+license = "MIT"
+
+[dependencies.zlib]
+revision = "1.2.12"
+git_tree = "4e23e953ed5f87c54444d388f07d6ff47b26d48d"
+source_sha256 = "00d1a8373f75f81f123b7486b885faeef7446e4d8965b444849a33170b76fd66"
+license = "Zlib"
+
+[dependencies.libpng]
+revision = "1.6.37"
+git_tree = "b6cf05403dfe0e61b9bf28e1dfbeb72dda4afa76"
+source_sha256 = "cdd2e65d354549c6402c136906c75d686d0350c382681362a5fbc1f7000d9e30"
+license = "Libpng-2.0"
+
+[dependencies.libogg]
+revision = "1.3.5"
+git_tree = "e86cab2af4f03ba096a3005879085002da3e7474"
+source_sha256 = "5b20679c676e7451b62716286f83ea46b985804ceb8e5e0f5bd04a4390e7cb27"
+license = "BSD-3-Clause"
+
+[dependencies.libvorbis]
+revision = "1.3.7"
+git_tree = "29b9e85796b1f6bfba59628443cf89060b9526a8"
+source_sha256 = "e9214ce7304d551958096997d02b3c48f102d16e8cc3deb09660f2611380b8c0"
+license = "BSD-3-Clause"
+
+[host]
+architecture = "arm64"
+macos_version = "26.5 (25F71)"
+cmake = "3.27.1"
+apple_clang = "21.0.0 (clang-2100.1.1.101)"
+git = "2.41.0"
+pkg_config = "0.29.2"
+ninja = "not installed; Unix Makefiles selected for reproducible probes"
+xcode = "26.6 (17F113)"
+xcode_developer_dir = "/Applications/Xcode.app/Contents/Developer"
+iphoneos_sdk = "26.5"
+iphoneos_sdk_path = "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.5.sdk"
+
+[reference_binary_dependencies]
+sdl2_compat = "2.32.70 (launch log); Mach-O current version 3201.70.0"
+sdl2_image = "Mach-O current version 801.12.0"
+sdl2_mixer = "Mach-O current version 801.2.0"
+zlib = "Mach-O current version 1.2.12"
+bzip2 = "Mach-O current version 1.0.8"
+libpng = "Mach-O current version 75.0.0"
+libogg = "Mach-O current version 0.8.6"
+libvorbis = "Mach-O current version 5.9.0"
+lua = "Exact linked or vendored revision not identifiable from binary"
+tolua = "Exact linked or vendored revision not identifiable from binary"
+note = "These observations are evidence only; Goal 2 requires source revision pins."

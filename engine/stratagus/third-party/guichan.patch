@@ -1,0 +1,474 @@
+diff --git a/guichan/include/guichan.hpp b/guichan/include/guichan.hpp
+index fa1ae5e..a3b7ab5 100644
+--- a/guichan/include/guichan.hpp
++++ b/guichan/include/guichan.hpp
+@@ -96,9 +96,6 @@
+ 
+ #include "guichan/platform.hpp"
+ 
+-
+-class Widget;
+-
+ extern "C"
+ {
+     /**
+diff --git a/guichan/include/guichan/focushandler.hpp b/guichan/include/guichan/focushandler.hpp
+index 0e2d840..166effa 100644
+--- a/guichan/include/guichan/focushandler.hpp
++++ b/guichan/include/guichan/focushandler.hpp
+@@ -51,6 +51,7 @@
+ 
+ namespace gcn
+ {
++    class KeyInput;
+     class Widget;
+ 
+     /**
+@@ -317,6 +318,8 @@ namespace gcn
+          */
+         virtual void setLastWidgetPressed(Widget* lastWidgetPressed);
+ 
++        void checkHotKey(const KeyInput& keyInput);
++
+     protected:
+         /**
+          * Distributes a focus lost event.
+diff --git a/guichan/include/guichan/key.hpp b/guichan/include/guichan/key.hpp
+index 7b533bb..9bdb63a 100644
+--- a/guichan/include/guichan/key.hpp
++++ b/guichan/include/guichan/key.hpp
+@@ -86,6 +86,13 @@ namespace gcn
+          */
+         bool isLetter() const;
+ 
++        /**
++         * Checks whether a key is printable.
++         *
++         * @return true if the key is a printable.
++         */
++        bool isPrintable() const;
++
+         /**
+          * Gets the value of the key. If an ascii value exists it 
+          * will be returned. Otherwise an enum value will be returned.
+diff --git a/guichan/include/guichan/keylistener.hpp b/guichan/include/guichan/keylistener.hpp
+index 7685558..bc02f79 100644
+--- a/guichan/include/guichan/keylistener.hpp
++++ b/guichan/include/guichan/keylistener.hpp
+@@ -81,6 +81,9 @@ namespace gcn
+          */
+         virtual void keyReleased(KeyEvent& keyEvent) { }
+ 
++        virtual void hotKeyPressed(const Key&) { }
++        virtual void hotKeyReleased(const Key&) { }
++
+     protected:
+         /**
+          * Constructor.
+diff --git a/guichan/include/guichan/sdl/sdlpixel.hpp b/guichan/include/guichan/sdl/sdlpixel.hpp
+index 49686eb..4838742 100644
+--- a/guichan/include/guichan/sdl/sdlpixel.hpp
++++ b/guichan/include/guichan/sdl/sdlpixel.hpp
+@@ -165,8 +165,9 @@ namespace gcn
+         unsigned int b = ((src & 0xff) * a + (dst & 0xff) * (255 - a)) >> 8;
+         unsigned int g = ((src & 0xff00) * a + (dst & 0xff00) * (255 - a)) >> 8;
+         unsigned int r = ((src & 0xff0000) * a + (dst & 0xff0000) * (255 - a)) >> 8;
++        unsigned int alpha = ((src >> 24) * a + (dst >> 24) * (255 - a)) >> 8;
+ 
+-        return (b & 0xff) | (g & 0xff00) | (r & 0xff0000);
++        return (b & 0xff) | (g & 0xff00) | (r & 0xff0000) | (a << 24);
+     }
+ 
+     /**
+diff --git a/guichan/include/guichan/widget.hpp b/guichan/include/guichan/widget.hpp
+index f303752..e692faf 100644
+--- a/guichan/include/guichan/widget.hpp
++++ b/guichan/include/guichan/widget.hpp
+@@ -1025,6 +1025,26 @@ namespace gcn
+          */
+         virtual void showPart(Rectangle rectangle);
+ 
++        /**
++         * Called when a Widget's hot key is pressed
++         */
++        virtual void hotKeyPressed() { }
++
++        /**
++         * Called when a Widget's hot key is released
++         */
++        virtual void hotKeyReleased() { }
++
++        /**
++         * Get the hot key
++         */
++        int getHotKey() const { return mHotKey; }
++
++        /**
++         * Set the hot key
++         */
++        void setHotKey(const int key) { mHotKey = key; }
++
+     protected:
+         /**
+          * Distributes an action event to all action listeners
+@@ -1261,6 +1281,8 @@ namespace gcn
+          * Holds all children of the widget.
+          */
+         std::list<Widget*> mChildren;
++
++        int mHotKey = 0;
+     };
+ }
+ 
+diff --git a/guichan/include/guichan/widgets/button.hpp b/guichan/include/guichan/widgets/button.hpp
+index cfe0973..06c8667 100644
+--- a/guichan/include/guichan/widgets/button.hpp
++++ b/guichan/include/guichan/widgets/button.hpp
+@@ -145,6 +145,8 @@ namespace gcn
+ 
+         virtual void draw(Graphics* graphics);
+ 
++        virtual void hotKeyPressed();
++        virtual void hotKeyReleased();
+ 
+         // Inherited from FocusListener
+ 
+@@ -208,6 +210,8 @@ namespace gcn
+          * Holds the spacing between the border and the caption.
+          */
+         unsigned int mSpacing;
++
++        bool mHotKeyPressed = false;
+     };
+ }
+ 
+diff --git a/guichan/include/guichan/widgets/dropdown.hpp b/guichan/include/guichan/widgets/dropdown.hpp
+index 21711c2..a238ae9 100644
+--- a/guichan/include/guichan/widgets/dropdown.hpp
++++ b/guichan/include/guichan/widgets/dropdown.hpp
+@@ -76,12 +76,12 @@ namespace gcn
+      * will be sent to all action listeners of the drop down.
+      */
+     class GCN_CORE_DECLSPEC DropDown :
++        public Widget,
+         public ActionListener,
+         public KeyListener,
+         public MouseListener,
+         public FocusListener,
+-        public SelectionListener,
+-        public Widget
++        public SelectionListener
+     {
+     public:
+         /**
+diff --git a/guichan/include/guichan/widgets/scrollarea.hpp b/guichan/include/guichan/widgets/scrollarea.hpp
+index ad1d929..ef44a3a 100644
+--- a/guichan/include/guichan/widgets/scrollarea.hpp
++++ b/guichan/include/guichan/widgets/scrollarea.hpp
+@@ -58,8 +58,8 @@ namespace gcn
+      * necessary.
+      */
+     class GCN_CORE_DECLSPEC ScrollArea:
+-        public MouseListener,
+-        public Widget
++        public Widget,
++        public MouseListener
+     {
+     public:
+ 
+diff --git a/guichan/include/guichan/widgets/tab.hpp b/guichan/include/guichan/widgets/tab.hpp
+index 459afbc..4a0daff 100644
+--- a/guichan/include/guichan/widgets/tab.hpp
++++ b/guichan/include/guichan/widgets/tab.hpp
+@@ -63,8 +63,8 @@ namespace gcn
+      * @since 0.8.0
+      */
+     class GCN_CORE_DECLSPEC Tab:
+-        public MouseListener,
+-        public Widget
++        public Widget,
++        public MouseListener
+     {
+     public:
+ 
+diff --git a/guichan/include/guichan/widgets/tabbedarea.hpp b/guichan/include/guichan/widgets/tabbedarea.hpp
+index 39e875c..eb7f824 100644
+--- a/guichan/include/guichan/widgets/tabbedarea.hpp
++++ b/guichan/include/guichan/widgets/tabbedarea.hpp
+@@ -66,10 +66,10 @@ namespace gcn
+      * @since 0.8.0
+      */
+     class GCN_CORE_DECLSPEC TabbedArea:
++        public Widget,
+         public ActionListener,
+         public KeyListener,
+-        public MouseListener,
+-        public Widget
++        public MouseListener
+     {
+         friend class Tab;
+ 
+diff --git a/guichan/src/focushandler.cpp b/guichan/src/focushandler.cpp
+index 069a728..08c8e82 100644
+--- a/guichan/src/focushandler.cpp
++++ b/guichan/src/focushandler.cpp
+@@ -49,6 +49,7 @@
+ 
+ #include "guichan/focuslistener.hpp"
+ #include "guichan/exception.hpp"
++#include "guichan/keyinput.hpp"
+ #include "guichan/widget.hpp"
+ 
+ namespace gcn
+@@ -584,4 +585,38 @@ namespace gcn
+     {
+         mLastWidgetPressed = lastWidgetPressed;
+     }
++
++    void FocusHandler::checkHotKey(const KeyInput& keyInput)
++    {
++        int keyin = keyInput.getKey().getValue();
++
++        for (int i = 0; i < (int)mWidgets.size(); ++i)
++        {
++            int hotKey = mWidgets[i]->getHotKey();
++
++            if (hotKey == 0)
++            {
++                continue;
++            }
++            hotKey = isascii(hotKey) ? tolower(hotKey) : hotKey;
++
++            if ((isascii(keyin) && tolower(keyin) == hotKey) || keyin == hotKey)
++            {
++                if (keyInput.getType() == KeyInput::Pressed)
++                {
++                    mWidgets[i]->hotKeyPressed();
++                    if (mWidgets[i]->isFocusable())
++                    {
++                        this->requestFocus(mWidgets[i]);
++                    }
++                }
++                else
++                {
++                    mWidgets[i]->hotKeyReleased();
++                }
++                break;
++            }
++        }
++    }
++
+ }
+diff --git a/guichan/src/gui.cpp b/guichan/src/gui.cpp
+index da440c7..d81b2d8 100644
+--- a/guichan/src/gui.cpp
++++ b/guichan/src/gui.cpp
+@@ -283,6 +283,10 @@ namespace gcn
+                 keyEventConsumed = keyEvent.isConsumed();
+             }
+ 
++            if (!keyEventConsumed) {
++                mFocusHandler->checkHotKey(keyInput);
++            }
++
+             // If the key event hasn't been consumed and
+             // tabbing is enable check for tab press and
+             // change focus.
+diff --git a/guichan/src/key.cpp b/guichan/src/key.cpp
+index 70e9652..6c2c19f 100644
+--- a/guichan/src/key.cpp
++++ b/guichan/src/key.cpp
+@@ -74,6 +74,11 @@ namespace gcn
+                 && (mValue != 215) && (mValue != 247));
+     }
+ 
++    bool Key::isPrintable() const
++    {
++        return mValue < -1000 || 32 <= mValue;
++    }
++
+     int Key::getValue() const
+     {
+         return mValue;
+diff --git a/guichan/src/sdl/sdlgraphics.cpp b/guichan/src/sdl/sdlgraphics.cpp
+index 752f5be..cc9ffbb 100644
+--- a/guichan/src/sdl/sdlgraphics.cpp
++++ b/guichan/src/sdl/sdlgraphics.cpp
+@@ -107,7 +107,7 @@ namespace gcn
+         #if SDL_BYTEORDER == SDL_BIG_ENDIAN
+             s = SDL_CreateRGBSurface(0, width, height, DEPTH, 0xFF000000, 0x00FF0000, 0x0000FF00, 0x000000FF);
+         #else
+-            s = SDL_CreateRGBSurface(0, width, height, DEPTH, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
++            s = SDL_CreateRGBSurface(0, width, height, DEPTH, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+         #endif
+ 
+         clearTransparentSurface(s);
+@@ -125,7 +125,8 @@ namespace gcn
+             }
+ 
+             mTarget = createTransparentSurface(width, height);
+-            mTargetTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
++            mTargetTexture = SDL_CreateTextureFromSurface(renderer, mTarget);
++            //mTargetTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, width, height);
+             mRenderer = renderer;
+         }
+     #else
+diff --git a/guichan/src/sdl/sdlinput.cpp b/guichan/src/sdl/sdlinput.cpp
+index 1bb426f..d18fc04 100644
+--- a/guichan/src/sdl/sdlinput.cpp
++++ b/guichan/src/sdl/sdlinput.cpp
+@@ -49,8 +49,47 @@
+ 
+ #include "guichan/exception.hpp"
+ 
++#include <cstdint>
++
+ namespace gcn
+ {
++    //--------------------------------------------------------------------------
++    static std::uint32_t utf8ToUnicode(const char* text)
++    {
++        const std::uint32_t c0 = static_cast<unsigned char>(text[0]);
++        if ((c0 & 0xF8) == 0xF0) {
++            if (((text[1] & 0xC0) != 0x80) && ((text[2] & 0xC0) != 0x80)
++                && ((text[3] & 0xC0) != 0x80)) {
++                throw GCN_EXCEPTION("invalid utf8");
++            }
++            const unsigned char c1 = text[1] & 0x3F;
++            const unsigned char c2 = text[2] & 0x3F;
++            const unsigned char c3 = text[3] & 0x3F;
++
++            return ((c0 & 0x07) << 18) | (c1 << 12) | (c2 << 6) | c3;
++        } else if ((c0 & 0xF0) == 0xE0) {
++            if (((text[1] & 0xC0) != 0x80) && ((text[2] & 0xC0) != 0x80)) {
++                throw GCN_EXCEPTION("invalid utf8");
++            }
++            const unsigned char c1 = text[1] & 0x3F;
++            const unsigned char c2 = text[2] & 0x3F;
++
++            return ((c0 & 0x0F) << 12) | (c1 << 6) | c2;
++        } else if ((c0 & 0xE0) == 0xC0) {
++            if (((text[1] & 0xC0) != 0x80)) {
++                throw GCN_EXCEPTION("invalid utf8");
++            }
++            const unsigned char c1 = text[1] & 0x3F;
++
++            return ((c0 & 0x1F) << 6) | c1;
++        } else {
++            if ((c0 & 0x80) != 0) {
++                throw GCN_EXCEPTION("invalid utf8");
++            }
++            return (c0 & 0x7F);
++        }
++    }
++
+     SDLInput::SDLInput()
+     {
+         mMouseInWindow = true;
+@@ -104,6 +143,17 @@ namespace gcn
+ 
+         switch (event.type)
+         {
++          case SDL_TEXTINPUT:
++              keyInput.setKey(utf8ToUnicode(event.text.text));
++              keyInput.setType(KeyInput::Pressed);
++              keyInput.setShiftPressed(false);
++              keyInput.setControlPressed(false);
++              keyInput.setAltPressed(false);
++              keyInput.setMetaPressed(false);
++              keyInput.setNumericPad(false);
++
++              mKeyInputQueue.push(keyInput);
++              break;
+           case SDL_KEYDOWN:
+           {
+               int value = convertSDLEventToGuichanKeyValue(event);
+@@ -129,7 +179,11 @@ namespace gcn
+ 
+                                      && event.key.keysym.sym <= SDLK_KP_EQUALS);
+ 
+-              mKeyInputQueue.push(keyInput);
++              if (!keyInput.getKey().isPrintable() || keyInput.isAltPressed()
++                  || keyInput.isControlPressed())
++              {
++                  mKeyInputQueue.push(keyInput);
++              }
+               break;
+           }
+ 
+diff --git a/guichan/src/widgets/button.cpp b/guichan/src/widgets/button.cpp
+index b3349d9..ab963a4 100644
+--- a/guichan/src/widgets/button.cpp
++++ b/guichan/src/widgets/button.cpp
+@@ -205,12 +205,13 @@ namespace gcn
+         }
+         else
+         {
+-            return mKeyPressed;
++            return mKeyPressed || mHotKeyPressed;
+         }
+     }
+ 
+     void Button::mousePressed(MouseEvent& mouseEvent)
+     {
++        mHasMouse = gcn::Rectangle(0, 0, getWidth(), getHeight()).isContaining(mouseEvent.getX(), mouseEvent.getY());
+         if (mouseEvent.isConsumed())
+         {
+             return;
+@@ -265,6 +266,7 @@ namespace gcn
+             mKeyPressed = true;
+             keyEvent.consume();
+         }
++        mHotKeyPressed = false;
+     }
+ 
+     void Button::keyReleased(KeyEvent& keyEvent)
+@@ -281,6 +283,21 @@ namespace gcn
+         }
+     }
+ 
++    void Button::hotKeyPressed()
++    {
++        mHotKeyPressed = true;
++        mMousePressed = false;
++    }
++
++    void Button::hotKeyReleased()
++    {
++        if (mHotKeyPressed)
++        {
++            mHotKeyPressed = false;
++            distributeActionEvent();
++        }
++    }
++
+     void Button::focusLost(const Event& event)
+     {
+         mMousePressed = false;
+diff --git a/guichan/src/widgets/textbox.cpp b/guichan/src/widgets/textbox.cpp
+index 0a985cf..4c1df35 100644
+--- a/guichan/src/widgets/textbox.cpp
++++ b/guichan/src/widgets/textbox.cpp
+@@ -194,7 +194,8 @@ namespace gcn
+             mText->insert(' ');
+         }
+ 
+-        else if (key.isCharacter() && mEditable)
++        else if (key.isCharacter() && !keyEvent.isAltPressed()
++                 && !keyEvent.isControlPressed() && mEditable)
+             mText->insert(key.getValue());
+ 
+         adjustSize();
+diff --git a/guichan/src/widgets/textfield.cpp b/guichan/src/widgets/textfield.cpp
+index 9ff1ba0..786d7a8 100644
+--- a/guichan/src/widgets/textfield.cpp
++++ b/guichan/src/widgets/textfield.cpp
+@@ -186,6 +186,8 @@ namespace gcn
+ 
+         else if (key.isCharacter()
+                  && key.getValue() != Key::Tab
++                 && !keyEvent.isAltPressed()
++                 && !keyEvent.isControlPressed()
+                  && mEditable)
+             mText->insert(key.getValue());
+ 

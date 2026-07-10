@@ -1,0 +1,20 @@
+PeonPad
+=======
+
+PeonPad is an independent, de-branded Apple-platform port project built around
+the GPLv2 Stratagus/Wargus engine. The final repository must carry the complete
+GPLv2 license and the license notices of every staged dependency and libre
+asset.
+
+No Blizzard Entertainment game data, art, audio, video, map data, installer,
+MPQ archive, extracted data.Wargus directory, trademarked application icon, or
+signing credential may be committed to or distributed with PeonPad.
+
+Users who choose the bring-your-own-data path must own and import their game
+data themselves. Reference material under ref/ is local-only, read-only, and
+not part of PeonPad.
+
+Warcraft and Blizzard Entertainment are trademarks or registered trademarks
+of Blizzard Entertainment, Inc. PeonPad is not affiliated with or endorsed by
+Blizzard Entertainment.
+

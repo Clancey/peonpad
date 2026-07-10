@@ -1,0 +1,151 @@
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -1,6 +1,14 @@
+ set(CMAKE_CURRENT_MACRO_LIST_DIR "${CMAKE_CURRENT_LIST_DIR}" PARENT_SCOPE)
+ 
+ set(STRATAGUS_EXTERNAL_CMAKE_ARGS)
++set(STRATAGUS_EXTERNAL_GENERATOR_ARGS)
++if(CMAKE_GENERATOR STREQUAL "Xcode")
++  # Keep the top-level app target native to Xcode, but build vendored
++  # dependencies with their proven single-configuration recipes.
++  set(STRATAGUS_EXTERNAL_GENERATOR_ARGS CMAKE_GENERATOR "Unix Makefiles")
++  list(APPEND STRATAGUS_EXTERNAL_CMAKE_ARGS
++    "-DCMAKE_BUILD_TYPE:STRING=$<CONFIG>")
++endif()
+ if(CMAKE_CROSSCOMPILING OR CMAKE_TOOLCHAIN_FILE)
+   list(APPEND STRATAGUS_EXTERNAL_CMAKE_ARGS
+     -DCMAKE_SYSTEM_NAME:STRING=${CMAKE_SYSTEM_NAME}
+@@ -33,6 +41,7 @@
+   endforeach()
+ endif()
+ set(STRATAGUS_EXTERNAL_CMAKE_ARGS "${STRATAGUS_EXTERNAL_CMAKE_ARGS}" PARENT_SCOPE)
++set(STRATAGUS_EXTERNAL_GENERATOR_ARGS "${STRATAGUS_EXTERNAL_GENERATOR_ARGS}" PARENT_SCOPE)
+ 
+ macro(vendored_lua)
+   include(ExternalProject)
+@@ -40,6 +49,7 @@
+     set(USE_VENDORED_LUA true)
+ 
+     ExternalProject_Add(lua
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR ${CMAKE_CURRENT_MACRO_LIST_DIR}/lua-5.1.5/
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/lua/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+@@ -77,6 +87,7 @@
+     list(REMOVE_ITEM ZLIB_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib/zconf.h")
+ 
+     ExternalProject_Add(zlib
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/zlib/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+@@ -113,6 +124,7 @@
+     file(GLOB PNG_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/libpng/*.h")
+ 
+     ExternalProject_Add(png
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/libpng"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/png/"
+       INSTALL_COMMAND cmake -E copy ${PNG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/png/src/png-build/"
+@@ -141,6 +153,7 @@
+     set(USE_VENDORED_BZIP2 true)
+ 
+     ExternalProject_Add(bzip2
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/bzip2"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/bzip2/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+@@ -166,6 +179,7 @@
+ 
+     file(GLOB OGG_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_mixer/external/ogg/include/ogg/*.h")
+     ExternalProject_Add(ogg
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_mixer/external/ogg"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/ogg/"
+       INSTALL_COMMAND cmake -E copy ${OGG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/ogg/src/ogg-build/include/ogg/"
+@@ -190,6 +204,7 @@
+     vendored_ogg()
+ 
+     ExternalProject_Add(vorbis
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_mixer/external/vorbis"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/vorbis/"
+       INSTALL_COMMAND ""
+@@ -235,6 +250,7 @@
+     file(GLOB JPEG_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/jpeg/*.h")
+ 
+     ExternalProject_Add(jpeg
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/jpeg"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/jpeg/"
+       INSTALL_COMMAND cmake -E copy ${JPEG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/jpeg/src/jpeg-build/"
+@@ -258,6 +274,7 @@
+     set(USE_VENDORED_LCMS true)
+ 
+     ExternalProject_Add(lcms
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/lcms"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/lcms/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+@@ -284,6 +301,7 @@
+     vendored_lcms()
+ 
+     ExternalProject_Add(mng
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/libmng"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/mng/"
+       INSTALL_COMMAND ""
+@@ -332,11 +350,7 @@
+     endif()
+     set(THEORA_FOUND TRUE)
+     set(THEORA_INCLUDE_DIR ${THEORA_SRC_DIR}/include)
+-    if(MSVC)
+-      set(THEORA_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIGURATION>/theora.lib" ${OGG_LIBRARY})
+-    else()
+-      set(THEORA_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/libtheora.a" ${OGG_LIBRARY})
+-    endif()
++    set(THEORA_LIBRARY "$<TARGET_FILE:theora>" ${OGG_LIBRARY})
+   endif()
+ endmacro()
+ 
+@@ -360,6 +374,7 @@
+         -DHAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT=OFF)
+     endif()
+     ExternalProject_Add(SDL2
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/SDL2/"
+       INSTALL_COMMAND cmake -E copy ${SDL_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/SDL2/src/SDL2-build/include"
+@@ -387,6 +402,7 @@
+     vendored_png()
+ 
+     ExternalProject_Add(SDL2_image
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/SDL2_image/"
+       INSTALL_COMMAND ""
+@@ -431,6 +447,7 @@
+     endif()
+ 
+     ExternalProject_Add(SDL2_mixer
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_mixer"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/SDL2_mixer/"
+       INSTALL_COMMAND ""
+@@ -466,6 +483,7 @@
+     set(USE_VENDORED_UNSF true)
+ 
+     ExternalProject_Add(unsf
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/unsf"
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/unsf/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+@@ -481,6 +499,7 @@
+     set(USE_VENDORED_FREEPATS true)
+ 
+     ExternalProject_Add(freepats
++      ${STRATAGUS_EXTERNAL_GENERATOR_ARGS}
+       DOWNLOAD_DIR "${CMAKE_CURRENT_BINARY_DIR}/freepats-download"
+       SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/freepats-source"
+       URL "https://freepats.zenvoid.org/freepats-20060219.tar.xz"

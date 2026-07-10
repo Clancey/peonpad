@@ -1,0 +1,266 @@
+wargus (3.3.3-1) UNRELEASED; urgency=medium
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Thu, 11 Aug 2022 20:37:37 +0200
+
+wargus (3.3.2-1) focal; urgency=medium
+
+  * Update translations
+  * Add Czech translation
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Wed, 10 Aug 2022 20:15:15 +0200
+
+wargus (3.3.1-1) focal; urgency=medium
+
+  * do not give buttons to critters
+  * Fix  ToD orc briefing filenames on bnet edition
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Sun, 31 Jul 2022 11:45:51 +0200
+
+wargus (3.3.0-1) focal; urgency=medium
+
+  [ Tim Felgentreff ]
+  * store extracted game strings in wc2-config.lua for potential later use
+  * fix uppercasing for bnet translation table files
+  * extract more texts from mpq, since those are more likely to be in the right language
+  * also convert briefing speech from mpq instead of tome
+  * fix offset for BNE intro texts
+  * fix human lvl11 briefing sound
+  * no more need for snddat.war in bne
+  * no more need for strdat.war in BNE
+  * convert western language strings to UTF-8 via a CP1251 table
+  * fix windows build
+  * fix many build warnings
+  * add german translation
+
+  [ Pointify ]
+  * Update es_ES.po
+  * Update stratagus-es.po
+  * Update credits.lua
+  * Update credits.lua
+  * Update es_ES.po
+
+  [ Tim Felgentreff ]
+  * make password field show stars
+  * update caption when downloading map data
+  * refresh online screen when messages come in
+
+  [ Simone Starace ]
+  * Add function calls to For the Motherland.
+
+  [ Tim Felgentreff ]
+  * show filename when getting map from server
+  * prototype guichan-driven extraction
+  * update unit editor callback
+  * try to extract alternative smk names, too. fixes #418
+  * truncate bne text files
+  * utf8 language extraction fixes
+  * cp437 for dos cd, cp1252 for bne
+  * generate script for cp mapping tables
+  * codepage mapping for russian, dos, and bne cd
+  * update mapping table gen
+  * set the correct codepage for russian
+  * update translations from sources, autofill german
+  * Update de_DE.po (POEditor.com)
+  * Update it_IT.po (POEditor.com)
+  * Update stratagus-it.po (POEditor.com)
+  * add hardware cursor option
+  * better editor right click menu
+  * update editor help
+  * quick and dirty random skirmish option
+  * use some fancy scripting to get better random maps
+  * update code for new shared settings fix offsets for lots of gamesettings r.e. default values
+  * if random placement is off, allow setting player id
+  * minor flexibility improvements for gui layouting
+  * simplify multiplayer lobby using layouts
+  * include coop mod
+  * don't show death revealer under fog
+  * update network script with teams
+  * improve multiplayer game menu
+  * fast fow by default
+  * fix team setup in skirmish modern
+  * make ellipse selection an option
+  * ship external midi player
+  * let ships gently bob on the sea
+  * reorder the transporting buttons for large size units to look better
+  * filename fix for orc expansion
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Wed, 27 Jul 2022 15:49:02 +0200
+
+wargus (3.2.0) focal; urgency=medium
+
+  [ psa-jforestier ]
+  * 1st version of French translation.
+  * Add fr translation available in menu
+
+  [ alyokhin ]
+  * Adaptation of wargus scripts to new map reveal types
+
+  [ Alex Benedict ]
+  * Check for argument to main to avoid segfault since ArchiveDir is set to argv[1].
+
+  [ Alex Grant Benedict ]
+  * Updated StormLib to commit 5ab093b7a57b8779dff06a08fac19d46c40b3329 and modified CMakeLists.txt to build StormLib as an external project
+
+  [ alyokhin ]
+  * added "fast" fog of war type
+
+  [ Tim Felgentreff ]
+  * refactor editor main menu to use layout
+  * add a simple text editor for preamble and postamble scripts
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Fri, 24 Dec 2021 21:37:16 +0100
+
+wargus (3.1.2-1) focal; urgency=medium
+
+  * Fix extractor for older C++ stdlib with experimental C++ 17 filesystem support
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Sat, 17 Jul 2021 07:30:40 +0200
+
+wargus (3.1.1-1) focal; urgency=medium
+
+  * Always reveal attackers even when they are attacking from beyond the sight range of a unit
+  * Slow down regeneration rate for berserkers to 1hp every 2 seconds
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Thu, 15 Jul 2021 19:18:56 +0200
+
+wargus (3.1.0-1) focal; urgency=medium
+  * Added possibility to enable walls building in the single player games. Useful for debug.
+  * Added ingame "debug menu". Among other things it allows to change FOV parameters on the fly. Enabled only for debug builds.
+  * Added "elevated" flag for towers. It allows them to look over opaque field when shadow caster field of view is enabled.
+  * Added enhanced fog of war preferences. Enhanced type is enabled by default.
+  * Added field of view settings. Standard radial is enabled by default and will be reloaded after every game. It allows to change FOV type for certain maps (need to enable required FOV type in the map lua-file).
+  * added "eval" cheat which allows to execute lua code from ingame console. Enabled only for debug builds.
+  * Add a custom startup script for single player or machine vs machine games
+  * Update the sign up option for the online server
+  * Improve the editor with help, separate unit sections
+  * Add idle worker count to top panel
+  * Support GOG game installer to extract from directly
+  * Added Spanish and Italian translations
+  * Fix various missions' goals and starting units
+  * Sync more settings that may cause desyncs before multiplayer to improve the experience
+  * Add a portable installer for Windows
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Sat, 03 Jul 2021 20:23:44 +0200
+
+wargus (3.0.0-1) focal; urgency=medium
+
+  * Migrate to SDL2
+  * Remove Aleonas Tales dataset and launcher from Wargus project
+  * Fix ripping of CD audio on newer Linux distros
+  * Enable new auto-targeting algorithm
+  * Add option for new shadows
+  * Reveal player when they lost their main building
+  * Play click sound on mouse down for buttons
+  * Fix sight range given by corpses by using a hidden revealer unit
+  * Fix video aspect ratio to work for both DOS and BNE CDs
+  * Copy data files during extraction so we can re-extract on demand without
+    user intervention
+  * Log wartool output on Windows to a logfile to help debug extraction issues
+  * Improve keyboard navigation throughout the game
+  * Add online gaming menu
+  * Add auto-discovery of local multiplayer games
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Sat, 19 Dec 2020 08:36:30 +0100
+
+wargus (2.4.3-1) eoan; urgency=medium
+
+  * Inline StormLib for easier builds
+  * Fix "Job's done" sound path for peasants in Battle.NET edition
+  * Fix bug showing "Supply 4, Demand 0" under some circumstances
+  * Fix aspect ratio of extracted videos
+  * Use auto-cast and auto-explore
+  * Run demo 1-4 when main menu is idle
+  * Fix missile origins and cannon tower animations
+  * Fix issue with "Attack Ground" button for ballistas, catapults, large ships
+  * Fix item order in resources drop-down list
+  * Fix extraction for some more variants of Battle.NET editions
+  * Fix multiplayer startup when the metaserver is not used and
+    optional AI player number was not passed
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Sat, 25 Apr 2020 10:23:37 +0200
+
+wargus (2.4.2-1) xenial; urgency=medium
+
+  * Fix for extraction on Arm64
+  * When OpenGL is unchecked, also uncheck UI scaling as it implies OpenGL
+  * Demolition range of goblin/gnome sappers increased by one
+  * The ogre mage's runes spell can no longer be placed directly on buildings as attack
+  * The shortcut for the Eye of Killrog is now "E"
+  * ToD human level 13 now decreases the health of Lothar's troops making their rescue impossible without cheating
+  * Enable sounds for research completed
+  * Change sound for human completed buildings to the peasant's "job's done"
+  * Copy the MIDI soundfont to the local Wargus directory to make midi music work
+  * ToD human level 10 now correctly makes the prisoners into Minutemen rather than Peasants
+  * Fixed ToD orc level 8 crash when the AI tried to research a non-existing 3rd catapult upgrade
+  * Fix a buffer overflow that could occur in ConvertVideo and ConvertMusic
+  * Switched from ffmpeg2theora to vanilla ffmpeg due to file import/conversion issues
+  * Add support for advertising and joining games on a metaserver
+  * Allow selecting the number of AI players in multiplayer games
+  * Support new launcher-based extraction from Stratagus 2.4.2
+  * Provide a separate launcher for Aleona's Tales
+  * Support Battle.NET edition on OS X
+  * Bundle a selection of libretro shaders
+  * Add a preference to store the active shader, if the user selected one
+  * Add shader shortcut to help
+
+ --  Tim Felgentreff <timfelgentreff@gmail.com>  Sat, 29 Sep 2018 19:08:00 +0000
+
+wargus (2.4.1-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Wed, 2 Dec 2015 11:28:27 +0100
+
+wargus (2.4.0-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Tim Felgentreff <timfelgentreff@gmail.com>  Wed, 2 Dec 2015 11:28:27 +0100
+
+wargus (2.3.0-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- cybermind <iddqd_mail@mail.ru>  Mon, 16 Mar 2015 18:51:27 +0500
+
+wargus (2.2.7-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Mon, 20 Aug 2012 13:49:07 +0200
+
+wargus (2.2.6-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Tue, 20 Dec 2011 19:37:55 +0100
+
+wargus (2.2.5.5-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Mon, 22 Nov 2010 22:32:45 +0100
+
+wargus (2.2.5.4-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Mon, 20 Sep 2010 15:24:31 +0200
+
+wargus (2.2.5.3-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Wed, 11 Aug 2010 11:00:43 +0200
+
+wargus (2.2.5.2) unstable; urgency=low
+
+  * New upstream release
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Tue, 27 Jul 2010 10:05:19 +0200
+
+wargus (2.2.5-1) unstable; urgency=low
+
+  * New upstream release
+
+ -- M. Gerhardy <tlh2000@users.sf.net>  Sat, 23 May 2009 10:51:08 +0200

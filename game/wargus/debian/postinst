@@ -1,0 +1,20 @@
+#!/bin/sh
+
+set -e
+
+. /usr/share/debconf/confmodule
+
+extract() {
+	[ -f /usr/share/sounds/sf2/TimGM6mb.sf2 ] && { cp /usr/share/sounds/sf2/TimGM6mb.sf2 /usr/share/games/stratagus/wargus/music; }
+
+	db_stop || true # don't understand this
+	return $?
+}
+
+if [ "$1" = "configure" ]; then
+	extract || exit $?
+fi
+
+#DEBHELPER#
+
+exit 0

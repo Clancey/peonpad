@@ -1,0 +1,304 @@
+3.1.0 (unreleased)
+  - Added possibility to enable walls building in the single player games. Useful for debug.
+  - Added ingame "debug menu". Among other things it allows to change FOV parameters on the fly. Enabled only for debug builds.
+  - Added "elevated" flag for towers. It allows them to look over opaque field when shadow caster field of view is enabled.
+  - Added enhanced fog of war preferences. Enhanced type is enabled by default.
+  - Added field of view settings. Standard radial is enabled by default and will be reloaded after every game. It allows to change FOV type for certain maps (need to enable required FOV type in the map lua-file).
+  - added "eval" cheat which allows to execute lua code from ingame console. Enabled only for debug builds.
+  - Add a custom startup script for single player or machine vs machine games
+
+3.0.0
+  - Migrate to SDL2
+  - Remove Aleonas Tales dataset and launcher from Wargus project
+  - Fix ripping of CD audio on newer Linux distros
+  - Enable new auto-targeting algorithm
+  - Add option for new shadows
+  - Reveal player when they lost their main building
+  - Play click sound on mouse down for buttons
+  - Fix sight range given by corpses by using a hidden revealer unit
+  - Fix video aspect ratio to work for both DOS and BNE CDs
+  - Copy data files during extraction so we can re-extract on demand without
+    user intervention
+  - Log wartool output on Windows to a logfile to help debug extraction issues
+  - Improve keyboard navigation throughout the game
+  - Add online gaming menu
+  - Add auto-discovery of local multiplayer games
+
+2.4.2
+  - fix for extraction on ARM64
+  - When OpenGL is unchecked, also uncheck UI scaling as it implies OpenGL
+  - Demolition range of goblin/gnome sappers increased by one
+  - The ogre mage's runes spell can no longer be placed directly on buildings as attack
+  - The shortcut for the Eye of Killrog is now "E"
+  - ToD human level 13 now decreases the health of Lothar's troops making their rescue impossible without cheating
+  - Enable sounds for research completed
+  - Change sound for human completed buildings to the peasant's "job's done"
+  - Copy the MIDI soundfont to the local Wargus directory to make midi music work
+  - ToD human level 10 now correctly makes the prisoners into Minutemen rather than Peasants
+  - Fixed ToD orc level 8 crash when AI tried to research a non-existing 3rd catapult upgrade
+  - Fix a buffer overflow that could occur
+  - Switched from ffmpeg2theora to vanilla ffmpeg due to file import/conversion issues
+  - Add support for advertising and joining games on a metaserver
+  - Allow selecting the number of AI players in multiplayer games
+  - Support new launcher-based extraction from Stratagus 2.4.2
+  - Provide a separate launcher for Aleona's Tales
+  - Support Battle.NET edition on OS X, linux, windows 8.1
+  - Bundle a selection of libretro shaders
+  - Add a preference to store the active shader, if the user selected one
+  - Add shader shortcut to help
+
+2.4.1
+  - Compatibility with Stratagus 2.4.1
+  - Updated installers for debian, windows, mac os x
+  - Remove remaining maemo support code
+  - Features
+    - Support lua checksums and add proper error message for multiplayer
+    - Make barracks selectable by rectangle
+    - Commandline arguments can be passed to directly start or join multiplayer games
+  - Bugfixes
+    - Network desyncing
+    - All buttons now emit click sounds
+    - Sapper demolition range increased to behave as in original game
+    - Main menu music should now be correct for all supported versions
+    - Remove colorcycled border
+    - Disable diplomacy checkboxes for computer players
+    - Remove unfinished metaserver menu
+    - ToD Human mission 4 now rescues rangers, not archers
+
+2.4.0
+  - Compatability with Stratagus 2.4
+  - Updates to Timeless Tales and Frontier Force
+  - Move to Github
+
+2.3.0
+  - Game
+   - Merge Wargus with Aleona's Tales (if you don't have WC2 data, wargus will install AT data)
+   - Support for custom game types.
+   - Skirmish Modern setup screen from Doom Wars (custom colors, races, teams, AI scripts for each player)
+   - Custom campaign support
+   - Mod support
+   - All WC2 campaigns now have unique AI scripts (similar to original ones)
+   - 5 difficulty levels for campaigns (affect AI aggressiveness)
+   - Added Russian translation (based on SPK translation)
+   - Support for MIDI playback using FluidSynth library (and so support for custom SF2 soundfonts)
+   - Imported some changes from Andrettin's WIP project
+   - Result screen similar to original WC2
+   - New FtM 2014 game mode (with tutorial campaigns)
+   - Many improvements to the user interface: button popups, network setup, UI elements, preferences menu and a lot more.
+   - ColorCycle by Tileset (patch from DinkyDyeAussie)
+   - Added Frontier Force Mission 5
+   - Added Tales Campaign Mission 7
+   - Added town hall, lumber mill, refinery resource info on panel
+   - Added icon shifting on click
+   - Increased maximum game speed to 90
+   - Added autocast and ai-cast information to spells (now Death Knights are able to cast Death Coil)
+   - Mine low resources notifications
+  - Wartool
+   - Support extraction from WC2 BNE disc
+   - Support extraction from Russian SPK discs (both original and expansion)
+  - Bugfixes
+   - Fix catapult property to allow transporter to transport catapult. - bug #1155799
+   - Fix playerCount calculation in multiplayer. - bug #225514
+   - Add equivalence for some missing units (farm and goblin sapper) - bug #1197963
+   - Fixed Unholy Armor spell: how it works like in original WC2, also added autocast info - bug #1171017
+   - Fixed incorrect critter names - bug #1196860
+   - Fixed cheats - bug #1162392
+   - Fixed Cho'gall spells - bug #1022645
+   - Fixed bug with Fog of War disabling - bug #902658
+   - Fix speed of dragon with Haste Patch from vota (rocadeier)
+   - Correct handling of infopanel.png
+
+2.2.7
+ - Fixed bugs
+   - Link wargus executable directly with X11 library - bug #908789
+   - Fixed Debian installation - bug #909017
+   - Show enemy unit levels - bug #817753
+   - Fix typo by replacing 'stronghol' by 'stronghold' - bug #992273
+   - Added slider for configuring mouse scroll speed to options menu - bug #817089
+   - Do not overwrite CMAKE_EXE_LINKER_FLAGS, make install paths configurable - bug #1005271
+   - Wartool - do not crash if Warcraft WAR archives are corrupted or incomplete - bug #998584
+   - Generating User Preferences file - bug #1015938
+   - Fixed compilation on more platforms
+   - Fixed other problems
+
+2.2.6
+ - Game
+   - Show error box if saving game/map failed
+   - Added support for starting game with specified map from command line
+   - Animate Gold Mine when workers mining
+   - Handle errors when saving game failed
+   - Fixed showing tips on startup
+   - Fixed spells and upgrades
+   - Reverted back Color Cycling support
+   - Fixed DefinePlayerTypes - bug #736460
+ - Wartool
+   - Fixed all memory leaks and memory erros
+   - Added support for converting videos to ogv format (using ffmpeg2theora)
+   - Added support for converting music files to ogg format (using timidity and ffmpeg2theora)
+   - Added support for ripping sound tracks from Audio CD (using cdda2wav or cdparanoia)
+ - Makefile
+   - Rewritted to CMake
+ - Wargus
+   - Rewritted to use Stratagus Game Launcher
+ - Maemo Warextract
+   - Rewritted to use Stratagus Maemo Extractor
+ - Debian
+   - Rewritted control files to debhelper 7
+   - Fixed debconf for dpkg-reconfigure
+   - Fixed lintian errors and warnings
+ - Unix build.sh
+   - Script was removed, all functionality moved into wartool
+ - Windows NSIS Installer
+   - Removed all converting processes code (moved into wartool)
+
+2.2.5.5
+ - Game
+   - Fixed loosing wood, when peasant or peon has not full wood limit
+   - Fixed multiplayer network menu
+   - Fixed menus for Map Editor (start editor with param -e)
+   - Added support for selecting race in multiplayer game
+   - Moved definitions of sound game from stratagus binary to wargus scripts
+ - Pudconvert
+   - Ignore unknow units when converting maps - bug #672845
+ - Makefile
+   - Added strip, pack and installer section
+   - Use $^ instead source files in Makefile
+ - Unix build.sh
+   - Fixed using wildmidi
+ - Debian
+   - Fixed debian scripts
+   - Rewrited debian/rules to use debhelper 6
+ - Maemo
+   - Fixed running warextract after install
+   - Fixed install path for manpages
+ - Windows
+   - Fixed compilation on MSVC
+   - Fixed console output
+   - Fixed searching for Wargus in 64 bit Windows registry
+ - Windows NSIS Installer
+   - Fixed removing all installed lua scripts files at uninstall
+   - Updated timidity binary
+
+2.2.5.4
+ - Game
+   - Fixed color of orc menu button (F10) - bug #616486
+   - Fixed correct cursors for races
+ - Campaigns
+   - Fixed orc campaign level 2
+   - Fixed background music in Briefing and PictureStep
+ - Debian
+   - Fixed debian scrips
+ - Maemo
+   - Fixed crashing when starting from menu
+ - Windows NSIS Installer
+   - Check for correct version of Stratagus
+
+2.2.5.3
+ - Game
+   - Fixed UI theme in main menu and other menus
+   - Fixed ballista shooting
+   - Fixed loading saved game from playing camapign game
+   - Added different music playlist for orc (only orc themes) and for human (only human themes)
+   - Added Briefing, Victory and Defeat music
+   - Added save game confirmation menu
+ - Wartool
+   - Extract midi version of audio CD tracks from WAR archives
+ - Wargus
+   - Added support to run Wargus on Linux in console framebuffer mode
+ - Unix build.sh
+   - Fixed paths
+   - Added support for wildmidi (alternative to timidity)
+ - Debian
+   - Fixed build depends
+   - Fixed debian scripts
+ - Maemo
+   - Fixed info for Hildon Application Manager
+   - Fixed debian scripts
+   - Use Backspace key for enter game menu
+ - Windows NSIS Installer
+   - Added support for converting audio midi files (using timidity and freepats)
+   - Do not extract data again after reinstalling
+   - Use MUI2 instead MUI
+ - Documentation
+   - Rewrited README
+
+2.2.5.2
+ - Game
+   - Fixed name of default map
+   - Fixed WM title and icon
+   - Added option for maximum OpenGL textures
+   - Added version info to menu
+   - Added multiplatform program wargus for searching stratagus and correct start-up
+   - Rip hidden track I'm Medieval Man and add cheat disco to run this track
+ - Campaigns
+   - Fixed campaign triggers after loading saved game
+   - Fixed paths of files in campaigns
+   - Fixed speed of scrolling text in briefing
+   - Added ending victory video to campaign menu
+   - Added missing ending vicotry text screen at end of campaigns
+   - Show next campaign level in campaign menu after completed saved game
+   - Show only finished levels in campaign submenu
+   - Play video files in correct order
+ - Wartool
+   - Fixed converting PUD maps on Unix
+   - Fixed extracting videos with correct names
+   - Extract ending victory campaigns texts
+   - Write campaigns title and objectives directly to files without templates
+ - Makefile
+   - Created new Makefile, which support win32 builds and wargus starter
+ - Debian
+   - Fixed debian scripts
+   - Rewrited config scripts for better extract game data
+ - Maemo
+   - Fixed debian scripts for Maemo sections
+   - Fixed using findutils
+   - Added program warextract for extracting data on Maemo
+   - Enable using ffmpeg2theora
+ - Windows
+   - Fixed espace paths
+   - Added missing Windows resource file for Wargus icon
+ - Windows NSIS Installer
+   - Fully rewrited and created new installer
+   - Fixed adding campaigns maps and scripts files
+   - Fixed including data files
+   - Added support for checking if Stratagus is installed
+   - Added support for 64 bit version
+   - Added missing \r\n for string compare if data was extracted
+   - Added support for extracting data
+   - Added support for converting video files (using ffmpeg2theora)
+   - Added support for ripping audio tracks (using cdda2wav)
+   - Added desktop icon
+   - Include default music file
+   - Download ffmpeg2theora and cdrtools when creating installer
+   - Use plugin DosExec instead function ExecWait
+
+2.2.5.1
+ - Game
+   - Added support for more graphics resolutions
+   - Added intro video and correct title screen
+ - Campaigns
+   - Added missing videos between levels
+   - Added submenu for levels (with act screen and videos)
+ - Wartool
+   - Added support for extract data from CD if file names are upper
+   - Fixed extract number of logo video
+   - Fixed converting maps PUD files
+   - Extract ui graphics for more graphics resolutions
+   - Extract sounds for campaigns acts screen
+   - Removed campaigns template files, instead create new and write title and objectives directly
+   - Store version of wartool, in future do not extract data twice
+ - Unix build.sh
+   - Added param -d for cdparanoia CD drive
+   - Fixed searching for data path
+   - Fixed file names for extract
+   - Check if cdparanoia and ffmpeg2theora are in system
+   - Do not rip audio tracks if are ripped in data path
+   - For decode audio tracks use ffmpeg2theora instead oggenc
+   - Convert extracted videos from SMK format to theroa (with ffmpeg2theora)
+ - Debian
+   - Added missing Wargus files do deb package
+ - Maemo
+   - Added optification on Maemo
+   - Added info for Hildon Application Manager
+ - Windows
+   - Removed old Windows extract data programs

@@ -1,0 +1,128 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -266,10 +266,13 @@ if (WITH_STORMLIB)
+ 		  PREFIX "${CMAKE_CURRENT_BINARY_DIR}/StormLib/"
+ 		  SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/StormLib/"
+ 		  INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/StormLib/"
+-		  CMAKE_ARGS -DSTORM_SKIP_INSTALL=ON
++		  CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS} -DSTORM_SKIP_INSTALL=ON
+                   CMAKE_CACHE_ARGS ${STORM_CMAKE_CACHE_ARGS}
+ 		  INSTALL_COMMAND ""
+ 		)
++		if(ENABLE_VENDORED_LIBS)
++		  add_dependencies(StormLib zlib bzip2)
++		endif()
+ 		set(STORMLIB_FOUND true)
+ 		set(STORMLIB_INCLUDE_DIR ${CMAKE_CURRENT_LIST_DIR}/StormLib/src)
+                 if(MSVC)
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -20,6 +20,18 @@ if(CMAKE_CROSSCOMPILING OR CMAKE_TOOLCHAIN_FILE)
+     )
+   endif()
+ endif()
++if(APPLE)
++  foreach(APPLE_CMAKE_VARIABLE
++      CMAKE_OSX_ARCHITECTURES
++      CMAKE_OSX_DEPLOYMENT_TARGET
++      CMAKE_OSX_SYSROOT)
++    if(DEFINED ${APPLE_CMAKE_VARIABLE} AND
++        NOT "${${APPLE_CMAKE_VARIABLE}}" STREQUAL "")
++      list(APPEND STRATAGUS_EXTERNAL_CMAKE_ARGS
++        "-D${APPLE_CMAKE_VARIABLE}:STRING=${${APPLE_CMAKE_VARIABLE}}")
++    endif()
++  endforeach()
++endif()
+ set(STRATAGUS_EXTERNAL_CMAKE_ARGS "${STRATAGUS_EXTERNAL_CMAKE_ARGS}" PARENT_SCOPE)
+ 
+ macro(vendored_lua)
+@@ -69,8 +81,7 @@ macro(vendored_zlib)
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+       CMAKE_CACHE_ARGS -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
+       INSTALL_COMMAND cmake -E copy ${ZLIB_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/zlib/src/zlib-build/"
+-      # the SDL included version of zlib is patched to rename zconf.h -> zconf.h.included, but that leaves the tree dirty...
+-      TEST_COMMAND cmake -E rename "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib/zconf.h.included" "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/zlib/zconf.h"
++      TEST_COMMAND ""
+     )
+     set(ZLIB_FOUND TRUE)
+ 
+@@ -91,6 +102,10 @@ macro(vendored_png)
+   vendored_zlib()
+   if(NOT DEFINED USE_VENDORED_PNG)
+     set(USE_VENDORED_PNG true)
++
++    if(APPLE)
++      set(EXTRA_PNG_CMAKE_CACHE_ARGS -DPNG_ARM_NEON:STRING=on)
++    endif()
+ 
+     file(GLOB PNG_HEADERS "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_image/external/libpng/*.h")
+ 
+@@ -100,7 +115,7 @@ macro(vendored_png)
+       INSTALL_COMMAND cmake -E copy ${PNG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/png/src/png-build/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+       CMAKE_CACHE_ARGS -DZLIB_FOUND:STRING=1 -DZLIB_INCLUDE_DIR:PATH=${ZLIB_INCLUDE_DIR} -DZLIB_LIBRARY:FILEPATH=${ZLIB_LIBRARIES}
+-      -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
++      -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON ${EXTRA_PNG_CMAKE_CACHE_ARGS}
+     )
+ 
+     add_dependencies(png zlib)
+diff --git a/third-party/SDL_image/external/libpng/pngpriv.h b/third-party/SDL_image/external/libpng/pngpriv.h
+--- a/third-party/SDL_image/external/libpng/pngpriv.h
++++ b/third-party/SDL_image/external/libpng/pngpriv.h
+@@ -518,7 +518,8 @@ typedef void (PNGCBAPI *png_unknown_chunk_ptr) PNGARG((png_structp,
+ #  include <float.h>
+ 
+ #  if (defined(__MWERKS__) && defined(macintosh)) || defined(applec) || \
+-    defined(THINK_C) || defined(__SC__) || defined(TARGET_OS_MAC)
++    defined(THINK_C) || defined(__SC__) || \
++    (defined(TARGET_OS_MAC) && !defined(__APPLE__))
+    /* We need to check that <math.h> hasn't already been included earlier
+     * as it seems it doesn't agree with <fp.h>, yet we should really use
+     * <fp.h> if possible.
+diff --git a/third-party/SDL_image/external/zlib/CMakeLists.txt b/third-party/SDL_image/external/zlib/CMakeLists.txt
+--- a/third-party/SDL_image/external/zlib/CMakeLists.txt
++++ b/third-party/SDL_image/external/zlib/CMakeLists.txt
+@@ -67,14 +67,10 @@ if(MSVC)
+ endif()
+ 
+ if(NOT CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
+-    # If we're doing an out of source build and the user has a zconf.h
+-    # in their source tree...
++    # Keep archived source inputs immutable. The build directory's generated
++    # zconf.h is first on the include path and is the header this build uses.
+     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h)
+-        message(STATUS "Renaming")
+-        message(STATUS "    ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h")
+-        message(STATUS "to 'zconf.h.included' because this file is included with zlib")
+-        message(STATUS "but CMake generates it automatically in the build directory.")
+-        file(RENAME ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h ${CMAKE_CURRENT_SOURCE_DIR}/zconf.h.included)
++        message(STATUS "Preserving source-tree zconf.h; using generated build-tree header")
+   endif()
+ endif()
+ 
+diff --git a/third-party/SDL_image/external/zlib/zlib.h b/third-party/SDL_image/external/zlib/zlib.h
+--- a/third-party/SDL_image/external/zlib/zlib.h
++++ b/third-party/SDL_image/external/zlib/zlib.h
+@@ -31,7 +31,7 @@
+ #ifndef ZLIB_H
+ #define ZLIB_H
+ 
+-#include "zconf.h"
++#include <zconf.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+diff --git a/third-party/SDL_image/external/zlib/zutil.h b/third-party/SDL_image/external/zlib/zutil.h
+--- a/third-party/SDL_image/external/zlib/zutil.h
++++ b/third-party/SDL_image/external/zlib/zutil.h
+@@ -137,7 +137,7 @@ extern z_const char * const z_errmsg[10]; /* indexed by 2-zlib_error */
+ #  endif
+ #endif
+ 
+-#if defined(MACOS) || defined(TARGET_OS_MAC)
++#if (defined(MACOS) || defined(TARGET_OS_MAC)) && !defined(__APPLE__)
+ #  define OS_CODE  7
+ #  ifndef Z_SOLO
+ #    if defined(__MWERKS__) && __dest_os != __be_os && __dest_os != __win32_os

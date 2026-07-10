@@ -1,0 +1,138 @@
+-- Test-only multiplayer map for deterministic simulation stress.
+print("PYTEST_SYNC_STRESS_LOADED")
+
+SetStartView(0, 10, 15)
+SetPlayerData(0, "Resources", "gold", 2000)
+SetPlayerData(0, "Resources", "wood", 2000)
+SetPlayerData(0, "Resources", "oil", 1000)
+SetPlayerData(0, "RaceName", "human")
+
+SetStartView(1, 19, 15)
+SetPlayerData(1, "Resources", "gold", 2000)
+SetPlayerData(1, "Resources", "wood", 2000)
+SetPlayerData(1, "Resources", "oil", 1000)
+SetPlayerData(1, "RaceName", "orc")
+
+SetStartView(2, 5, 5)
+SetPlayerData(2, "Resources", "gold", 1000)
+SetPlayerData(2, "Resources", "wood", 1000)
+SetPlayerData(2, "Resources", "oil", 0)
+SetPlayerData(2, "RaceName", "human")
+SetAiType(2, "wc2-land-attack")
+
+SetStartView(3, 25, 5)
+SetPlayerData(3, "Resources", "gold", 1000)
+SetPlayerData(3, "Resources", "wood", 1000)
+SetPlayerData(3, "Resources", "oil", 0)
+SetPlayerData(3, "RaceName", "orc")
+SetAiType(3, "wc2-land-attack")
+
+SetPlayerData(15, "RaceName", "neutral")
+
+LoadTileModels("scripts/tilesets/summer.lua")
+for y = 0, 31 do
+  for x = 0, 31 do
+    SetTile(96, x, y, 0)
+  end
+end
+
+for i = 0, 3 do
+  SetSpeedResourcesHarvest(i, "gold", 1000)
+  SetSpeedResourcesReturn(i, "gold", 1000)
+end
+
+if (MapUnitsInit ~= nil) then MapUnitsInit() end
+
+CreateUnit("unit-town-hall", 0, {3, 24})
+CreateUnit("unit-great-hall", 1, {24, 24})
+
+CreateUnit("unit-footman", 0, {12, 14})
+CreateUnit("unit-footman", 0, {12, 16})
+CreateUnit("unit-archer", 0, {11, 15})
+CreateUnit("unit-ballista", 0, {8, 15})
+
+CreateUnit("unit-grunt", 1, {18, 14})
+CreateUnit("unit-grunt", 1, {18, 16})
+CreateUnit("unit-axethrower", 1, {19, 15})
+CreateUnit("unit-catapult", 1, {22, 15})
+
+CreateUnit("unit-town-hall", 2, {2, 4})
+CreateUnit("unit-great-hall", 3, {25, 4})
+
+local shared_mine = CreateUnit("unit-gold-mine", 15, {14, 5})
+SetResourcesHeld(shared_mine, 300)
+CreateUnit("unit-peasant", 2, {9, 6})
+CreateUnit("unit-peasant", 2, {9, 7})
+CreateUnit("unit-peasant", 2, {9, 8})
+CreateUnit("unit-peasant", 2, {10, 9})
+CreateUnit("unit-peon", 3, {22, 6})
+CreateUnit("unit-peon", 3, {22, 7})
+CreateUnit("unit-peon", 3, {22, 8})
+CreateUnit("unit-peon", 3, {21, 9})
+
+local human_mine = CreateUnit("unit-gold-mine", 15, {7, 10})
+SetResourcesHeld(human_mine, 200)
+local orc_mine = CreateUnit("unit-gold-mine", 15, {21, 10})
+SetResourcesHeld(orc_mine, 200)
+
+local function stress_diplomacy()
+  for p = 0, 3 do
+    for q = 0, 3 do
+      if p ~= q then
+        SetDiplomacy(p, "enemy", q)
+      end
+    end
+  end
+end
+
+AddTrigger(
+  function() return GameCycle == 5 end,
+  function()
+    print("PYTEST_SYNC_STRESS_OPENING_ORDERS")
+    stress_diplomacy()
+    OrderUnit(0, "unit-footman", {10, 12, 14, 18}, {17, 13, 20, 17}, "attack")
+    OrderUnit(0, "unit-archer", {10, 12, 14, 18}, {17, 13, 20, 17}, "attack")
+    OrderUnit(0, "unit-ballista", {7, 14, 9, 16}, {18, 14, 22, 16}, "attack")
+    OrderUnit(1, "unit-grunt", {17, 12, 20, 18}, {11, 13, 13, 17}, "attack")
+    OrderUnit(1, "unit-axethrower", {17, 12, 20, 18}, {11, 13, 13, 17}, "attack")
+    OrderUnit(1, "unit-catapult", {21, 14, 23, 16}, {8, 14, 12, 16}, "attack")
+    OrderUnit(2, "unit-peasant", {8, 5, 10, 8}, {14, 5, 16, 7}, "resource")
+    OrderUnit(3, "unit-peon", {21, 5, 23, 8}, {14, 5, 16, 7}, "resource")
+    return true
+  end)
+
+AddTrigger(
+  function() return GameCycle == 90 end,
+  function()
+    print("PYTEST_SYNC_STRESS_BLOCKER_BUILD_ORDERS")
+    OrderUnit(2, "unit-peasant", {10, 9}, {11, 7}, "build", "unit-farm")
+    OrderUnit(3, "unit-peon", {21, 9}, {19, 7}, "build", "unit-pig-farm")
+    return true
+  end)
+
+AddTrigger(
+  function() return GameCycle == 350 end,
+  function()
+    print("PYTEST_SYNC_STRESS_REINFORCEMENTS")
+    CreateUnit("unit-knight", 0, {13, 13})
+    CreateUnit("unit-ogre", 1, {17, 17})
+    OrderUnit(0, "unit-knight", {13, 13}, {17, 17}, "attack")
+    OrderUnit(1, "unit-ogre", {17, 17}, {13, 13}, "attack")
+    return true
+  end)
+
+AddTrigger(
+  function() return GameCycle > 100 and GetUnitVariable(shared_mine, "ResourcesHeld") <= 0 end,
+  function()
+    print("PYTEST_SYNC_STRESS_GOLD_EXHAUSTED")
+    return true
+  end)
+
+AddTrigger(
+  function() return GameCycle == 700 end,
+  function()
+    print("PYTEST_SYNC_STRESS_SECOND_ATTACK")
+    OrderUnit(0, "unit-footman", {8, 12, 16, 18}, {18, 14, 22, 16}, "attack")
+    OrderUnit(1, "unit-grunt", {16, 12, 22, 18}, {8, 14, 12, 16}, "attack")
+    return true
+  end)

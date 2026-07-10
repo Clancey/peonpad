@@ -1,0 +1,223 @@
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -43,6 +43,7 @@ macro(vendored_lua)
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/lua/"
+       CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
+       CMAKE_CACHE_ARGS -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON
++      BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --target toluapp51 --config $<CONFIGURATION>
+       INSTALL_COMMAND ""
+     )
+ 
+@@ -117,6 +118,7 @@ macro(vendored_png)
+       PREFIX "${CMAKE_CURRENT_BINARY_DIR}/png/"
+       INSTALL_COMMAND cmake -E copy ${PNG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/png/src/png-build/"
+-      CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
++      CMAKE_ARGS ${STRATAGUS_EXTERNAL_CMAKE_ARGS}
++        -DPNG_TESTS=OFF -DSKIP_INSTALL_PROGRAMS=ON
+       CMAKE_CACHE_ARGS -DZLIB_FOUND:STRING=1 -DZLIB_INCLUDE_DIR:PATH=${ZLIB_INCLUDE_DIR} -DZLIB_LIBRARY:FILEPATH=${ZLIB_LIBRARIES}
+       -DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=ON ${EXTRA_PNG_CMAKE_CACHE_ARGS}
+     )
+@@ -417,6 +419,14 @@ macro(vendored_sdl_mixer)
+   if(NOT DEFINED USE_VENDORED_SDL_MIXER)
+     set(USE_VENDORED_SDL_MIXER true)
+     vendored_sdl()
++
++    set(EXTRA_SDL_MIXER_CMAKE_ARGS)
++    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++      # SDL_mixer's macOS native MIDI source is empty on iOS, so enabling the
++      # backend leaves unresolved native_midi_* symbols in the application.
++      # Timidity remains enabled and supplies the portable MIDI backend.
++      list(APPEND EXTRA_SDL_MIXER_CMAKE_ARGS -DSDL2MIXER_MIDI_NATIVE=OFF)
++    endif()
+ 
+     ExternalProject_Add(SDL2_mixer
+       SOURCE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/SDL_mixer"
+@@ -433,6 +443,7 @@ macro(vendored_sdl_mixer)
+       -DSDL2MIXER_OPUS=OFF
+       -DSDL2MIXER_MOD=OFF
+       -DSDL2MIXER_MIDI=ON
++      ${EXTRA_SDL_MIXER_CMAKE_ARGS}
+       -DSDL2MIXER_VORBIS=VORBISFILE -DSDL2MIXER_VORBIS_VORBISFILE_SHARED=OFF
+       CMAKE_CACHE_ARGS -DSDL2_FOUND:STRING=1 -DSDL2_INCLUDE_DIR:PATH=${SDL2_INCLUDE_DIR}
+       -DSDL2_LIBRARY:FILEPATH=${SDL2_LIBRARY} -DSDL2_MAIN_LIBRARY:FILEPATH=${SDL2main_LIBRARY}
+diff --git a/third-party/bzip2/CMakeLists.txt b/third-party/bzip2/CMakeLists.txt
+--- a/third-party/bzip2/CMakeLists.txt
++++ b/third-party/bzip2/CMakeLists.txt
+@@ -29,7 +29,11 @@ INCLUDE(CTest)
+ ADD_TEST(test ${CMAKE_COMMAND} -P test.cmake)
+ 
+-INSTALL(TARGETS bzip2 bzip2recover bz2 RUNTIME DESTINATION ${INSTALL_BIN} LIBRARY DESTINATION ${INSTALL_LIB} ARCHIVE DESTINATION ${INSTALL_LIB})
++INSTALL(TARGETS bzip2 bzip2recover bz2
++        RUNTIME DESTINATION ${INSTALL_BIN}
++        BUNDLE DESTINATION ${INSTALL_BIN}
++        LIBRARY DESTINATION ${INSTALL_LIB}
++        ARCHIVE DESTINATION ${INSTALL_LIB})
+ INSTALL(FILES bzlib.h DESTINATION ${INSTALL_INC})
+ INSTALL(FILES README LICENSE manual.html bzip2.1 bzgrep.1 bzmore.1 bzdiff.1
+               bzegrep.1 bzfgrep.1 bzless.1 bzcmp.1
+               DESTINATION ${INSTALL_DOC})
+diff --git a/third-party/lua-5.1.5/src/loslib.c b/third-party/lua-5.1.5/src/loslib.c
+--- a/third-party/lua-5.1.5/src/loslib.c
++++ b/third-party/lua-5.1.5/src/loslib.c
+@@ -36,8 +36,12 @@ static int os_pushresult (lua_State *L, int i, const char *filename) {
+ 
+ 
+ static int os_execute (lua_State *L) {
++#if defined(__APPLE__) && defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
++  return luaL_error(L, "os.execute is unavailable on iOS");
++#else
+   lua_pushinteger(L, system(luaL_optstring(L, 1, NULL)));
+   return 1;
++#endif
+ }
+ 
+ 
+diff --git a/third-party/lua-5.1.5/toluapp-simple/CMakeLists.txt b/third-party/lua-5.1.5/toluapp-simple/CMakeLists.txt
+--- a/third-party/lua-5.1.5/toluapp-simple/CMakeLists.txt
++++ b/third-party/lua-5.1.5/toluapp-simple/CMakeLists.txt
+@@ -46,8 +46,12 @@ set_target_properties(toluapp51 PROPERTIES LINKER_LANGUAGE CXX)
+ set_target_properties(toluapp51_shared PROPERTIES LINKER_LANGUAGE CXX)
+ set_target_properties(toluapp PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-add_dependencies(toluapp51_shared lua51 lua51_shared lua51_static)
+-add_dependencies(toluapp51 lua51 lua51_shared lua51_static)
+-add_dependencies(toluapp lua51 lua51_shared lua51_static)
++if(CMAKE_CROSSCOMPILING)
++    add_dependencies(toluapp51 lua51_static)
++else()
++    add_dependencies(toluapp51_shared lua51 lua51_shared lua51_static)
++    add_dependencies(toluapp51 lua51 lua51_shared lua51_static)
++    add_dependencies(toluapp lua51 lua51_shared lua51_static)
++endif()
+ 
+ include_directories(${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -48,6 +48,8 @@ option(BUILD_VENDORED_LUA OFF)
+ # Build lua 5.1
+ option(BUILD_VENDORED_LUA OFF)
+ set(STRATAGUS_HOST_TOLUAPP "" CACHE FILEPATH "Host tolua++ executable to use when cross compiling with vendored Lua")
++set(PEONPAD_IOS_INFO_PLIST "" CACHE FILEPATH "PeonPad iOS app Info.plist template")
++set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bundle")
+ option(BUILD_VENDORED_SDL OFF)
+ option(BUILD_VENDORED_MEDIA_LIBS OFF)
+ option(DOWNLOAD_FREEPATS OFF)
+@@ -838,7 +840,9 @@ if (WIN32 AND MINGW)
+ 	set(stratagus_LIBS ${stratagus_LIBS} dxguid)
+ endif()
+ 
+-if(APPLE)
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++	add_definitions(-DPEONPAD_IOS)
++elseif(APPLE)
+ 	add_definitions(-DUSE_MAC)
+ 	set(SDL2_LIBRARY ${SDL2_LIBRARY} SDL2main)
+ endif()
+@@ -1202,7 +1206,7 @@ if(WIN32)
+ 	endif()
+ 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
+ endif()
+-if(APPLE)
++if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+ 	set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} ${SDL2main_LIBRARY}")
+ 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
+ endif()
+@@ -1220,8 +1224,44 @@ if(BUILD_VENDORED_SDL)
+ 	add_dependencies(stratagus_lib SDL2)
+ 	add_dependencies(stratagus_lib SDL2_image)
+ 	add_dependencies(stratagus_lib SDL2_mixer)
+-	if(APPLE)
+-		set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} -ObjC -framework AppKit -framework Carbon -framework AudioToolbox -framework Cocoa -framework CoreAudio -framework CoreGraphics -framework CoreFoundation -framework CoreVideo -framework CoreHaptics -framework GameController -framework ForceFeedback -framework IOKit -framework Metal -liconv")
++	if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++		target_link_libraries(stratagus PRIVATE
++			"${SDL2main_LIBRARY}"
++			"-framework UIKit"
++			"-framework AVFoundation"
++			"-framework AudioToolbox"
++			"-framework CoreAudio"
++			"-framework CoreBluetooth"
++			"-framework CoreGraphics"
++			"-framework CoreMotion"
++			"-framework CoreVideo"
++			"-framework Foundation"
++			"-framework GameController"
++			"-framework CoreHaptics"
++			"-framework Metal"
++			"-framework OpenGLES"
++			"-framework QuartzCore"
++			"-liconv")
++		set_target_properties(stratagus PROPERTIES
++			OUTPUT_NAME PeonPad
++			XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "org.peonpad.ios"
++			XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "2"
++			XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic")
++		if(PEONPAD_IOS_INFO_PLIST)
++			set_target_properties(stratagus PROPERTIES
++				MACOSX_BUNDLE_INFO_PLIST "${PEONPAD_IOS_INFO_PLIST}")
++		endif()
++		if(PEONPAD_IOS_DATA_DIR)
++			add_custom_command(TARGET stratagus POST_BUILD
++				COMMAND "${CMAKE_COMMAND}" -E rm -rf
++					"$<TARGET_BUNDLE_DIR:stratagus>/Aleona"
++				COMMAND "${CMAKE_COMMAND}" -E copy_directory
++					"${PEONPAD_IOS_DATA_DIR}"
++					"$<TARGET_BUNDLE_DIR:stratagus>/Aleona"
++				VERBATIM)
++		endif()
++	elseif(APPLE)
++		set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} -ObjC -framework AppKit -framework Carbon -framework AudioToolbox -framework Cocoa -framework CoreAudio -framework CoreGraphics -framework CoreFoundation -framework CoreVideo -framework CoreHaptics -framework GameController -framework ForceFeedback -framework IOKit -framework Metal -liconv")
+ 	endif()
+ endif()
+ 
+diff --git a/src/stratagus/parameters.cpp b/src/stratagus/parameters.cpp
+--- a/src/stratagus/parameters.cpp
++++ b/src/stratagus/parameters.cpp
+@@ -36,6 +36,10 @@
+ 
+ #include <cstdlib>
+ 
++#ifdef PEONPAD_IOS
++#include <SDL.h>
++#endif
++
+ #ifdef USE_WIN32
+ #include <shlobj.h>
+ #endif
+@@ -55,6 +59,12 @@ void Parameters::SetDefaultUserDirectory(bool noPortable)
+ {
+ #ifdef USE_GAME_DIR
+ 	userDirectory = StratagusLibPath;
++#elif defined(PEONPAD_IOS)
++	char *preferencePath = SDL_GetPrefPath("PeonPad", "PeonPad");
++	if (preferencePath) {
++		userDirectory = preferencePath;
++		SDL_free(preferencePath);
++	}
+ #elif USE_WIN32
+ 	if (!noPortable) {
+ 		// if launcher is in the same directory as the data, we are in a portable install
+diff --git a/src/stratagus/stratagus.cpp b/src/stratagus/stratagus.cpp
+--- a/src/stratagus/stratagus.cpp
++++ b/src/stratagus/stratagus.cpp
+@@ -713,9 +713,16 @@ int stratagusMain(int argc, char **argv)
+ 	SetupConsole();
+ #endif
+ 	//  Setup some defaults.
+-#ifndef MAC_BUNDLE
+-	StratagusLibPath = ".";
+-#else
++	#ifdef PEONPAD_IOS
++		if (char *basePath = SDL_GetBasePath()) {
++			StratagusLibPath = (fs::path(basePath) / "Aleona").string();
++			SDL_free(basePath);
++		} else {
++			StratagusLibPath = ".";
++		}
++	#elif !defined(MAC_BUNDLE)
++		StratagusLibPath = ".";
++	#else
+ 	freopen("/tmp/stdout.txt", "w", stdout);
+ 	freopen("/tmp/stderr.txt", "w", stderr);
+ 	// Look for the specified data set inside the application bundle

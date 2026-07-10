@@ -1,0 +1,90 @@
+diff --git a/src/game/game.cpp b/src/game/game.cpp
+--- a/src/game/game.cpp
++++ b/src/game/game.cpp
+@@ -168,14 +168,25 @@ static void LoadStratagusMap(const fs::path &smpdir, const fs::path &mapname)
+ static void LoadStratagusMap(const fs::path &smpdir, const fs::path &mapname)
+ {
+ 	fs::path mapfull = mapname;
++	std::vector<fs::path> candidates = {
++		smpdir / mapname,
++	};
++	if (!GameName.empty()) {
++		const fs::path userGameDirectory =
++			Parameters::Instance.GetUserDirectory() / GameName;
++		candidates.emplace_back(userGameDirectory / smpdir / mapname);
++		candidates.emplace_back(userGameDirectory / mapname);
++	}
++	candidates.emplace_back(fs::path(StratagusLibPath) / smpdir / mapname);
++	candidates.emplace_back(fs::path(StratagusLibPath) / mapname);
++	candidates.emplace_back(mapname);
++
+ 	// Try the same directory as the smp file first
++	// Then try the per-game user directory for generated or edited maps
+ 	// Not found, try StratagusLibPath and the smp's dir
+ 	// Not found again, try StratagusLibPath
+ 	// Not found, try mapname by itself as a last resort
+-	for (auto candidate : {smpdir / mapname,
+-	                       fs::path(StratagusLibPath) / smpdir / mapname,
+-	                       fs::path(StratagusLibPath) / mapname,
+-	                       fs::path(mapname)}) {
++	for (auto candidate : candidates) {
+ 		const std::string_view extra_extensions[] = {
+ 			"",
+ #ifdef USE_ZLIB
+diff --git a/src/editor/editloop.cpp b/src/editor/editloop.cpp
+--- a/src/editor/editloop.cpp
++++ b/src/editor/editloop.cpp
+@@ -1953,9 +1953,23 @@ void StartEditor(const char *filename)
+ **         At least two players, one human slot, every player have a start point
+ **         ...
+ */
++static fs::path EditorMapSavePath(const std::string &file)
++{
++	fs::path fullName(file);
++	if (fullName.is_relative()) {
++		fullName = Parameters::Instance.GetUserDirectory();
++		if (!GameName.empty()) {
++			fullName /= GameName;
++		}
++		fullName /= file;
++	}
++	fs::create_directories(fullName.parent_path());
++	return fullName;
++}
++
+ int EditorSaveMap(const std::string &file)
+ {
+-	const fs::path fullName = fs::path(StratagusLibPath) / file;
++	const fs::path fullName = EditorMapSavePath(file);
+ 
+ 	if (!SaveStratagusMap(fullName, Map, Editor.TerrainEditable)) {
+ 		ErrorPrint("Cannot save map\n");
+@@ -1966,7 +1980,7 @@ int EditorSaveMap(const std::string &file)
+ 
+ int EditorSaveMapWithResize(std::string_view file, Vec2i newSize, Vec2i offset)
+ {
+-	const fs::path fullName = fs::path(StratagusLibPath) / file;
++	const fs::path fullName = EditorMapSavePath(std::string(file));
+ 
+ 	if (!SaveStratagusMap(fullName, Map, Editor.TerrainEditable, newSize, offset)) {
+ 		ErrorPrint("Cannot save map\n");
+diff --git a/src/stratagus/iolib.cpp b/src/stratagus/iolib.cpp
+--- a/src/stratagus/iolib.cpp
++++ b/src/stratagus/iolib.cpp
+@@ -636,10 +636,14 @@ extern std::string LibraryFileName(const std::string &file)
+ {
+ 	static std::unordered_map<std::string, std::string> FileNameMap;
+ 	auto result = FileNameMap.find(file);
+-	if (result == std::end(FileNameMap)) {
++	if (result == std::end(FileNameMap) || !fs::exists(result->second)) {
+ 		fs::path path = LibraryFileNameImpl(file);
+ 		std::string r(path.string());
+-		FileNameMap[file] = r;
++		if (fs::exists(path)) {
++			FileNameMap[file] = r;
++		} else {
++			FileNameMap.erase(file);
++		}
+ 		return r;
+ 	} else {
+ 		return result->second;

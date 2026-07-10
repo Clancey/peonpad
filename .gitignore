@@ -1,0 +1,49 @@
+# macOS metadata
+.DS_Store
+**/.DS_Store
+
+# Immutable, local-only reference material
+/ref/
+/assets/aleonas-tales/source/
+**/data.Wargus/
+/data.Wargus/
+*.mpq
+*.MPQ
+setup_warcraft_ii_*
+
+# Build products and generated tool state
+build/
+out/
+DerivedData/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+*.app
+*.ipa
+*.dSYM/
+*.xcarchive/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# Runtime state must never live beside source or reference data
+runtime/
+saves/
+cache/
+caches/
+logs/
+*.log
+*.sav
+*.save
+/config/local/
+
+# Signing credentials and local configuration
+.env
+.env.*
+!.env.example
+*.cer
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db

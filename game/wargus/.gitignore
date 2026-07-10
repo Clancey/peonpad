@@ -1,0 +1,21 @@
+#Ignore Visual Studio project files
+build/
+.vscode/*
+**/.DS_Store
+.attach_pid*
+.gdb_history
+a.out
+gmon.*
+libStorm.*
+# midi patches
+*.sf2
+DoomGUS*
+airfont*
+Eric_Welsh*
+freepats*
+FreePats*
+MT32
+Roland*
+SC-55
+SGM-V2.01
+.idea

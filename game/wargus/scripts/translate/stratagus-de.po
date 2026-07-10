@@ -1,0 +1,425 @@
+msgid ""
+msgstr ""
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: POEditor.com\n"
+"Project-Id-Version: Stratagus\n"
+"Language: de\n"
+
+#: action/action_build.cpp:119
+msgid "You cannot reach building place"
+msgstr "Sie können den Bauort nicht erreichen"
+
+#: action/action_build.cpp:177
+msgid "You cannot build %s here"
+msgstr "Sie können hier %s nicht bauen"
+
+#: action/action_build.cpp:197
+msgid "Not enough resources to build %s"
+msgstr "Nicht genügend Ressourcen, um %s zu erstellen"
+
+#: action/action_build.cpp:215
+msgid "Can't build more units %s"
+msgstr "Es können nicht mehr Einheiten gebaut werden, %s"
+
+#: action/action_build.cpp:255
+msgid "Unable to create building %s"
+msgstr "Gebäude %s kann nicht erstellt werden"
+
+#: action/action_build.cpp:515
+msgid "New %s done"
+msgstr "%s fertiggestellt"
+
+#: action/action_repair.cpp:84
+msgid "We need more %s for repair!"
+msgstr "Wir brauchen mehr %s für die Reparatur!"
+
+#: action/action_research.cpp:103
+msgid "%s: research complete"
+msgstr "%s: Forschung abgeschlossen"
+
+#: action/action_resource.cpp:769
+msgid "%s has collapsed!"
+msgstr "%s ist zusammengebrochen!"
+
+#: action/action_resource.cpp:842
+msgid "%s is running low!"
+msgstr "%s geht zur Neige!"
+
+#: action/action_returngoods.cpp:68
+msgid "No Resources to Return."
+msgstr "Keine Ressourcen zum Zurückgeben"
+
+#: action/action_spellcast.cpp:181
+msgid "%s: not enough mana for spell: %s"
+msgstr "%s: nicht genug Mana für Zauber: %s"
+
+#: action/action_spellcast.cpp:185
+msgid "%s: can't cast spell: %s"
+msgstr "%s: kann Zauber nicht wirken: %s"
+
+#: action/action_train.cpp:170
+msgid "New %s ready"
+msgstr "%s einsatzbereit"
+
+#: action/action_train.cpp:217
+msgid "Unable to train %s"
+msgstr "%s kann nicht ausgebildet werden"
+
+#: action/action_upgradeto.cpp:199
+msgid "Upgrade to %s canceled"
+msgstr "Upgrade auf %s abgebrochen"
+
+#: action/action_upgradeto.cpp:207
+msgid "Upgrade to %s complete"
+msgstr "Upgrade auf %s abgeschlossen"
+
+#: action/command.cpp:1319
+msgid "Player \"%s\" has left the game"
+msgstr "Spieler \"%s\" hat das Spiel verlassen"
+
+#: action/command.cpp:1321
+msgid "Player \"%s\" has been killed"
+msgstr "Spieler \"%s\" wurde getötet"
+
+#: editor/editloop.cpp:508 editor/editloop.cpp:592
+msgid "~!OK"
+msgstr "~!OK"
+
+#: editor/editloop.cpp:516 editor/editloop.cpp:600
+msgid "~!Cancel"
+msgstr "~!Abbrechen"
+
+#: editor/editloop.cpp:583
+msgid "Artificial Intelligence"
+msgstr "Künstliche Intelligenz"
+
+#: editor/editloop.cpp:1376
+msgid "Unit can't be placed here."
+msgstr "Einheit kann hier nicht platziert werden."
+
+#: editor/editloop.cpp:1448
+msgid "Mirror editing enabled: 2-side"
+msgstr "Spiegelbearbeitung aktiviert: 2-seitig"
+
+#: editor/editloop.cpp:1451
+msgid "Mirror editing enabled: 4-side"
+msgstr "Spiegelbearbeitung aktiviert: 4-seitig"
+
+#: editor/editloop.cpp:1454
+msgid "Mirror editing disabled"
+msgstr "Spiegelbearbeitung deaktiviert"
+
+#: editor/editloop.cpp:1474
+msgid "Unit deleted"
+msgstr "Einheit gelöscht"
+
+#: editor/editloop.cpp:1497 editor/editloop.cpp:1506
+msgid "Unit owner modified"
+msgstr "Eigentümer der Einheit geändert"
+
+#: editor/editloop.cpp:1831
+#, fuzzy
+msgid "Select mode"
+msgstr "Wähle Ziel"
+
+#: editor/editloop.cpp:1841
+msgid "Unit mode"
+msgstr "Einheiten-Modus"
+
+#: editor/editloop.cpp:1852
+msgid "Tile mode"
+msgstr "Tile-Modus"
+
+#: editor/editloop.cpp:1863
+msgid "Set start location mode"
+msgstr "Startpunkt-Setzen-Modus"
+
+#: network/commands.cpp:824
+msgid "No sync info for this replay !"
+msgstr "Keine Synchronisierungsinformationen für diese Wiederholung !"
+
+#: network/commands.cpp:826
+msgid "Replay got out of sync (%lu) !"
+msgstr "Replay ist nicht mehr synchron (%lu) !"
+
+#: network/commands.cpp:835
+msgid "Replay got out of sync !"
+msgstr "Replay ist nicht mehr synchron!"
+
+#: network/commands.cpp:946 network/commands.cpp:961
+msgid "End of replay"
+msgstr "Ende der Wiederholung"
+
+#: network/network.cpp:928
+msgid "%s sent bad command"
+msgstr "%s hat ungültigen Befehl gesendet"
+
+#: network/network.cpp:1022
+msgid "Network out of sync"
+msgstr "Netzwerk nicht synchron"
+
+#: network/network.cpp:1256
+msgid "Waiting for player \"%s\": %d:%02d"
+msgstr "Warten auf Spieler \"%s\": %d:%02d"
+
+#: network/network.cpp:1272
+msgid "Timed out"
+msgstr "Auszeit"
+
+#: stratagus/player.cpp:553
+msgid "Building Limit Reached"
+msgstr "Gebäudelimit erreicht"
+
+#: stratagus/player.cpp:557
+msgid "Unit Limit Reached"
+msgstr "Einheitenlimit erreicht"
+
+#: stratagus/player.cpp:561
+msgid "Insufficient Supply, increase Supply."
+msgstr "Unzureichende Versorgung, verbessern Sie die Versorgung."
+
+#: stratagus/player.cpp:565
+msgid "Total Unit Limit Reached"
+msgstr "Gesamteinheitengrenze erreicht"
+
+#: stratagus/player.cpp:569
+msgid "Limit of %d reached for this unit type"
+msgstr "Limit von %d für diesen Einheitentyp erreicht"
+
+
+#: stratagus/player.cpp:1068
+msgid "Not enough %s...%s more %s."
+msgstr "Nicht genug %s, %s Sie mehr %s."
+
+#: stratagus/player.cpp:575
+msgid "Cannot create more units."
+msgstr "Es können nicht mehr Einheiten gebaut werden."
+
+#: stratagus/stratagus.cpp:548 stratagus/stratagus.cpp:681
+msgid "Do it! Do it now!"
+msgstr "Mach schon! Fang jetzt an!"
+
+#: stratagus/stratagus.cpp:812
+msgid "Thanks for playing Stratagus.\n"
+msgstr "Danke, dass du Stratagus spielst.\n"
+
+#: ui/botpanel.cpp:724 ui/botpanel.cpp:789
+msgid "Select Target"
+msgstr "Wähle Ziel"
+
+#: ui/botpanel.cpp:852
+msgid "Select Location"
+msgstr "Standort wählen"
+
+#: ui/botpanel.cpp:871
+#, fuzzy
+msgid "Unit training queue is full"
+msgstr "Die Schulungswarteschlange für Einheiten ist voll"
+
+#: ui/interface.cpp:95
+msgid "MESSAGE:%s~!_"
+msgstr "NACHRICHT:%s~!_"
+
+#: ui/interface.cpp:247
+msgid "Sound is on."
+msgstr "Ton ist an."
+
+#: ui/interface.cpp:249
+#, fuzzy
+msgid "Sound is off."
+msgstr "Der Ton ist ausgeschaltet."
+
+#: ui/interface.cpp:264
+msgid "Music is off."
+msgstr "Musik ist aus."
+
+#: ui/interface.cpp:267
+msgid "Music is on."
+msgstr "Musik ist an."
+
+#: ui/interface.cpp:280 ui/mouse.cpp:1736
+#, fuzzy
+msgid "Game Paused"
+msgstr "Spiel angehalten"
+
+#: ui/interface.cpp:282
+#, fuzzy
+msgid "Game Resumed"
+msgstr "Spiel wieder aufgenommen"
+
+#: ui/interface.cpp:313
+#, fuzzy
+msgid "Big map enabled"
+msgstr "Große Karte aktiviert"
+
+#: ui/interface.cpp:322
+#, fuzzy
+msgid "Returning to old map"
+msgstr "Zurück zur alten Karte"
+
+#: ui/interface.cpp:333
+msgid "Faster"
+msgstr "Schneller"
+
+#: ui/interface.cpp:349
+msgid "Slower"
+msgstr "Langsamer"
+
+#: ui/interface.cpp:404
+msgid "Terrain displayed."
+msgstr "Gelände angezeigt."
+
+#: ui/interface.cpp:406
+msgid "Terrain hidden."
+msgstr "Gelände versteckt."
+
+#: ui/interface.cpp:439
+#, fuzzy
+msgid "Grab mouse toggled."
+msgstr "Griff Maus umgeschaltet."
+
+#: ui/interface.cpp:914
+msgid "Screenshot made."
+msgstr "Screenshot erstellt."
+
+#: ui/mainscr.cpp:971
+msgid "Last message repeated ~<%d~> times"
+msgstr "Letzte Nachricht ~<%d~> mal wiederholt"
+
+#: ui/mainscr.cpp:1047
+msgid "~<Event: %s~>"
+msgstr "~<Ereignis: %s~>"
+
+#: ui/mouse.cpp:1904
+#, fuzzy
+msgid "You have ~<%d~> %ss"
+msgstr "Sie haben ~<%d~> %ss"
+
+#: ui/mouse.cpp:1908
+#, fuzzy
+msgid "You have ~<%d~> %s(s)"
+msgstr "Sie haben ~<%d~> %s(s)"
+
+#: unit/unit.cpp:2990
+msgid "%s attacked"
+msgstr "%s angegriffen"
+
+#, fuzzy
+#~ msgid "%s: spell is not ready yet: %s"
+#~ msgstr "%s: Zauber ist noch nicht fertig: %s"
+
+#, fuzzy
+#~ msgid "%s: not enough resources to cast spell: %s"
+#~ msgstr "%s: nicht genügend Ressourcen, um Zauber zu wirken: %s"
+
+#, fuzzy
+#~ msgid "Editor (%d %d)"
+#~ msgstr "Herausgeber (%d %d)"
+
+#, fuzzy
+#~ msgid "#%d '%s' Player:#%d %s"
+#~ msgstr "#%d '%s'-Spieler:#%d %s"
+
+#, fuzzy
+#~ msgid " Amount %d"
+#~ msgstr " Betrag %d"
+
+#, fuzzy
+#~ msgid "Select player #%d"
+#~ msgstr "Spieler auswählen #%d"
+
+#, fuzzy
+#~ msgid "Script %s"
+#~ msgstr "Skript-%s"
+
+#, fuzzy
+#~ msgid "Missile %s"
+#~ msgstr "Raketen-%s"
+
+#, fuzzy
+#~ msgid "Can't find missile %s\n"
+#~ msgstr "Raketen-%s nicht gefunden\n"
+
+#, fuzzy
+#~ msgid "Construction %s"
+#~ msgstr "Bau %s"
+
+#, fuzzy
+#~ msgid "Script %s\n"
+#~ msgstr "Skript-%s\n"
+
+#, fuzzy
+#~ msgid "Icon %s"
+#~ msgstr "%s"
+
+#, fuzzy
+#~ msgid "Can't find icon %s\n"
+#~ msgstr "Symbol %s nicht gefunden\n"
+
+#, fuzzy
+#~ msgid "Icons %s"
+#~ msgstr "%s Icons"
+
+#, fuzzy
+#~ msgid "Set default game speed"
+#~ msgstr "Festlegen der Standardspielgeschwindigkeit"
+
+#, fuzzy
+#~ msgid "Cycle:"
+#~ msgstr "Zyklus:"
+
+#, fuzzy
+#~ msgid "Requirements:\n"
+#~ msgstr "Anforderungen:\n"
+
+#, fuzzy
+#~ msgid "unit-type '%s' without animations, ignored.\n"
+#~ msgstr "Einheitstyp '%s' ohne Animationen, ignoriert.\n"
+
+#~ msgid "Unit \"%s\""
+#~ msgstr "Einheit \"%s\""
+
+#, fuzzy
+#~ msgid "Cursor %s"
+#~ msgstr "Cursor-%s"
+
+#, fuzzy
+#~ msgid "esc"
+#~ msgstr "~<ESC~> UPGRADE ABBRECHEN"
+
+#, fuzzy
+#~ msgid "%s has rebuilt a base, and will no longer be revealed!"
+#~ msgstr "%s hat eine Basis wieder aufgebaut und wird nicht mehr enthüllt!"
+
+#, fuzzy
+#~ msgid "You have rebuilt a base, and will no longer be revealed!"
+#~ msgstr "Du hast eine Basis wieder aufgebaut und wirst nicht mehr enthüllt!"
+
+#, fuzzy
+#~ msgid "Tileset '%s'"
+#~ msgstr "Tileset '%s'"
+
+#~ msgid "Autosave"
+#~ msgstr "Automatisch speichern"
+
+#, fuzzy
+#~ msgid "%s has not rebuilt their base and is being revealed!"
+#~ msgstr "%s hat seine Basis nicht wieder aufgebaut und wird enthüllt!"
+
+#, fuzzy
+#~ msgid "You have not rebuilt your base and have been revealed!"
+#~ msgstr "Ihr habt eure Basis nicht wieder aufgebaut und wurdet enthüllt!"
+
+#, fuzzy
+#~ msgid "%s has lost their last base, and will be revealed in thirty seconds!"
+#~ msgstr "%s hat seine letzte Basis verloren und wird in dreißig Sekunden enthüllt!"
+
+#, fuzzy
+#~ msgid "You have lost your last base, and will be revealed in thirty seconds!"
+#~ msgstr "Du hast deine letzte Basis verloren und wirst in dreißig Sekunden enthüllt werden!"
+
+#, fuzzy
+#~ msgid "Decorations '%s'"
+#~ msgstr "Dekorationen '%s'"

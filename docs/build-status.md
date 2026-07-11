@@ -2,9 +2,71 @@
 
 Status captured: 2026-07-10
 
+Remote-to-local handoff updated: 2026-07-11
+
 This is the handoff point for resuming the active PeonPad goal with a physical
 M2 iPad Pro. It distinguishes completed engineering from acceptance work that
 still requires the device or external licensing evidence.
+
+## Remote Mac to local Mac handoff
+
+Development through the first native iOS application was performed on the
+remote Mac. The pushed GitHub revision is the authoritative portable project
+state. The ignored `ref/`, `assets/aleonas-tales/source/`, `build/`, and
+`runtime/` trees are intentionally not portable through Git and must not be
+added to the repository.
+
+At handoff time the remote Mac reports:
+
+```text
+Xcode 26.6 (17F113)
+iPhoneOS SDK 26.5
+xcrun devicectl list devices: No devices found.
+security find-identity -p codesigning: 0 valid identities found
+```
+
+Consequently, the current source has produced a valid unsigned arm64 iOS app,
+but no PeonPad build has yet been signed, installed, launched, or exercised on
+a physical iPad. This is the precise resume boundary; do not interpret the
+locally successful Xcode build as Phase 2 acceptance.
+
+On the local Mac:
+
+1. Pull the current GitHub `main` branch.
+2. Restore the required local-only reference material under `ref/` without
+   committing it. Run `./scripts/preflight.sh` and confirm the locked reference
+   digest printed below. If the reference material is intentionally different,
+   validate it before updating `config/inputs.lock`; do not bypass the guard.
+3. Restore a local-test Aleona tree at `assets/aleonas-tales/source/`, or replace
+   it with a verified compatible libre payload. A fresh clone intentionally
+   cannot generate the app project without one of those payloads.
+4. Run `./scripts/build-macos.sh` first. The iOS generator requires the host
+   `toluapp` produced by that build.
+5. Connect and trust the unlocked iPad, enable Developer Mode if requested,
+   and confirm it appears in `xcrun devicectl list devices`.
+6. Add the Apple ID only through Xcode's native **Settings → Accounts** flow and
+   allow Xcode to create an Apple Development certificate.
+7. Run `./scripts/generate-ios-xcode.sh`, open
+   `build/ios-xcode/stratagus.xcodeproj`, select the `stratagus` target and the
+   Personal Team, select the iPad, and press **Run**. If the fixed
+   `org.peonpad.ios` identifier is unavailable, use a unique local bundle ID in
+   Xcode for the first test and record the change before making it permanent.
+8. Complete the physical acceptance checklist later in this document and save
+   device logs/screenshots outside `ref/`.
+
+The next engineering gate is deliberately narrow: get the current Aleona-based
+vertical slice through one complete physical-device match. After it passes,
+implement Phase 3 touch/Pencil/pointer input. Actual Warcraft II on iPad is a
+later and separate Phase 4 milestone: add a Files/`UIDocumentPicker` import and
+validation flow for the user's locally extracted `data.Wargus`, then verify
+campaigns, skirmishes, audio, caching, and save/load. Blizzard content must
+remain local and must never be committed or distributed.
+
+The Generals iOS reference reinforces the expected device-only work after the
+first launch: lifecycle-safe render/simulation pausing, cancelled-touch
+handling, gesture arbitration, persistent device logs, and memory profiling.
+PeonPad does not need Generals' DXVK/Vulkan/MoltenVK translation stack because
+Stratagus already renders through SDL2's Metal backend.
 
 ## Executive status
 

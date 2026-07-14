@@ -30,7 +30,7 @@
 
 ## What is PeonPad?
 
-PeonPad is an independent Apple-platform port built on the open-source
+PeonPad is an independent Apple-platform Warcraft II port built on the open-source
 [Stratagus engine](https://github.com/Wargus/stratagus) and
 [Wargus game layer](https://github.com/Wargus/wargus). It runs engine code
 directly on iPadOS; it does **not** run a Windows executable, emulate x86, or

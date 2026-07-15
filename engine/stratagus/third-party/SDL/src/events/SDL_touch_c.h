@@ -48,6 +48,10 @@ extern SDL_Touch *SDL_GetTouch(SDL_TouchID id);
 extern int SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
                          SDL_bool down, float x, float y, float pressure);
 
+/* Cancel an active touch without reporting a finger-up event */
+extern int SDL_SendTouchCancel(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
+                               float x, float y, float pressure);
+
 /* Send a touch motion event for a touch */
 extern int SDL_SendTouchMotion(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
                                float x, float y, float pressure);

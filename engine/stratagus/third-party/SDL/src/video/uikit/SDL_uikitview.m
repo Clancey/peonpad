@@ -284,7 +284,7 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
     }
 }
 
-- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
+- (void)handleTouchesEnded:(NSSet *)touches withEvent:(UIEvent *)event cancelled:(BOOL)cancelled
 {
     for (UITouch *touch in touches) {
         BOOL handled = NO;
@@ -333,15 +333,25 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
             /* FIXME, need to send: int clicks = (int) touch.tapCount; ? */
 
             CGPoint locationInView = [self touchLocation:touch shouldNormalize:YES];
-            SDL_SendTouch(touchId, (SDL_FingerID)((size_t)touch), sdlwindow,
-                          SDL_FALSE, locationInView.x, locationInView.y, pressure);
+            if (cancelled) {
+                SDL_SendTouchCancel(touchId, (SDL_FingerID)((size_t)touch), sdlwindow,
+                                    locationInView.x, locationInView.y, pressure);
+            } else {
+                SDL_SendTouch(touchId, (SDL_FingerID)((size_t)touch), sdlwindow,
+                              SDL_FALSE, locationInView.x, locationInView.y, pressure);
+            }
         }
     }
 }
 
+- (void)touchesEnded:(NSSet *)touches withEvent:(UIEvent *)event
+{
+    [self handleTouchesEnded:touches withEvent:event cancelled:NO];
+}
+
 - (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)event
 {
-    [self touchesEnded:touches withEvent:event];
+    [self handleTouchesEnded:touches withEvent:event cancelled:YES];
 }
 
 - (void)touchesMoved:(NSSet *)touches withEvent:(UIEvent *)event

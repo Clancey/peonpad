@@ -135,6 +135,7 @@ typedef enum
     SDL_FINGERDOWN      = 0x700,
     SDL_FINGERUP,
     SDL_FINGERMOTION,
+    SDL_FINGERCANCEL,
 
     /* Gesture events */
     SDL_DOLLARGESTURE   = 0x800,
@@ -485,7 +486,7 @@ typedef struct SDL_AudioDeviceEvent
  */
 typedef struct SDL_TouchFingerEvent
 {
-    Uint32 type;        /**< ::SDL_FINGERMOTION or ::SDL_FINGERDOWN or ::SDL_FINGERUP */
+    Uint32 type;        /**< ::SDL_FINGERMOTION, ::SDL_FINGERDOWN, ::SDL_FINGERUP, or ::SDL_FINGERCANCEL */
     Uint32 timestamp;   /**< In milliseconds, populated using SDL_GetTicks() */
     SDL_TouchID touchId; /**< The touch device id */
     SDL_FingerID fingerId;

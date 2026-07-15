@@ -552,6 +552,34 @@ static SDL_MouseClickState *GetMouseClickState(SDL_Mouse *mouse, Uint8 button)
     return &mouse->clickstate[button];
 }
 
+int
+SDL_CancelMouseButton(SDL_Window * window, SDL_MouseID mouseID, Uint8 button)
+{
+    SDL_Mouse *mouse = SDL_GetMouse();
+    SDL_MouseInputSource *source = GetMouseInputSource(mouse, mouseID);
+    Uint32 buttonstate;
+
+    if (!source) {
+        return 0;
+    }
+    buttonstate = source->buttonstate & ~SDL_BUTTON(button);
+    if (buttonstate == source->buttonstate) {
+        return 0;
+    }
+    source->buttonstate = buttonstate;
+
+    if (button < mouse->num_clickstates) {
+        SDL_zero(mouse->clickstate[button]);
+    }
+    if (window) {
+        SDL_UpdateMouseFocus(window, mouse->x, mouse->y, buttonstate, SDL_TRUE);
+    }
+    if (mouse->auto_capture) {
+        SDL_UpdateMouseCapture(SDL_FALSE);
+    }
+    return 1;
+}
+
 static int
 SDL_PrivateSendMouseButton(SDL_Window * window, SDL_MouseID mouseID, Uint8 state, Uint8 button, int clicks)
 {

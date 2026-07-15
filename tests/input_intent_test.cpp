@@ -1,4 +1,5 @@
 #include "input_intent.h"
+#include "sdl_input_adapter.h"
 
 #include <cassert>
 #include <vector>
@@ -130,6 +131,62 @@ void TestPendingContextCancellation()
 	assert(touch.End(1, {100.0f, 100.0f}, 4, 0).empty());
 }
 
+void TestSdlTouchCancellationAdapter()
+{
+	TouchInputState touch;
+	SDL_TouchFingerEvent event{};
+	event.type = SDL_FINGERDOWN;
+	event.fingerId = 1;
+	event.x = 0.8f;
+	event.y = 0.2f;
+	assert(AdaptSdlTouchEvent(touch, event, 1000, 500, 1, 0).empty());
+
+	event.fingerId = 2;
+	event.x = 0.2f;
+	event.y = 0.6f;
+	const std::vector<InputIntent> second =
+		AdaptSdlTouchEvent(touch, event, 1000, 500, 2, 4);
+	assert(second.size() == 1);
+	assert(second[0].Position.x == 200);
+	assert(second[0].Position.y == 300);
+	assert(second[0].Modifiers == 4);
+	assert(second[0].Timestamp == 2);
+	assert(touch.HasPendingContextAction());
+
+	event.type = SDL_FINGERCANCEL;
+	const std::vector<InputIntent> canceled =
+		AdaptSdlTouchEvent(touch, event, 1000, 500, 3, 0);
+	assert(canceled.empty());
+	assert(!touch.HasPendingContextAction());
+	assert(touch.ContactCount() == 0);
+
+	event.type = SDL_FINGERUP;
+	assert(AdaptSdlTouchEvent(touch, event, 1000, 500, 4, 0).empty());
+}
+
+void TestFocusLossPolicy()
+{
+	const SdlFocusEventPolicy network =
+		GetSdlFocusEventPolicy(SDL_WINDOWEVENT_FOCUS_LOST, true, true);
+	assert(network.CancelInput);
+	assert(!network.ManagePause);
+
+	const SdlFocusEventPolicy pauseDisabled =
+		GetSdlFocusEventPolicy(SDL_WINDOWEVENT_FOCUS_LOST, false, false);
+	assert(pauseDisabled.CancelInput);
+	assert(!pauseDisabled.ManagePause);
+
+	const SdlFocusEventPolicy pauseEnabled =
+		GetSdlFocusEventPolicy(SDL_WINDOWEVENT_FOCUS_LOST, false, true);
+	assert(pauseEnabled.CancelInput);
+	assert(pauseEnabled.ManagePause);
+
+	const SdlFocusEventPolicy focusGained =
+		GetSdlFocusEventPolicy(SDL_WINDOWEVENT_FOCUS_GAINED, true, false);
+	assert(!focusGained.CancelInput);
+	assert(!focusGained.ManagePause);
+}
+
 void TestPanAndTouchCancellation()
 {
 	TouchInputState touch;
@@ -171,6 +228,8 @@ int main()
 	TestTwoFingerContextAction();
 	TestContextMovementTolerance();
 	TestPendingContextCancellation();
+	TestSdlTouchCancellationAdapter();
+	TestFocusLossPolicy();
 	TestPanAndTouchCancellation();
 	return 0;
 }

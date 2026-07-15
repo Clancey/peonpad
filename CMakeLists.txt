@@ -26,9 +26,11 @@ if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   add_executable(peonpad_input_intent_test
     tests/input_intent_test.cpp
     engine/stratagus/src/ui/input_intent.cpp
+    engine/stratagus/src/video/sdl_input_adapter.cpp
   )
   target_include_directories(peonpad_input_intent_test PRIVATE
     engine/stratagus/src/include
+    engine/stratagus/third-party/SDL/include
   )
   target_compile_features(peonpad_input_intent_test PRIVATE cxx_std_17)
   add_test(

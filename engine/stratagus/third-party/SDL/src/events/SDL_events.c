@@ -389,6 +389,7 @@ SDL_LogEvent(const SDL_Event *event)
         SDL_EVENT_CASE(SDL_FINGERDOWN) PRINT_FINGER_EVENT(event); break;
         SDL_EVENT_CASE(SDL_FINGERUP) PRINT_FINGER_EVENT(event); break;
         SDL_EVENT_CASE(SDL_FINGERMOTION) PRINT_FINGER_EVENT(event); break;
+        SDL_EVENT_CASE(SDL_FINGERCANCEL) PRINT_FINGER_EVENT(event); break;
         #undef PRINT_FINGER_EVENT
 
         #define PRINT_DOLLAR_EVENT(event) \

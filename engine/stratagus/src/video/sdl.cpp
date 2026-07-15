@@ -41,6 +41,7 @@
 #include "network.h"
 #include "online_service.h"
 #include "parameters.h"
+#include "sdl_input_adapter.h"
 #include "sound_server.h"
 #include "translate.h"
 #include "ui.h"
@@ -620,11 +621,6 @@ static bool PeonPadShouldHandleKeyDirectly(const EventCallback &callbacks)
 
 static TouchInputState PeonPadTouchInput;
 
-static TouchPoint PeonPadTouchPoint(const SDL_TouchFingerEvent &event)
-{
-	return {event.x * Video.Width, event.y * Video.Height};
-}
-
 static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
                                      const std::vector<InputIntent> &intents)
 {
@@ -701,39 +697,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 
 #ifdef PEONPAD_IOS
 		case SDL_FINGERDOWN:
-			if (&callbacks != &GameCallbacks) {
-				PeonPadCancelTouches(callbacks, SDL_GetTicks());
-				break;
-			}
-			PeonPadRouteTouchIntents(
-				callbacks,
-				PeonPadTouchInput.Begin(event.tfinger.fingerId,
-				                        PeonPadTouchPoint(event.tfinger),
-				                        SDL_GetTicks(), KeyModifiers));
-			break;
-
 		case SDL_FINGERMOTION:
-			if (&callbacks != &GameCallbacks) {
-				PeonPadCancelTouches(callbacks, SDL_GetTicks());
-				break;
-			}
-			PeonPadRouteTouchIntents(
-				callbacks,
-				PeonPadTouchInput.Update(event.tfinger.fingerId,
-				                         PeonPadTouchPoint(event.tfinger),
-				                         SDL_GetTicks(), KeyModifiers));
-			break;
-
 		case SDL_FINGERUP:
+		case SDL_FINGERCANCEL:
 			if (&callbacks != &GameCallbacks) {
 				PeonPadCancelTouches(callbacks, SDL_GetTicks());
 				break;
 			}
 			PeonPadRouteTouchIntents(
 				callbacks,
-				PeonPadTouchInput.End(event.tfinger.fingerId,
-				                      PeonPadTouchPoint(event.tfinger),
-				                      SDL_GetTicks(), KeyModifiers));
+				AdaptSdlTouchEvent(PeonPadTouchInput, event.tfinger,
+				                   Video.Width, Video.Height,
+				                   SDL_GetTicks(), KeyModifiers));
+			if (event.type == SDL_FINGERCANCEL) {
+				CancelSdlPointerInput(callbacks, SDL_GetTicks());
+			}
 			break;
 
 		case SDL_APP_WILLENTERBACKGROUND:
@@ -802,16 +780,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				case SDL_WINDOWEVENT_FOCUS_GAINED:
 				case SDL_WINDOWEVENT_FOCUS_LOST:
 				{
-				if (!IsNetworkGame() && Preference.PauseOnLeave /*(SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_INPUT_FOCUS)*/) {
+				const SdlFocusEventPolicy focusPolicy =
+					GetSdlFocusEventPolicy(event.window.event,
+					                       IsNetworkGame(), Preference.PauseOnLeave);
+				if (focusPolicy.CancelInput) {
+					CancelSdlPointerInput(callbacks, SDL_GetTicks());
+#ifdef PEONPAD_IOS
+					PeonPadRouteTouchIntents(
+						callbacks,
+						PeonPadTouchInput.Cancel(SDL_GetTicks(), KeyModifiers));
+#endif
+				}
+				if (focusPolicy.ManagePause) {
 					static bool DoTogglePause = false;
 
 					if (IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)) {
-						CancelSdlPointerInput(callbacks, SDL_GetTicks());
-#ifdef PEONPAD_IOS
-						PeonPadRouteTouchIntents(
-							callbacks,
-							PeonPadTouchInput.Cancel(SDL_GetTicks(), KeyModifiers));
-#endif
 						IsSDLWindowVisible = false;
 						if (!GamePaused) {
 							DoTogglePause = !GamePaused;

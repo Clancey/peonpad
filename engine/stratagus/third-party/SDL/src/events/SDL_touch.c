@@ -248,13 +248,14 @@ SDL_DelFinger(SDL_Touch* touch, SDL_FingerID fingerid)
     return 0;
 }
 
-int
-SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
-              SDL_bool down, float x, float y, float pressure)
+static int
+SDL_SendTouchEvent(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
+                   Uint32 eventType, float x, float y, float pressure)
 {
     int posted;
     SDL_Finger *finger;
     SDL_Mouse *mouse;
+    const SDL_bool down = eventType == SDL_FINGERDOWN;
 
     SDL_Touch* touch = SDL_GetTouch(id);
     if (!touch) {
@@ -288,7 +289,11 @@ SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
                         }
                     } else {
                         if (finger_touching == SDL_TRUE && track_touchid == id && track_fingerid == fingerid) {
-                            SDL_SendMouseButton(window, SDL_TOUCH_MOUSEID, SDL_RELEASED, SDL_BUTTON_LEFT);
+                            if (eventType == SDL_FINGERCANCEL) {
+                                SDL_CancelMouseButton(window, SDL_TOUCH_MOUSEID, SDL_BUTTON_LEFT);
+                            } else {
+                                SDL_SendMouseButton(window, SDL_TOUCH_MOUSEID, SDL_RELEASED, SDL_BUTTON_LEFT);
+                            }
                         }
                     }
                 }
@@ -320,7 +325,7 @@ SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
         if (finger) {
             /* This finger is already down.
                Assume the finger-up for the previous touch was lost, and send it. */
-            SDL_SendTouch(id, fingerid, window, SDL_FALSE, x, y, pressure);
+            SDL_SendTouchEvent(id, fingerid, window, SDL_FINGERUP, x, y, pressure);
         }
 
         if (SDL_AddFinger(touch, fingerid, x, y, pressure) < 0) {
@@ -348,9 +353,9 @@ SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
         }
 
         posted = 0;
-        if (SDL_GetEventState(SDL_FINGERUP) == SDL_ENABLE) {
+        if (SDL_GetEventState(eventType) == SDL_ENABLE) {
             SDL_Event event;
-            event.tfinger.type = SDL_FINGERUP;
+            event.tfinger.type = eventType;
             event.tfinger.touchId = id;
             event.tfinger.fingerId = fingerid;
             /* I don't trust the coordinates passed on fingerUp */
@@ -366,6 +371,23 @@ SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
         SDL_DelFinger(touch, fingerid);
     }
     return posted;
+}
+
+int
+SDL_SendTouch(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
+              SDL_bool down, float x, float y, float pressure)
+{
+    return SDL_SendTouchEvent(id, fingerid, window,
+                              down ? SDL_FINGERDOWN : SDL_FINGERUP,
+                              x, y, pressure);
+}
+
+int
+SDL_SendTouchCancel(SDL_TouchID id, SDL_FingerID fingerid, SDL_Window * window,
+                    float x, float y, float pressure)
+{
+    return SDL_SendTouchEvent(id, fingerid, window, SDL_FINGERCANCEL,
+                              x, y, pressure);
 }
 
 int

@@ -343,6 +343,7 @@ set(video_SRCS
 	src/video/movie.cpp
 	src/video/png.cpp
 	src/video/sdl.cpp
+	src/video/sdl_input_adapter.cpp
 	src/video/video.cpp
 	src/video/shaders.cpp
 )
@@ -509,6 +510,7 @@ set(stratagus_generic_HDRS
 	src/include/script.h
 	src/include/script_sound.h
 	src/include/sdl2_helper.h
+	src/include/sdl_input_adapter.h
 	src/include/settings.h
 	src/include/sound.h
 	src/include/sound_server.h

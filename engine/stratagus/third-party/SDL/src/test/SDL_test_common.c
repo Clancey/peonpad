@@ -1694,8 +1694,10 @@ SDLTest_PrintEvent(SDL_Event * event)
         break;
     case SDL_FINGERDOWN:
     case SDL_FINGERUP:
+    case SDL_FINGERCANCEL:
         SDL_Log("SDL EVENT: Finger: %s touch=%ld, finger=%ld, x=%f, y=%f, dx=%f, dy=%f, pressure=%f",
-                (event->type == SDL_FINGERDOWN) ? "down" : "up",
+                (event->type == SDL_FINGERDOWN) ? "down" :
+                (event->type == SDL_FINGERUP) ? "up" : "cancel",
                 (long) event->tfinger.touchId,
                 (long) event->tfinger.fingerId,
                 event->tfinger.x, event->tfinger.y,

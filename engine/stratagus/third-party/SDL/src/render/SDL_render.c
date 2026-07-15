@@ -807,6 +807,7 @@ SDL_RendererEventWatch(void *userdata, SDL_Event *event)
         }
     } else if (event->type == SDL_FINGERDOWN ||
                event->type == SDL_FINGERUP ||
+               event->type == SDL_FINGERCANCEL ||
                event->type == SDL_FINGERMOTION) {
         int logical_w, logical_h;
         float physical_w, physical_h;

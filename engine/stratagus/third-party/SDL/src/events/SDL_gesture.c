@@ -567,7 +567,8 @@ void SDL_GestureProcessEvent(SDL_Event* event)
 
     if (event->type == SDL_FINGERMOTION ||
         event->type == SDL_FINGERDOWN ||
-        event->type == SDL_FINGERUP) {
+        event->type == SDL_FINGERUP ||
+        event->type == SDL_FINGERCANCEL) {
         SDL_GestureTouch* inTouch = SDL_GetGestureTouch(event->tfinger.touchId);
 
         /* Shouldn't be possible */
@@ -576,8 +577,18 @@ void SDL_GestureProcessEvent(SDL_Event* event)
         x = event->tfinger.x;
         y = event->tfinger.y;
 
+        if (event->type == SDL_FINGERCANCEL) {
+            inTouch->numDownFingers--;
+            if (inTouch->numDownFingers > 0) {
+                inTouch->centroid.x = (inTouch->centroid.x*(inTouch->numDownFingers+1)-
+                                       x)/inTouch->numDownFingers;
+                inTouch->centroid.y = (inTouch->centroid.y*(inTouch->numDownFingers+1)-
+                                       y)/inTouch->numDownFingers;
+            }
+        }
+
         /* Finger Up */
-        if (event->type == SDL_FINGERUP) {
+        else if (event->type == SDL_FINGERUP) {
 #if defined(ENABLE_DOLLAR)
             SDL_FloatPoint path[DOLLARNPOINTS];
 #endif

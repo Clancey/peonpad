@@ -78,6 +78,30 @@ void TestRouterPhasesAndCancellation()
 	assert(!router.IsViewportPanActive());
 }
 
+void TestDelayedPointerEndAfterCancellation()
+{
+	InputIntentRouter router;
+	RecordingTarget target;
+
+	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::Begin,
+	                     {10, 20}, {}, 0, 1, InputPrimaryButton}, target));
+	router.CancelPointer(target, 2, 0, {10, 20});
+	assert(target.Intents.size() == 2);
+	assert(target.Intents.back().Phase == InputIntentPhase::Cancel);
+
+	assert(!router.Route({InputIntentKind::PointerButton, InputIntentPhase::End,
+	                      {10, 20}, {}, 0, 3, InputPrimaryButton}, target));
+	assert(target.Intents.size() == 2);
+
+	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::Begin,
+	                     {30, 40}, {}, 0, 4, InputPrimaryButton}, target));
+	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::End,
+	                     {30, 40}, {}, 0, 5, InputPrimaryButton}, target));
+	assert(target.Intents.size() == 4);
+	assert(target.Intents.back().Phase == InputIntentPhase::End);
+	assert(target.Intents.back().Timestamp == 5);
+}
+
 void TestTwoFingerContextAction()
 {
 	TouchInputState touch;
@@ -225,6 +249,7 @@ int main()
 {
 	TestRouterPropagation();
 	TestRouterPhasesAndCancellation();
+	TestDelayedPointerEndAfterCancellation();
 	TestTwoFingerContextAction();
 	TestContextMovementTolerance();
 	TestPendingContextCancellation();

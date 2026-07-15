@@ -22,8 +22,15 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 				}
 				return handled;
 			}
-			if (intent.Phase == InputIntentPhase::End
-			    || intent.Phase == InputIntentPhase::Cancel) {
+			if (intent.Phase == InputIntentPhase::End) {
+				if (!IsPointerButtonActive(intent.Code)) {
+					return false;
+				}
+				const bool handled = target.Dispatch(intent);
+				ActivePointerButtons.erase(intent.Code);
+				return handled;
+			}
+			if (intent.Phase == InputIntentPhase::Cancel) {
 				const bool handled = target.Dispatch(intent);
 				ActivePointerButtons.erase(intent.Code);
 				return handled;

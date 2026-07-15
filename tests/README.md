@@ -16,3 +16,10 @@ ordered Stratagus patch series.
 the host and checks full-screen 4:3, asymmetric safe insets, aspect fitting,
 and invalid geometry. Device acceptance remains necessary to verify the live
 UIKit insets and rendered result on the target iPad.
+
+`scripts/preflight-vision-compat.sh` runs the public baseline, checks the
+iPhoneSimulator and visionOS Simulator SDKs plus an available Vision Pro
+runtime, then compiles an arm64 iOS Simulator platform-7 probe. The full
+Designed-for-iPad build and optional launch are exercised separately by
+`scripts/build-vision-compat-simulator.sh`; neither substitutes for Vision Pro
+hardware acceptance.

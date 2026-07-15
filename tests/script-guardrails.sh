@@ -34,11 +34,56 @@ if [[ "$MODE" == maintainer ]]; then
 fi
 
 "$ROOT_DIR/scripts/prepare-ipad-build.sh" --help >/dev/null
+"$ROOT_DIR/scripts/preflight-vision-compat.sh" --help >/dev/null
+"$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
   print -u2 "prepare script accepted multiple input modes"
   exit 1
 fi
+if "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" \
+    --unsupported >/dev/null 2>&1; then
+  print -u2 "Vision compatibility build accepted an unsupported option"
+  exit 1
+fi
+
+VISION_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-simulator-arm64.cmake"
+rg -q 'CMAKE_OSX_SYSROOT iphonesimulator' "$VISION_TOOLCHAIN"
+rg -q 'SUPPORTED_PLATFORMS' "$VISION_TOOLCHAIN"
+rg -q 'SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD YES' "$VISION_TOOLCHAIN"
+
+SIMCTL_TEST_ROOT="$TEST_RUNTIME/simctl"
+SIMCTL_TEST_BIN="$SIMCTL_TEST_ROOT/bin"
+SIMCTL_TEST_DEVICES="$SIMCTL_TEST_ROOT/devices.txt"
+VISION_UDID=11111111-1111-1111-1111-111111111111
+IPAD_UDID=22222222-2222-2222-2222-222222222222
+cmake -E remove_directory "$SIMCTL_TEST_ROOT"
+cmake -E make_directory "$SIMCTL_TEST_BIN"
+cp "$ROOT_DIR/tests/fixtures/fake-xcrun.sh" "$SIMCTL_TEST_BIN/xcrun"
+chmod +x "$SIMCTL_TEST_BIN/xcrun"
+print -r -- "-- iOS 26.5 --
+    iPad Pro 13-inch (M5) ($IPAD_UDID) (Shutdown)
+-- visionOS 26.5 --
+    Apple Vision Pro ($VISION_UDID) (Shutdown)" > "$SIMCTL_TEST_DEVICES"
+
+SELECTED_VISION_UDID=$(
+  PATH="$SIMCTL_TEST_BIN:$PATH" \
+  PEONPAD_TEST_SIMCTL_DEVICES_FILE="$SIMCTL_TEST_DEVICES" \
+  PEONPAD_VISION_SIMULATOR_UDID="$VISION_UDID" \
+    "$ROOT_DIR/scripts/find-vision-pro-simulator.sh"
+)
+[[ "$SELECTED_VISION_UDID" == "$VISION_UDID" ]] || {
+  print -u2 "Vision Pro simulator override selected the wrong device"
+  exit 1
+}
+if PATH="$SIMCTL_TEST_BIN:$PATH" \
+    PEONPAD_TEST_SIMCTL_DEVICES_FILE="$SIMCTL_TEST_DEVICES" \
+    PEONPAD_VISION_SIMULATOR_UDID="$IPAD_UDID" \
+      "$ROOT_DIR/scripts/find-vision-pro-simulator.sh" >/dev/null 2>&1; then
+  print -u2 "Vision Pro simulator override accepted an iPad simulator"
+  exit 1
+fi
+cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 
 IOS_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in"
 plutil -lint "$IOS_PLIST" >/dev/null

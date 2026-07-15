@@ -51,6 +51,17 @@ fields reactivate UIKit's software keyboard when tapped. SDL's separate
 hardware keyboard, mouse, and trackpad paths remain enabled for Magic Keyboard
 and external pointer testing.
 
+The existing iPad target now has a separate Designed-for-iPad Vision Pro
+simulator path. Xcode 26.6 advertises the scheme at a `visionOS Simulator`
+destination with the `Designed for [iPad,iPhone]` variant, while actually
+building an arm64 iOS Simulator platform-7 executable with the iPhoneSimulator
+26.5 SDK. On 2026-07-15 that app built, installed, launched, and remained
+running under the visionOS 26.5 simulator with a generated non-game probe
+payload; no proprietary data was accessed. It is not an xros build, and the
+probe is not gameplay acceptance. Eye/hand input, control ergonomics, audio,
+lifecycle, sustained performance, and complete gameplay remain Vision Pro
+hardware-only acceptance.
+
 Replay Game and Save Replay are hidden in the private iPad profile after device
 testing found that both legacy and newly generated logs failed to play
 reliably. The engine also retains a missing-map preflight so stale files cannot
@@ -228,6 +239,7 @@ Public source and toolchain checks:
 ./scripts/preflight.sh
 ./tests/script-guardrails.sh
 ./scripts/test-ios-viewport.sh
+./scripts/preflight-vision-compat.sh
 ./scripts/build-macos.sh
 PEONPAD_WC2_DATA_DIR="/path/to/data.Wargus" ./scripts/smoke-macos.sh
 ```

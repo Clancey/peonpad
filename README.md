@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <strong>PeonPad brings the Stratagus/Wargus real-time strategy engine to iPad as a native ARM64 app.</strong><br>
+  <strong>PeonPad brings the Stratagus/Wargus real-time strategy engine for Warcraft II to iPad as a native ARM64 app.</strong><br>
   SDL2 renders through Metal. Touch gestures map classic RTS actions to the screen. Your game data stays yours.
 </p>
 

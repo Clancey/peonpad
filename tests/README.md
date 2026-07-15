@@ -23,7 +23,9 @@ controller intent phases without requiring game data. Controller coverage
 includes device-registry duplication and handoff, radial dead zones and curves,
 frame-rate-independent bounded cursor motion, camera-axis zeroing, held
 modifier cleanup, gameplay/menu context changes, menu repeat, SDL2 mapping,
-and valid input after cancellation.
+valid input after cancellation, and source-owned primary/context buttons so a
+controller release or cancellation cannot clear an overlapping mouse or touch
+hold.
 
 `scripts/preflight-vision-compat.sh` runs the public baseline, checks the
 iPhoneSimulator and visionOS Simulator SDKs plus an available Vision Pro

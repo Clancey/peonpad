@@ -23,6 +23,39 @@ public:
 	std::vector<InputIntent> Intents;
 };
 
+class OwnershipRecordingTarget final : public InputIntentTarget
+{
+public:
+	bool Dispatch(const InputIntent &intent) override
+	{
+		if (intent.Kind != InputIntentKind::PointerButton) {
+			return true;
+		}
+		InputButtonOwnershipChange change = InputButtonOwnershipChange::Ignored;
+		if (intent.Phase == InputIntentPhase::Begin) {
+			change = Ownership.Press(intent.Source, intent.Code);
+		} else if (intent.Phase == InputIntentPhase::End
+		           || intent.Phase == InputIntentPhase::Cancel) {
+			change = Ownership.Release(intent.Source, intent.Code);
+		}
+		if (change == InputButtonOwnershipChange::EffectivePress
+		    || change == InputButtonOwnershipChange::EffectiveRelease) {
+			EffectiveIntents.push_back(intent);
+		}
+		return change != InputButtonOwnershipChange::Ignored;
+	}
+
+	InputButtonOwnership Ownership;
+	std::vector<InputIntent> EffectiveIntents;
+};
+
+InputIntent PointerButtonIntent(InputIntentSource source, InputIntentPhase phase,
+                                unsigned button, std::uint32_t timestamp)
+{
+	return {InputIntentKind::PointerButton, phase, {10, 20}, {},
+	        0, timestamp, button, 0, source};
+}
+
 void RouteAll(InputIntentRouter &router,
               RecordingTarget &target,
               const std::vector<InputIntent> &intents)
@@ -139,6 +172,191 @@ void TestDelayedPointerEndAfterCancellation()
 	assert(target.Intents.back().Timestamp == 5);
 }
 
+void TestCrossSourcePointerButtonOwnership()
+{
+	for (const InputIntentSource pointerSource :
+	     {InputIntentSource::Mouse, InputIntentSource::Touch}) {
+		InputIntentRouter pointerRouter;
+		InputIntentRouter controllerRouter;
+		OwnershipRecordingTarget target;
+
+		assert(pointerRouter.Route(
+			PointerButtonIntent(pointerSource, InputIntentPhase::Begin,
+			                    InputPrimaryButton, 1),
+			target));
+		assert(controllerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Controller,
+			                    InputIntentPhase::Begin,
+			                    InputPrimaryButton, 2),
+			target));
+		assert(target.EffectiveIntents.size() == 1);
+		assert(target.Ownership.OwnerCount(InputPrimaryButton) == 2);
+
+		assert(controllerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Controller,
+			                    InputIntentPhase::End,
+			                    InputPrimaryButton, 3),
+			target));
+		assert(target.EffectiveIntents.size() == 1);
+		assert(target.Ownership.HasOwner(pointerSource, InputPrimaryButton));
+		assert(!target.Ownership.HasOwner(
+			InputIntentSource::Controller, InputPrimaryButton));
+
+		assert(pointerRouter.Route(
+			PointerButtonIntent(pointerSource, InputIntentPhase::End,
+			                    InputPrimaryButton, 4),
+			target));
+		assert(target.EffectiveIntents.size() == 2);
+		assert(target.EffectiveIntents.back().Phase == InputIntentPhase::End);
+		assert(!target.Ownership.HasAnyOwner(InputPrimaryButton));
+	}
+}
+
+void TestControllerCancelRetainsPointerOwner()
+{
+	InputIntentRouter pointerRouter;
+	InputIntentRouter controllerRouter;
+	OwnershipRecordingTarget target;
+
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Touch, InputIntentPhase::Begin,
+		                    InputPrimaryButton, 1),
+		target));
+	assert(controllerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Controller,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 2),
+		target));
+	assert(controllerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Controller,
+		                    InputIntentPhase::Cancel,
+		                    InputPrimaryButton, 3),
+		target));
+	assert(target.EffectiveIntents.size() == 1);
+	assert(target.Ownership.HasOwner(
+		InputIntentSource::Touch, InputPrimaryButton));
+
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Touch, InputIntentPhase::End,
+		                    InputPrimaryButton, 4),
+		target));
+	assert(target.EffectiveIntents.size() == 2);
+	assert(target.EffectiveIntents.back().Phase == InputIntentPhase::End);
+}
+
+void TestReversePointerOwnershipAndContextButton()
+{
+	for (const unsigned button :
+	     {InputPrimaryButton, InputContextButton}) {
+		InputIntentRouter pointerRouter;
+		InputIntentRouter controllerRouter;
+		OwnershipRecordingTarget target;
+
+		assert(controllerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Controller,
+			                    InputIntentPhase::Begin, button, 1),
+			target));
+		assert(pointerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Mouse,
+			                    InputIntentPhase::Begin, button, 2),
+			target));
+		assert(controllerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Controller,
+			                    InputIntentPhase::End, button, 3),
+			target));
+		assert(target.EffectiveIntents.size() == 1);
+		assert(target.Ownership.HasOwner(InputIntentSource::Mouse, button));
+
+		assert(pointerRouter.Route(
+			PointerButtonIntent(InputIntentSource::Mouse,
+			                    InputIntentPhase::End, button, 4),
+			target));
+		assert(target.EffectiveIntents.size() == 2);
+		assert(target.EffectiveIntents.back().Code == button);
+		assert(target.EffectiveIntents.back().Phase == InputIntentPhase::End);
+		assert(!target.Ownership.HasAnyOwner(button));
+	}
+}
+
+void TestFocusCancellationClearsAllButtonOwners()
+{
+	InputIntentRouter pointerRouter;
+	InputIntentRouter controllerRouter;
+	OwnershipRecordingTarget target;
+
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Mouse,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 1),
+		target));
+	assert(controllerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Controller,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 2),
+		target));
+	pointerRouter.CancelPointer(target, 3, 0, {10, 20});
+	assert(target.Ownership.HasOwner(
+		InputIntentSource::Controller, InputPrimaryButton));
+	assert(target.EffectiveIntents.size() == 1);
+
+	controllerRouter.CancelPointer(target, 4, 0, {10, 20});
+	assert(!target.Ownership.HasAnyOwner(InputPrimaryButton));
+	assert(target.EffectiveIntents.size() == 2);
+	assert(target.EffectiveIntents.back().Phase == InputIntentPhase::Cancel);
+
+	assert(!pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Mouse, InputIntentPhase::End,
+		                    InputPrimaryButton, 5),
+		target));
+	assert(!controllerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Controller,
+		                    InputIntentPhase::End,
+		                    InputPrimaryButton, 6),
+		target));
+
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Mouse,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 7),
+		target));
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Mouse, InputIntentPhase::End,
+		                    InputPrimaryButton, 8),
+		target));
+	assert(target.EffectiveIntents.size() == 4);
+	assert(!target.Ownership.HasAnyOwner(InputPrimaryButton));
+}
+
+void TestSourceSpecificTouchCancellationRetainsMouse()
+{
+	InputIntentRouter pointerRouter;
+	OwnershipRecordingTarget target;
+
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Mouse,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 1),
+		target));
+	assert(pointerRouter.Route(
+		PointerButtonIntent(InputIntentSource::Touch,
+		                    InputIntentPhase::Begin,
+		                    InputPrimaryButton, 2),
+		target));
+	pointerRouter.CancelPointer(
+		target, 3, 0, {10, 20}, InputIntentSource::Touch);
+	assert(target.EffectiveIntents.size() == 1);
+	assert(target.Ownership.HasOwner(
+		InputIntentSource::Mouse, InputPrimaryButton));
+	assert(!target.Ownership.HasOwner(
+		InputIntentSource::Touch, InputPrimaryButton));
+
+	pointerRouter.CancelPointer(
+		target, 4, 0, {10, 20}, InputIntentSource::Mouse);
+	assert(target.EffectiveIntents.size() == 2);
+	assert(target.EffectiveIntents.back().Phase == InputIntentPhase::Cancel);
+	assert(!target.Ownership.HasAnyOwner(InputPrimaryButton));
+}
+
 void TestTwoFingerContextAction()
 {
 	TouchInputState touch;
@@ -211,6 +429,7 @@ void TestSdlTouchCancellationAdapter()
 	assert(second[0].Position.y == 300);
 	assert(second[0].Modifiers == 4);
 	assert(second[0].Timestamp == 2);
+	assert(second[0].Source == InputIntentSource::Touch);
 	assert(touch.HasPendingContextAction());
 
 	event.type = SDL_FINGERCANCEL;
@@ -541,6 +760,7 @@ void TestSdlControllerAdapter()
 	assert(context[0].Kind == InputIntentKind::PointerButton);
 	assert(context[0].Code == InputContextButton);
 	assert(context[0].Modifiers & InputModifierAdditiveSelection);
+	assert(context[0].Source == InputIntentSource::Controller);
 }
 
 } // namespace
@@ -550,6 +770,11 @@ int main()
 	TestRouterPropagation();
 	TestRouterPhasesAndCancellation();
 	TestDelayedPointerEndAfterCancellation();
+	TestCrossSourcePointerButtonOwnership();
+	TestControllerCancelRetainsPointerOwner();
+	TestReversePointerOwnershipAndContextButton();
+	TestFocusCancellationClearsAllButtonOwners();
+	TestSourceSpecificTouchCancellationRetainsMouse();
 	TestTwoFingerContextAction();
 	TestContextMovementTolerance();
 	TestPendingContextCancellation();

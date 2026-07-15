@@ -25,6 +25,12 @@ enum class InputIntentPhase {
 	Cancel
 };
 
+enum class InputIntentSource {
+	Mouse,
+	Touch,
+	Controller
+};
+
 struct InputPoint {
 	int x = 0;
 	int y = 0;
@@ -44,6 +50,7 @@ struct InputIntent {
 	std::uint32_t Timestamp = 0;
 	unsigned Code = 0;
 	unsigned Character = 0;
+	InputIntentSource Source = InputIntentSource::Mouse;
 };
 
 constexpr unsigned InputPrimaryButton = 1;
@@ -74,23 +81,49 @@ public:
 	virtual bool Dispatch(const InputIntent &intent) = 0;
 };
 
+enum class InputButtonOwnershipChange {
+	Ignored,
+	Retained,
+	EffectivePress,
+	EffectiveRelease
+};
+
+class InputButtonOwnership
+{
+public:
+	InputButtonOwnershipChange Press(InputIntentSource source, unsigned button);
+	InputButtonOwnershipChange Release(InputIntentSource source, unsigned button);
+
+	bool HasOwner(InputIntentSource source, unsigned button) const;
+	bool HasAnyOwner(unsigned button) const;
+	std::size_t OwnerCount(unsigned button) const;
+
+private:
+	std::map<unsigned, std::set<InputIntentSource>> Owners;
+};
+
 class InputIntentRouter
 {
 public:
 	bool Route(const InputIntent &intent, InputIntentTarget &target);
 	void CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
 	                   int modifiers, InputPoint position);
+	void CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
+	                   int modifiers, InputPoint position,
+	                   InputIntentSource source);
 
 	bool IsPointerButtonActive(unsigned button) const;
-	bool IsViewportPanActive() const { return ViewportPanActive; }
+	bool IsPointerButtonActive(InputIntentSource source, unsigned button) const;
+	bool IsViewportPanActive() const { return !ActiveViewportPans.empty(); }
+	bool IsViewportPanActive(InputIntentSource source) const;
 	bool IsControllerActionActive(unsigned action) const;
 	bool IsModifierActive(unsigned modifier) const;
 
 private:
-	std::set<unsigned> ActivePointerButtons;
+	std::set<std::pair<InputIntentSource, unsigned>> ActivePointerButtons;
+	std::set<InputIntentSource> ActiveViewportPans;
 	std::set<unsigned> ActiveControllerActions;
 	std::set<unsigned> ActiveModifiers;
-	bool ViewportPanActive = false;
 };
 
 struct TouchPoint {

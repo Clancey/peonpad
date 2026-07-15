@@ -651,6 +651,13 @@ private:
 static InputIntentRouter SdlInputRouter;
 static InputIntentRouter SdlControllerInputRouter;
 
+static InputIntentSource SdlPointerSource(Uint32 device)
+{
+	return device == SDL_TOUCH_MOUSEID
+		? InputIntentSource::Touch
+		: InputIntentSource::Mouse;
+}
+
 static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &intent)
 {
 	SdlInputIntentTarget target(callbacks);
@@ -732,6 +739,14 @@ static void CancelSdlPointerInput(const EventCallback &callbacks, unsigned ticks
 	SdlInputRouter.CancelPointer(target, ticks, KeyModifiers, {});
 }
 
+static void CancelSdlPointerInputSource(const EventCallback &callbacks,
+                                        unsigned ticks,
+                                        InputIntentSource source)
+{
+	SdlInputIntentTarget target(callbacks);
+	SdlInputRouter.CancelPointer(target, ticks, KeyModifiers, {}, source);
+}
+
 #ifdef PEONPAD_IOS
 static bool PeonPadShouldHandleKeyDirectly(const EventCallback &callbacks)
 {
@@ -748,7 +763,8 @@ static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
 		    && intent.Phase == InputIntentPhase::Begin) {
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
-			               intent.Position, {}, intent.Modifiers, intent.Timestamp});
+			               intent.Position, {}, intent.Modifiers, intent.Timestamp,
+			               0, 0, intent.Source});
 		}
 		RouteSdlInput(callbacks, intent);
 	}
@@ -757,7 +773,7 @@ static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
 static void PeonPadCancelTouches(const EventCallback &callbacks, unsigned ticks)
 {
 	PeonPadRouteTouchIntents(callbacks, PeonPadTouchInput.Cancel(ticks, KeyModifiers));
-	CancelSdlPointerInput(callbacks, ticks);
+	CancelSdlPointerInputSource(callbacks, ticks, InputIntentSource::Touch);
 }
 #endif
 
@@ -822,7 +838,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
 			               {event.button.x, event.button.y}, {}, KeyModifiers,
-			               SDL_GetTicks(), event.button.button});
+			               SDL_GetTicks(), event.button.button, 0,
+			               SdlPointerSource(event.button.which)});
 			break;
 
 		case SDL_MOUSEBUTTONUP:
@@ -836,7 +853,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
 			               {event.button.x, event.button.y}, {}, KeyModifiers,
-			               SDL_GetTicks(), event.button.button});
+			               SDL_GetTicks(), event.button.button, 0,
+			               SdlPointerSource(event.button.which)});
 			break;
 
 		case SDL_MOUSEMOTION:
@@ -850,7 +868,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
 			               {event.motion.x, event.motion.y}, {}, KeyModifiers,
-			               SDL_GetTicks()});
+			               SDL_GetTicks(), 0, 0,
+			               SdlPointerSource(event.motion.which)});
 			break;
 
 #ifdef PEONPAD_IOS
@@ -868,7 +887,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				                   Video.Width, Video.Height,
 				                   SDL_GetTicks(), KeyModifiers));
 			if (event.type == SDL_FINGERCANCEL) {
-				CancelSdlPointerInput(callbacks, SDL_GetTicks());
+				CancelSdlPointerInputSource(
+					callbacks, SDL_GetTicks(), InputIntentSource::Touch);
 			}
 			break;
 
@@ -876,6 +896,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 		case SDL_APP_DIDENTERBACKGROUND:
 		case SDL_APP_TERMINATING:
 			PeonPadCancelTouches(callbacks, SDL_GetTicks());
+			CancelSdlPointerInput(callbacks, SDL_GetTicks());
 			CancelSdlControllerInput(callbacks, SDL_GetTicks());
 			break;
 #endif

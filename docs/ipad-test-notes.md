@@ -148,7 +148,9 @@ transitions cancel held buttons, axes, modifiers, pans, and virtual-cursor
 interactions. An active-controller disconnect pauses only a running local
 single-player game; network timing is never changed. Touch, keyboard, mouse,
 and the system keyboard path remain available regardless of the last active
-device.
+device. Pointer-button ownership is tracked per mouse, touch, and controller
+source, so one source releasing or canceling a shared primary/context button
+does not terminate another source's active hold.
 
 ## Vision Pro Designed-for-iPad probe
 

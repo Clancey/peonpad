@@ -176,7 +176,7 @@ index 0000000..9496f29
 +
 +#endif
 diff --git a/src/include/input_intent.h b/src/include/input_intent.h
-index ff0e3fb..7471b66 100644
+index ff0e3fb..374b9d7 100644
 --- a/src/include/input_intent.h
 +++ b/src/include/input_intent.h
 @@ -13,7 +13,9 @@ enum class InputIntentKind {
@@ -190,7 +190,25 @@ index ff0e3fb..7471b66 100644
  };
  
  enum class InputIntentPhase {
-@@ -46,6 +48,24 @@ struct InputIntent {
+@@ -23,6 +25,12 @@ enum class InputIntentPhase {
+ 	Cancel
+ };
+ 
++enum class InputIntentSource {
++	Mouse,
++	Touch,
++	Controller
++};
++
+ struct InputPoint {
+ 	int x = 0;
+ 	int y = 0;
+@@ -42,10 +50,29 @@ struct InputIntent {
+ 	std::uint32_t Timestamp = 0;
+ 	unsigned Code = 0;
+ 	unsigned Character = 0;
++	InputIntentSource Source = InputIntentSource::Mouse;
+ };
  
  constexpr unsigned InputPrimaryButton = 1;
  constexpr unsigned InputContextButton = 3;
@@ -215,20 +233,59 @@ index ff0e3fb..7471b66 100644
  
  class InputIntentTarget
  {
-@@ -63,9 +83,13 @@ class InputIntentRouter
+@@ -54,19 +81,49 @@ class InputIntentTarget
+ 	virtual bool Dispatch(const InputIntent &intent) = 0;
+ };
+ 
++enum class InputButtonOwnershipChange {
++	Ignored,
++	Retained,
++	EffectivePress,
++	EffectiveRelease
++};
++
++class InputButtonOwnership
++{
++public:
++	InputButtonOwnershipChange Press(InputIntentSource source, unsigned button);
++	InputButtonOwnershipChange Release(InputIntentSource source, unsigned button);
++
++	bool HasOwner(InputIntentSource source, unsigned button) const;
++	bool HasAnyOwner(unsigned button) const;
++	std::size_t OwnerCount(unsigned button) const;
++
++private:
++	std::map<unsigned, std::set<InputIntentSource>> Owners;
++};
++
+ class InputIntentRouter
+ {
+ public:
+ 	bool Route(const InputIntent &intent, InputIntentTarget &target);
+ 	void CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
+ 	                   int modifiers, InputPoint position);
++	void CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
++	                   int modifiers, InputPoint position,
++	                   InputIntentSource source);
  
  	bool IsPointerButtonActive(unsigned button) const;
- 	bool IsViewportPanActive() const { return ViewportPanActive; }
+-	bool IsViewportPanActive() const { return ViewportPanActive; }
++	bool IsPointerButtonActive(InputIntentSource source, unsigned button) const;
++	bool IsViewportPanActive() const { return !ActiveViewportPans.empty(); }
++	bool IsViewportPanActive(InputIntentSource source) const;
 +	bool IsControllerActionActive(unsigned action) const;
 +	bool IsModifierActive(unsigned modifier) const;
  
  private:
- 	std::set<unsigned> ActivePointerButtons;
+-	std::set<unsigned> ActivePointerButtons;
+-	bool ViewportPanActive = false;
++	std::set<std::pair<InputIntentSource, unsigned>> ActivePointerButtons;
++	std::set<InputIntentSource> ActiveViewportPans;
 +	std::set<unsigned> ActiveControllerActions;
 +	std::set<unsigned> ActiveModifiers;
- 	bool ViewportPanActive = false;
  };
  
+ struct TouchPoint {
 diff --git a/src/include/sdl_controller_adapter.h b/src/include/sdl_controller_adapter.h
 new file mode 100644
 index 0000000..50b9496
@@ -271,10 +328,10 @@ index 1a936ce..eebe111 100644
  void addActionListener(gcn::Widget *, gcn::ActionListener *);
 diff --git a/src/ui/controller_input.cpp b/src/ui/controller_input.cpp
 new file mode 100644
-index 0000000..b895f16
+index 0000000..5a8b3f8
 --- /dev/null
 +++ b/src/ui/controller_input.cpp
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,539 @@
 +#include "controller_input.h"
 +
 +#include <algorithm>
@@ -633,7 +690,8 @@ index 0000000..b895f16
 +                                             std::uint32_t timestamp,
 +                                             unsigned code) const
 +{
-+	return {kind, phase, position, delta, ActiveModifiers(), timestamp, code, 0};
++	return {kind, phase, position, delta, ActiveModifiers(), timestamp, code, 0,
++	        InputIntentSource::Controller};
 +}
 +
 +std::vector<InputIntent>
@@ -814,38 +872,129 @@ index 0000000..b895f16
 +	CameraRemainderY = 0.0f;
 +}
 diff --git a/src/ui/input_intent.cpp b/src/ui/input_intent.cpp
-index 45bae17..d9b3344 100644
+index 45bae17..3145057 100644
 --- a/src/ui/input_intent.cpp
 +++ b/src/ui/input_intent.cpp
-@@ -16,9 +16,10 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+@@ -9,41 +9,101 @@ constexpr float PanGain = 1.35f;
+ 
+ } // namespace
+ 
++InputButtonOwnershipChange InputButtonOwnership::Press(InputIntentSource source,
++                                                       unsigned button)
++{
++	std::set<InputIntentSource> &owners = Owners[button];
++	if (!owners.insert(source).second) {
++		return InputButtonOwnershipChange::Ignored;
++	}
++	return owners.size() == 1
++		? InputButtonOwnershipChange::EffectivePress
++		: InputButtonOwnershipChange::Retained;
++}
++
++InputButtonOwnershipChange InputButtonOwnership::Release(InputIntentSource source,
++                                                         unsigned button)
++{
++	const auto owners = Owners.find(button);
++	if (owners == Owners.end() || owners->second.erase(source) == 0) {
++		return InputButtonOwnershipChange::Ignored;
++	}
++	if (!owners->second.empty()) {
++		return InputButtonOwnershipChange::Retained;
++	}
++	Owners.erase(owners);
++	return InputButtonOwnershipChange::EffectiveRelease;
++}
++
++bool InputButtonOwnership::HasOwner(InputIntentSource source, unsigned button) const
++{
++	const auto owners = Owners.find(button);
++	return owners != Owners.end()
++	    && owners->second.find(source) != owners->second.end();
++}
++
++bool InputButtonOwnership::HasAnyOwner(unsigned button) const
++{
++	return Owners.find(button) != Owners.end();
++}
++
++std::size_t InputButtonOwnership::OwnerCount(unsigned button) const
++{
++	const auto owners = Owners.find(button);
++	return owners == Owners.end() ? 0 : owners->second.size();
++}
++
+ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &target)
+ {
+ 	switch (intent.Kind) {
+ 		case InputIntentKind::PointerMotion:
  			return intent.Phase == InputIntentPhase::Update && target.Dispatch(intent);
  		case InputIntentKind::PointerButton:
++		{
++			const std::pair<InputIntentSource, unsigned> button{
++				intent.Source, intent.Code};
  			if (intent.Phase == InputIntentPhase::Begin) {
-+				ActivePointerButtons.insert(intent.Code);
++				if (!ActivePointerButtons.insert(button).second) {
++					return false;
++				}
  				const bool handled = target.Dispatch(intent);
 -				if (handled) {
 -					ActivePointerButtons.insert(intent.Code);
 +				if (!handled) {
-+					ActivePointerButtons.erase(intent.Code);
++					ActivePointerButtons.erase(button);
  				}
  				return handled;
  			}
-@@ -40,8 +41,12 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 			if (intent.Phase == InputIntentPhase::End) {
+-				if (!IsPointerButtonActive(intent.Code)) {
++				if (ActivePointerButtons.find(button) == ActivePointerButtons.end()) {
+ 					return false;
+ 				}
+ 				const bool handled = target.Dispatch(intent);
+-				ActivePointerButtons.erase(intent.Code);
++				ActivePointerButtons.erase(button);
+ 				return handled;
+ 			}
+ 			if (intent.Phase == InputIntentPhase::Cancel) {
++				if (ActivePointerButtons.find(button) == ActivePointerButtons.end()) {
++					return false;
++				}
+ 				const bool handled = target.Dispatch(intent);
+-				ActivePointerButtons.erase(intent.Code);
++				ActivePointerButtons.erase(button);
+ 				return handled;
+ 			}
+ 			return false;
++		}
+ 		case InputIntentKind::PointerExit:
  			return intent.Phase == InputIntentPhase::Cancel && target.Dispatch(intent);
  		case InputIntentKind::ViewportPan:
  			if (intent.Phase == InputIntentPhase::Begin) {
 -				ViewportPanActive = target.Dispatch(intent);
 -				return ViewportPanActive;
-+				ViewportPanActive = true;
++				if (!ActiveViewportPans.insert(intent.Source).second) {
++					return false;
++				}
 +				const bool handled = target.Dispatch(intent);
 +				if (!handled) {
-+					ViewportPanActive = false;
++					ActiveViewportPans.erase(intent.Source);
 +				}
 +				return handled;
  			}
- 			if (!ViewportPanActive) {
+-			if (!ViewportPanActive) {
++			if (!IsViewportPanActive(intent.Source)) {
  				return false;
-@@ -63,6 +68,34 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 			}
+ 			if (intent.Phase == InputIntentPhase::Update) {
+@@ -52,7 +112,7 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 			if (intent.Phase == InputIntentPhase::End
+ 			    || intent.Phase == InputIntentPhase::Cancel) {
+ 				const bool handled = target.Dispatch(intent);
+-				ViewportPanActive = false;
++				ActiveViewportPans.erase(intent.Source);
+ 				return handled;
+ 			}
+ 			return false;
+@@ -63,6 +123,34 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
  				return target.Dispatch(intent);
  			}
  			return false;
@@ -880,10 +1029,74 @@ index 45bae17..d9b3344 100644
  	}
  	return false;
  }
-@@ -87,6 +120,16 @@ bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
- 	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
+@@ -70,21 +158,72 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ void InputIntentRouter::CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
+                                       int modifiers, InputPoint position)
+ {
+-	if (ViewportPanActive) {
++	const std::set<InputIntentSource> pans = ActiveViewportPans;
++	for (const InputIntentSource source : pans) {
+ 		Route({InputIntentKind::ViewportPan, InputIntentPhase::Cancel, position, {},
+-		       modifiers, timestamp}, target);
++		       modifiers, timestamp, 0, 0, source}, target);
+ 	}
+ 
+-	const std::set<unsigned> buttons = ActivePointerButtons;
+-	for (const unsigned button : buttons) {
++	const std::set<std::pair<InputIntentSource, unsigned>> buttons =
++		ActivePointerButtons;
++	for (const auto &[source, button] : buttons) {
+ 		Route({InputIntentKind::PointerButton, InputIntentPhase::Cancel, position, {},
+-		       modifiers, timestamp, button}, target);
++		       modifiers, timestamp, button, 0, source}, target);
++	}
++}
++
++void InputIntentRouter::CancelPointer(InputIntentTarget &target,
++                                      std::uint32_t timestamp, int modifiers,
++                                      InputPoint position,
++                                      InputIntentSource source)
++{
++	if (IsViewportPanActive(source)) {
++		Route({InputIntentKind::ViewportPan, InputIntentPhase::Cancel, position, {},
++		       modifiers, timestamp, 0, 0, source}, target);
++	}
++
++	const std::set<std::pair<InputIntentSource, unsigned>> buttons =
++		ActivePointerButtons;
++	for (const auto &[buttonSource, button] : buttons) {
++		if (buttonSource == source) {
++			Route({InputIntentKind::PointerButton, InputIntentPhase::Cancel,
++			       position, {}, modifiers, timestamp, button, 0, source},
++			      target);
++		}
+ 	}
  }
  
+ bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
+ {
+-	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
++	for (const auto &[source, activeButton] : ActivePointerButtons) {
++		(void)source;
++		if (activeButton == button) {
++			return true;
++		}
++	}
++	return false;
++}
++
++bool InputIntentRouter::IsPointerButtonActive(InputIntentSource source,
++                                              unsigned button) const
++{
++	return ActivePointerButtons.find({source, button})
++	    != ActivePointerButtons.end();
++}
++
++bool InputIntentRouter::IsViewportPanActive(InputIntentSource source) const
++{
++	return ActiveViewportPans.find(source) != ActiveViewportPans.end();
++}
++
 +bool InputIntentRouter::IsControllerActionActive(unsigned action) const
 +{
 +	return ActiveControllerActions.find(action) != ActiveControllerActions.end();
@@ -892,16 +1105,24 @@ index 45bae17..d9b3344 100644
 +bool InputIntentRouter::IsModifierActive(unsigned modifier) const
 +{
 +	return ActiveModifiers.find(modifier) != ActiveModifiers.end();
-+}
-+
+ }
+ 
  std::vector<InputIntent> TouchInputState::Begin(std::int64_t contact, TouchPoint position,
-                                                 std::uint32_t timestamp, int modifiers)
+@@ -229,7 +368,8 @@ InputIntent TouchInputState::MakeIntent(InputIntentKind kind, InputIntentPhase p
+                                         std::uint32_t timestamp, int modifiers,
+                                         unsigned code) const
  {
+-	return {kind, phase, position, delta, modifiers, timestamp, code, 0};
++	return {kind, phase, position, delta, modifiers, timestamp, code, 0,
++	        InputIntentSource::Touch};
+ }
+ 
+ void TouchInputState::Reset()
 diff --git a/src/ui/interface.cpp b/src/ui/interface.cpp
-index 4c376fe..4b8da3b 100644
+index 4c376fe..7ea5d98 100644
 --- a/src/ui/interface.cpp
 +++ b/src/ui/interface.cpp
-@@ -1461,6 +1461,108 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
+@@ -1461,6 +1461,155 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
  	}
  }
  
@@ -926,6 +1147,45 @@ index 4c376fe..4b8da3b 100644
 +	int Previous;
 +};
 +
++static InputButtonOwnership ButtonOwnership;
++
++static InputButtonOwnershipChange ApplyPointerButtonOwnership(
++	const EventCallback &callbacks, const InputIntent &intent)
++{
++	if (intent.Phase == InputIntentPhase::Begin) {
++		const InputButtonOwnershipChange change =
++			ButtonOwnership.Press(intent.Source, intent.Code);
++		if (change == InputButtonOwnershipChange::EffectivePress) {
++			InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
++		}
++		return change;
++	}
++	if (intent.Phase == InputIntentPhase::End
++	    || intent.Phase == InputIntentPhase::Cancel) {
++		const InputButtonOwnershipChange change =
++			ButtonOwnership.Release(intent.Source, intent.Code);
++		if (change == InputButtonOwnershipChange::EffectiveRelease) {
++			if (intent.Phase == InputIntentPhase::End) {
++				InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
++			} else {
++				InputMouseButtonCancel(intent.Code);
++			}
++		}
++		return change;
++	}
++	return InputButtonOwnershipChange::Ignored;
++}
++
++static InputButtonOwnershipChange CancelOwnedPointerButton(
++	const EventCallback &callbacks, InputIntentSource source, unsigned button,
++	std::uint32_t timestamp)
++{
++	return ApplyPointerButtonOwnership(
++		callbacks,
++		{InputIntentKind::PointerButton, InputIntentPhase::Cancel, {}, {},
++		 0, timestamp, button, 0, source});
++}
++
 +static bool CancelControllerGameplayAction()
 +{
 +	if (KeyState == EKeyState::Input) {
@@ -934,8 +1194,14 @@ index 4c376fe..4b8da3b 100644
 +	}
 +	if (CursorBuilding || CursorState != CursorStates::Point
 +	    || CurrentButtonLevel != 0) {
-+		InputMouseButtonCancel(InputPrimaryButton);
-+		InputMouseButtonCancel(InputContextButton);
++		CancelOwnedPointerButton(GameCallbacks, InputIntentSource::Controller,
++		                         InputPrimaryButton, 0);
++		CancelOwnedPointerButton(GameCallbacks, InputIntentSource::Controller,
++		                         InputContextButton, 0);
++		if (ButtonOwnership.HasAnyOwner(InputPrimaryButton)
++		    || ButtonOwnership.HasAnyOwner(InputContextButton)) {
++			return true;
++		}
 +		CancelMouseSelection();
 +		CursorBuilding = nullptr;
 +		CursorState = CursorStates::Point;
@@ -976,12 +1242,14 @@ index 4c376fe..4b8da3b 100644
 +				return false;
 +			}
 +			ScopedControllerModifiers modifiers(intent.Modifiers);
-+			if (intent.Phase == InputIntentPhase::Begin) {
-+				InputMouseButtonPress(callbacks, intent.Timestamp, button);
-+			} else if (intent.Phase == InputIntentPhase::End) {
-+				InputMouseButtonRelease(callbacks, intent.Timestamp, button);
-+			} else if (intent.Phase == InputIntentPhase::Cancel) {
-+				InputMouseButtonCancel(button);
++			const InputButtonOwnershipChange change =
++				ApplyPointerButtonOwnership(
++					callbacks,
++					{InputIntentKind::PointerButton, intent.Phase,
++					 intent.Position, {}, intent.Modifiers, intent.Timestamp,
++					 button, 0, InputIntentSource::Controller});
++			if (intent.Phase == InputIntentPhase::Cancel
++			    && change == InputButtonOwnershipChange::EffectiveRelease) {
 +				if (CursorState == CursorStates::PieMenu) {
 +					CursorState = CursorStates::Point;
 +					GameCursor = UI.Point.Cursor;
@@ -1010,24 +1278,61 @@ index 4c376fe..4b8da3b 100644
  bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent)
  {
  	switch (intent.Kind) {
-@@ -1468,6 +1570,8 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+@@ -1468,23 +1617,21 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
  			InputMouseMove(callbacks, intent.Timestamp, intent.Position.x, intent.Position.y);
  			return true;
  		case InputIntentKind::PointerButton:
+-			switch (intent.Phase) {
+-				case InputIntentPhase::Begin:
+-					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
+-					return true;
+-				case InputIntentPhase::End:
+-					InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
+-					return true;
+-				case InputIntentPhase::Cancel:
+-					InputMouseButtonCancel(intent.Code);
+-					if (&callbacks == &GameCallbacks && intent.Code == InputPrimaryButton) {
+-						CancelMouseSelection();
+-					}
+-					return true;
+-				case InputIntentPhase::Update:
+-					return false;
 +		{
 +			ScopedControllerModifiers modifiers(intent.Modifiers);
- 			switch (intent.Phase) {
- 				case InputIntentPhase::Begin:
- 					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
-@@ -1485,6 +1589,7 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
- 					return false;
++			const InputButtonOwnershipChange change =
++				ApplyPointerButtonOwnership(callbacks, intent);
++			if (change == InputButtonOwnershipChange::Ignored) {
++				return false;
  			}
- 			return false;
+-			return false;
++			if (intent.Phase == InputIntentPhase::Cancel
++			    && change == InputButtonOwnershipChange::EffectiveRelease
++			    && &callbacks == &GameCallbacks
++			    && intent.Code == InputPrimaryButton) {
++				CancelMouseSelection();
++			}
++			return true;
 +		}
  		case InputIntentKind::PointerExit:
  			InputMouseExit(callbacks, intent.Timestamp);
  			return true;
-@@ -1520,6 +1625,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+@@ -1497,8 +1644,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+ 				if (!UI.MouseViewport->IsInsideMapArea(position)) {
+ 					return false;
+ 				}
+-				InputMouseButtonCancel(InputPrimaryButton);
+-				CancelMouseSelection();
++				const InputButtonOwnershipChange change =
++					CancelOwnedPointerButton(
++						callbacks, intent.Source, InputPrimaryButton,
++						intent.Timestamp);
++				if (change == InputButtonOwnershipChange::EffectiveRelease) {
++					CancelMouseSelection();
++				}
+ 				return true;
+ 			}
+ 			if (intent.Phase == InputIntentPhase::Update) {
+@@ -1520,6 +1672,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
  				return true;
  			}
  			return false;
@@ -1132,7 +1437,7 @@ index a7a0195..358de5d 100644
  {
  	if (Gui) {
 diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
-index 57115bb..eea6469 100644
+index 57115bb..39dedbc 100644
 --- a/src/video/sdl.cpp
 +++ b/src/video/sdl.cpp
 @@ -36,11 +36,14 @@
@@ -1238,15 +1543,22 @@ index 57115bb..eea6469 100644
  
  	// Initialize the display
  
-@@ -600,6 +649,7 @@ class SdlInputIntentTarget final : public InputIntentTarget
+@@ -600,6 +649,14 @@ class SdlInputIntentTarget final : public InputIntentTarget
  };
  
  static InputIntentRouter SdlInputRouter;
 +static InputIntentRouter SdlControllerInputRouter;
++
++static InputIntentSource SdlPointerSource(Uint32 device)
++{
++	return device == SDL_TOUCH_MOUSEID
++		? InputIntentSource::Touch
++		: InputIntentSource::Mouse;
++}
  
  static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &intent)
  {
-@@ -607,6 +657,75 @@ static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &int
+@@ -607,12 +664,89 @@ static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &int
  	return SdlInputRouter.Route(intent, target);
  }
  
@@ -1322,7 +1634,40 @@ index 57115bb..eea6469 100644
  static void CancelSdlPointerInput(const EventCallback &callbacks, unsigned ticks)
  {
  	SdlInputIntentTarget target(callbacks);
-@@ -653,6 +772,45 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 	SdlInputRouter.CancelPointer(target, ticks, KeyModifiers, {});
+ }
+ 
++static void CancelSdlPointerInputSource(const EventCallback &callbacks,
++                                        unsigned ticks,
++                                        InputIntentSource source)
++{
++	SdlInputIntentTarget target(callbacks);
++	SdlInputRouter.CancelPointer(target, ticks, KeyModifiers, {}, source);
++}
++
+ #ifdef PEONPAD_IOS
+ static bool PeonPadShouldHandleKeyDirectly(const EventCallback &callbacks)
+ {
+@@ -629,7 +763,8 @@ static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
+ 		    && intent.Phase == InputIntentPhase::Begin) {
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
+-			               intent.Position, {}, intent.Modifiers, intent.Timestamp});
++			               intent.Position, {}, intent.Modifiers, intent.Timestamp,
++			               0, 0, intent.Source});
+ 		}
+ 		RouteSdlInput(callbacks, intent);
+ 	}
+@@ -638,7 +773,7 @@ static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
+ static void PeonPadCancelTouches(const EventCallback &callbacks, unsigned ticks)
+ {
+ 	PeonPadRouteTouchIntents(callbacks, PeonPadTouchInput.Cancel(ticks, KeyModifiers));
+-	CancelSdlPointerInput(callbacks, ticks);
++	CancelSdlPointerInputSource(callbacks, ticks, InputIntentSource::Touch);
+ }
+ #endif
+ 
+@@ -653,6 +788,45 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
  	unsigned int keysym = 0;
  
  	switch (event.type) {
@@ -1368,15 +1713,56 @@ index 57115bb..eea6469 100644
  		case SDL_MOUSEBUTTONDOWN:
  #ifdef PEONPAD_IOS
  			if (event.button.which == SDL_TOUCH_MOUSEID
-@@ -718,6 +876,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+@@ -664,7 +838,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
+ 			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button});
++			               SDL_GetTicks(), event.button.button, 0,
++			               SdlPointerSource(event.button.which)});
+ 			break;
+ 
+ 		case SDL_MOUSEBUTTONUP:
+@@ -678,7 +853,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
+ 			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button});
++			               SDL_GetTicks(), event.button.button, 0,
++			               SdlPointerSource(event.button.which)});
+ 			break;
+ 
+ 		case SDL_MOUSEMOTION:
+@@ -692,7 +868,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
+ 			               {event.motion.x, event.motion.y}, {}, KeyModifiers,
+-			               SDL_GetTicks()});
++			               SDL_GetTicks(), 0, 0,
++			               SdlPointerSource(event.motion.which)});
+ 			break;
+ 
+ #ifdef PEONPAD_IOS
+@@ -710,7 +887,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				                   Video.Width, Video.Height,
+ 				                   SDL_GetTicks(), KeyModifiers));
+ 			if (event.type == SDL_FINGERCANCEL) {
+-				CancelSdlPointerInput(callbacks, SDL_GetTicks());
++				CancelSdlPointerInputSource(
++					callbacks, SDL_GetTicks(), InputIntentSource::Touch);
+ 			}
+ 			break;
+ 
+@@ -718,6 +896,8 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
  		case SDL_APP_DIDENTERBACKGROUND:
  		case SDL_APP_TERMINATING:
  			PeonPadCancelTouches(callbacks, SDL_GetTicks());
++			CancelSdlPointerInput(callbacks, SDL_GetTicks());
 +			CancelSdlControllerInput(callbacks, SDL_GetTicks());
  			break;
  #endif
  
-@@ -785,6 +944,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+@@ -785,6 +965,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
  					                       IsNetworkGame(), Preference.PauseOnLeave);
  				if (focusPolicy.CancelInput) {
  					CancelSdlPointerInput(callbacks, SDL_GetTicks());
@@ -1384,7 +1770,7 @@ index 57115bb..eea6469 100644
  #ifdef PEONPAD_IOS
  					PeonPadRouteTouchIntents(
  						callbacks,
-@@ -898,6 +1058,12 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+@@ -898,6 +1079,12 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
  */
  void SetCallbacks(const EventCallback *callbacks)
  {
@@ -1397,7 +1783,7 @@ index 57115bb..eea6469 100644
  #ifdef PEONPAD_IOS
  	if (Callbacks && Callbacks != callbacks) {
  		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
-@@ -935,6 +1101,13 @@ void WaitEventsOneFrame()
+@@ -935,6 +1122,13 @@ void WaitEventsOneFrame()
  		++SlowFrameCounter;
  	}
  

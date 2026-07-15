@@ -356,7 +356,8 @@ InputIntent ControllerInputState::MakeIntent(InputIntentKind kind,
                                              std::uint32_t timestamp,
                                              unsigned code) const
 {
-	return {kind, phase, position, delta, ActiveModifiers(), timestamp, code, 0};
+	return {kind, phase, position, delta, ActiveModifiers(), timestamp, code, 0,
+	        InputIntentSource::Controller};
 }
 
 std::vector<InputIntent>

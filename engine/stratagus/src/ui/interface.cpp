@@ -1482,6 +1482,45 @@ private:
 	int Previous;
 };
 
+static InputButtonOwnership ButtonOwnership;
+
+static InputButtonOwnershipChange ApplyPointerButtonOwnership(
+	const EventCallback &callbacks, const InputIntent &intent)
+{
+	if (intent.Phase == InputIntentPhase::Begin) {
+		const InputButtonOwnershipChange change =
+			ButtonOwnership.Press(intent.Source, intent.Code);
+		if (change == InputButtonOwnershipChange::EffectivePress) {
+			InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
+		}
+		return change;
+	}
+	if (intent.Phase == InputIntentPhase::End
+	    || intent.Phase == InputIntentPhase::Cancel) {
+		const InputButtonOwnershipChange change =
+			ButtonOwnership.Release(intent.Source, intent.Code);
+		if (change == InputButtonOwnershipChange::EffectiveRelease) {
+			if (intent.Phase == InputIntentPhase::End) {
+				InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
+			} else {
+				InputMouseButtonCancel(intent.Code);
+			}
+		}
+		return change;
+	}
+	return InputButtonOwnershipChange::Ignored;
+}
+
+static InputButtonOwnershipChange CancelOwnedPointerButton(
+	const EventCallback &callbacks, InputIntentSource source, unsigned button,
+	std::uint32_t timestamp)
+{
+	return ApplyPointerButtonOwnership(
+		callbacks,
+		{InputIntentKind::PointerButton, InputIntentPhase::Cancel, {}, {},
+		 0, timestamp, button, 0, source});
+}
+
 static bool CancelControllerGameplayAction()
 {
 	if (KeyState == EKeyState::Input) {
@@ -1490,8 +1529,14 @@ static bool CancelControllerGameplayAction()
 	}
 	if (CursorBuilding || CursorState != CursorStates::Point
 	    || CurrentButtonLevel != 0) {
-		InputMouseButtonCancel(InputPrimaryButton);
-		InputMouseButtonCancel(InputContextButton);
+		CancelOwnedPointerButton(GameCallbacks, InputIntentSource::Controller,
+		                         InputPrimaryButton, 0);
+		CancelOwnedPointerButton(GameCallbacks, InputIntentSource::Controller,
+		                         InputContextButton, 0);
+		if (ButtonOwnership.HasAnyOwner(InputPrimaryButton)
+		    || ButtonOwnership.HasAnyOwner(InputContextButton)) {
+			return true;
+		}
 		CancelMouseSelection();
 		CursorBuilding = nullptr;
 		CursorState = CursorStates::Point;
@@ -1532,12 +1577,14 @@ static bool DispatchGameplayControllerAction(const EventCallback &callbacks,
 				return false;
 			}
 			ScopedControllerModifiers modifiers(intent.Modifiers);
-			if (intent.Phase == InputIntentPhase::Begin) {
-				InputMouseButtonPress(callbacks, intent.Timestamp, button);
-			} else if (intent.Phase == InputIntentPhase::End) {
-				InputMouseButtonRelease(callbacks, intent.Timestamp, button);
-			} else if (intent.Phase == InputIntentPhase::Cancel) {
-				InputMouseButtonCancel(button);
+			const InputButtonOwnershipChange change =
+				ApplyPointerButtonOwnership(
+					callbacks,
+					{InputIntentKind::PointerButton, intent.Phase,
+					 intent.Position, {}, intent.Modifiers, intent.Timestamp,
+					 button, 0, InputIntentSource::Controller});
+			if (intent.Phase == InputIntentPhase::Cancel
+			    && change == InputButtonOwnershipChange::EffectiveRelease) {
 				if (CursorState == CursorStates::PieMenu) {
 					CursorState = CursorStates::Point;
 					GameCursor = UI.Point.Cursor;
@@ -1572,23 +1619,18 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
 		case InputIntentKind::PointerButton:
 		{
 			ScopedControllerModifiers modifiers(intent.Modifiers);
-			switch (intent.Phase) {
-				case InputIntentPhase::Begin:
-					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
-					return true;
-				case InputIntentPhase::End:
-					InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
-					return true;
-				case InputIntentPhase::Cancel:
-					InputMouseButtonCancel(intent.Code);
-					if (&callbacks == &GameCallbacks && intent.Code == InputPrimaryButton) {
-						CancelMouseSelection();
-					}
-					return true;
-				case InputIntentPhase::Update:
-					return false;
+			const InputButtonOwnershipChange change =
+				ApplyPointerButtonOwnership(callbacks, intent);
+			if (change == InputButtonOwnershipChange::Ignored) {
+				return false;
 			}
-			return false;
+			if (intent.Phase == InputIntentPhase::Cancel
+			    && change == InputButtonOwnershipChange::EffectiveRelease
+			    && &callbacks == &GameCallbacks
+			    && intent.Code == InputPrimaryButton) {
+				CancelMouseSelection();
+			}
+			return true;
 		}
 		case InputIntentKind::PointerExit:
 			InputMouseExit(callbacks, intent.Timestamp);
@@ -1602,8 +1644,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
 				if (!UI.MouseViewport->IsInsideMapArea(position)) {
 					return false;
 				}
-				InputMouseButtonCancel(InputPrimaryButton);
-				CancelMouseSelection();
+				const InputButtonOwnershipChange change =
+					CancelOwnedPointerButton(
+						callbacks, intent.Source, InputPrimaryButton,
+						intent.Timestamp);
+				if (change == InputButtonOwnershipChange::EffectiveRelease) {
+					CancelMouseSelection();
+				}
 				return true;
 			}
 			if (intent.Phase == InputIntentPhase::Update) {

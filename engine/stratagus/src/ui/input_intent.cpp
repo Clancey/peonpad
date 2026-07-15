@@ -9,46 +9,101 @@ constexpr float PanGain = 1.35f;
 
 } // namespace
 
+InputButtonOwnershipChange InputButtonOwnership::Press(InputIntentSource source,
+                                                       unsigned button)
+{
+	std::set<InputIntentSource> &owners = Owners[button];
+	if (!owners.insert(source).second) {
+		return InputButtonOwnershipChange::Ignored;
+	}
+	return owners.size() == 1
+		? InputButtonOwnershipChange::EffectivePress
+		: InputButtonOwnershipChange::Retained;
+}
+
+InputButtonOwnershipChange InputButtonOwnership::Release(InputIntentSource source,
+                                                         unsigned button)
+{
+	const auto owners = Owners.find(button);
+	if (owners == Owners.end() || owners->second.erase(source) == 0) {
+		return InputButtonOwnershipChange::Ignored;
+	}
+	if (!owners->second.empty()) {
+		return InputButtonOwnershipChange::Retained;
+	}
+	Owners.erase(owners);
+	return InputButtonOwnershipChange::EffectiveRelease;
+}
+
+bool InputButtonOwnership::HasOwner(InputIntentSource source, unsigned button) const
+{
+	const auto owners = Owners.find(button);
+	return owners != Owners.end()
+	    && owners->second.find(source) != owners->second.end();
+}
+
+bool InputButtonOwnership::HasAnyOwner(unsigned button) const
+{
+	return Owners.find(button) != Owners.end();
+}
+
+std::size_t InputButtonOwnership::OwnerCount(unsigned button) const
+{
+	const auto owners = Owners.find(button);
+	return owners == Owners.end() ? 0 : owners->second.size();
+}
+
 bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &target)
 {
 	switch (intent.Kind) {
 		case InputIntentKind::PointerMotion:
 			return intent.Phase == InputIntentPhase::Update && target.Dispatch(intent);
 		case InputIntentKind::PointerButton:
+		{
+			const std::pair<InputIntentSource, unsigned> button{
+				intent.Source, intent.Code};
 			if (intent.Phase == InputIntentPhase::Begin) {
-				ActivePointerButtons.insert(intent.Code);
+				if (!ActivePointerButtons.insert(button).second) {
+					return false;
+				}
 				const bool handled = target.Dispatch(intent);
 				if (!handled) {
-					ActivePointerButtons.erase(intent.Code);
+					ActivePointerButtons.erase(button);
 				}
 				return handled;
 			}
 			if (intent.Phase == InputIntentPhase::End) {
-				if (!IsPointerButtonActive(intent.Code)) {
+				if (ActivePointerButtons.find(button) == ActivePointerButtons.end()) {
 					return false;
 				}
 				const bool handled = target.Dispatch(intent);
-				ActivePointerButtons.erase(intent.Code);
+				ActivePointerButtons.erase(button);
 				return handled;
 			}
 			if (intent.Phase == InputIntentPhase::Cancel) {
+				if (ActivePointerButtons.find(button) == ActivePointerButtons.end()) {
+					return false;
+				}
 				const bool handled = target.Dispatch(intent);
-				ActivePointerButtons.erase(intent.Code);
+				ActivePointerButtons.erase(button);
 				return handled;
 			}
 			return false;
+		}
 		case InputIntentKind::PointerExit:
 			return intent.Phase == InputIntentPhase::Cancel && target.Dispatch(intent);
 		case InputIntentKind::ViewportPan:
 			if (intent.Phase == InputIntentPhase::Begin) {
-				ViewportPanActive = true;
+				if (!ActiveViewportPans.insert(intent.Source).second) {
+					return false;
+				}
 				const bool handled = target.Dispatch(intent);
 				if (!handled) {
-					ViewportPanActive = false;
+					ActiveViewportPans.erase(intent.Source);
 				}
 				return handled;
 			}
-			if (!ViewportPanActive) {
+			if (!IsViewportPanActive(intent.Source)) {
 				return false;
 			}
 			if (intent.Phase == InputIntentPhase::Update) {
@@ -57,7 +112,7 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 			if (intent.Phase == InputIntentPhase::End
 			    || intent.Phase == InputIntentPhase::Cancel) {
 				const bool handled = target.Dispatch(intent);
-				ViewportPanActive = false;
+				ActiveViewportPans.erase(intent.Source);
 				return handled;
 			}
 			return false;
@@ -103,21 +158,62 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 void InputIntentRouter::CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
                                       int modifiers, InputPoint position)
 {
-	if (ViewportPanActive) {
+	const std::set<InputIntentSource> pans = ActiveViewportPans;
+	for (const InputIntentSource source : pans) {
 		Route({InputIntentKind::ViewportPan, InputIntentPhase::Cancel, position, {},
-		       modifiers, timestamp}, target);
+		       modifiers, timestamp, 0, 0, source}, target);
 	}
 
-	const std::set<unsigned> buttons = ActivePointerButtons;
-	for (const unsigned button : buttons) {
+	const std::set<std::pair<InputIntentSource, unsigned>> buttons =
+		ActivePointerButtons;
+	for (const auto &[source, button] : buttons) {
 		Route({InputIntentKind::PointerButton, InputIntentPhase::Cancel, position, {},
-		       modifiers, timestamp, button}, target);
+		       modifiers, timestamp, button, 0, source}, target);
+	}
+}
+
+void InputIntentRouter::CancelPointer(InputIntentTarget &target,
+                                      std::uint32_t timestamp, int modifiers,
+                                      InputPoint position,
+                                      InputIntentSource source)
+{
+	if (IsViewportPanActive(source)) {
+		Route({InputIntentKind::ViewportPan, InputIntentPhase::Cancel, position, {},
+		       modifiers, timestamp, 0, 0, source}, target);
+	}
+
+	const std::set<std::pair<InputIntentSource, unsigned>> buttons =
+		ActivePointerButtons;
+	for (const auto &[buttonSource, button] : buttons) {
+		if (buttonSource == source) {
+			Route({InputIntentKind::PointerButton, InputIntentPhase::Cancel,
+			       position, {}, modifiers, timestamp, button, 0, source},
+			      target);
+		}
 	}
 }
 
 bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
 {
-	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
+	for (const auto &[source, activeButton] : ActivePointerButtons) {
+		(void)source;
+		if (activeButton == button) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool InputIntentRouter::IsPointerButtonActive(InputIntentSource source,
+                                              unsigned button) const
+{
+	return ActivePointerButtons.find({source, button})
+	    != ActivePointerButtons.end();
+}
+
+bool InputIntentRouter::IsViewportPanActive(InputIntentSource source) const
+{
+	return ActiveViewportPans.find(source) != ActiveViewportPans.end();
 }
 
 bool InputIntentRouter::IsControllerActionActive(unsigned action) const
@@ -272,7 +368,8 @@ InputIntent TouchInputState::MakeIntent(InputIntentKind kind, InputIntentPhase p
                                         std::uint32_t timestamp, int modifiers,
                                         unsigned code) const
 {
-	return {kind, phase, position, delta, modifiers, timestamp, code, 0};
+	return {kind, phase, position, delta, modifiers, timestamp, code, 0,
+	        InputIntentSource::Touch};
 }
 
 void TouchInputState::Reset()

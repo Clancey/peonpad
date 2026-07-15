@@ -21,3 +21,10 @@ The default CTest configuration also builds `peonpad_input_intent_test`. It
 checks platform-neutral pointer, key, context-action, and viewport-pan intent
 phases, propagation, cancellation, and the pure multi-touch gesture state
 without requiring game data.
+
+`scripts/preflight-vision-compat.sh` runs the public baseline, checks the
+iPhoneSimulator and visionOS Simulator SDKs plus an available Vision Pro
+runtime, then compiles an arm64 iOS Simulator platform-7 probe. The full
+Designed-for-iPad build and optional launch are exercised separately by
+`scripts/build-vision-compat-simulator.sh`; neither substitutes for Vision Pro
+hardware acceptance.

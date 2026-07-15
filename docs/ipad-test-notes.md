@@ -118,6 +118,29 @@ modifier combinations. Trackpad gestures reserved by iPadOS, including system
 three-finger navigation, are not available to the game; trackpad scrolling is
 delivered as mouse-wheel input rather than as PeonPad's direct-touch pan.
 
+## Vision Pro Designed-for-iPad probe
+
+The existing iPad target has a separate compatibility-simulator build path:
+
+```sh
+./scripts/preflight-vision-compat.sh
+./scripts/build-vision-compat-simulator.sh --launch
+```
+
+Xcode 26.6 selects a `visionOS Simulator` destination labeled
+`Designed for [iPad,iPhone]`, but compiles the app with the iPhoneSimulator
+26.5 SDK. The verified executable is arm64 iOS Simulator platform 7, not a
+native xros binary. On 2026-07-15 it built, installed, launched, and remained
+running on the visionOS 26.5 Apple Vision Pro simulator with a generated
+non-game probe payload. No proprietary data was accessed and no gameplay
+acceptance is claimed from that launch.
+
+No Vision Pro hardware acceptance is claimed. Hardware-only checks remain:
+eye/hand targeting and pinch selection, two-finger command discoverability,
+three-finger pan behavior in a compatibility window, hardware pointer and
+keyboard paths, audio, focus/lifecycle transitions, readable scale, comfort,
+sustained performance, save/load, and a complete match.
+
 The classic Wargus gameplay view is fixed-scale and does not expose a native
 pinch-zoom command. Multiplayer code exists in the engine, but network play on
 iPad remains unverified and is outside the current touch-control acceptance

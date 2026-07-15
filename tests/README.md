@@ -18,9 +18,12 @@ and invalid geometry. Device acceptance remains necessary to verify the live
 UIKit insets and rendered result on the target iPad.
 
 The default CTest configuration also builds `peonpad_input_intent_test`. It
-checks platform-neutral pointer, key, context-action, and viewport-pan intent
-phases, propagation, cancellation, and the pure multi-touch gesture state
-without requiring game data.
+checks platform-neutral pointer, key, context-action, viewport-pan, and game
+controller intent phases without requiring game data. Controller coverage
+includes device-registry duplication and handoff, radial dead zones and curves,
+frame-rate-independent bounded cursor motion, camera-axis zeroing, held
+modifier cleanup, gameplay/menu context changes, menu repeat, SDL2 mapping,
+and valid input after cancellation.
 
 `scripts/preflight-vision-compat.sh` runs the public baseline, checks the
 iPhoneSimulator and visionOS Simulator SDKs plus an available Vision Pro

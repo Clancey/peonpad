@@ -1461,6 +1461,108 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
 	}
 }
 
+class ScopedControllerModifiers
+{
+public:
+	explicit ScopedControllerModifiers(int modifiers)
+		: Previous(KeyModifiers)
+	{
+		if (modifiers & (InputModifierAdditiveSelection
+		                 | InputModifierQueuedOrder)) {
+			KeyModifiers |= ModifierShift;
+		}
+	}
+
+	~ScopedControllerModifiers()
+	{
+		KeyModifiers = Previous;
+	}
+
+private:
+	int Previous;
+};
+
+static bool CancelControllerGameplayAction()
+{
+	if (KeyState == EKeyState::Input) {
+		InputKey(SDLK_ESCAPE);
+		return true;
+	}
+	if (CursorBuilding || CursorState != CursorStates::Point
+	    || CurrentButtonLevel != 0) {
+		InputMouseButtonCancel(InputPrimaryButton);
+		InputMouseButtonCancel(InputContextButton);
+		CancelMouseSelection();
+		CursorBuilding = nullptr;
+		CursorState = CursorStates::Point;
+		GameCursor = UI.Point.Cursor;
+		CustomCursor.clear();
+		CurrentButtonLevel = 0;
+		UI.ButtonPanel.Update();
+		UI.StatusLine.Clear();
+		UI.StatusLine.ClearCosts();
+		return true;
+	}
+	if (!Selected.empty()) {
+		UiUnselectAll();
+	}
+	return true;
+}
+
+static unsigned PieMenuButton()
+{
+	for (unsigned button = 1; button < 8; ++button) {
+		if ((1U << button) == static_cast<unsigned>(UI.PieMenu.MouseButton)) {
+			return button;
+		}
+	}
+	return 0;
+}
+
+static bool DispatchGameplayControllerAction(const EventCallback &callbacks,
+                                             const InputIntent &intent)
+{
+	switch (static_cast<ControllerActionCode>(intent.Code)) {
+		case ControllerActionCode::Cancel:
+			return intent.Phase == InputIntentPhase::Begin
+			    ? CancelControllerGameplayAction() : true;
+		case ControllerActionCode::ContextSurface: {
+			const unsigned button = PieMenuButton();
+			if (button == 0) {
+				return false;
+			}
+			ScopedControllerModifiers modifiers(intent.Modifiers);
+			if (intent.Phase == InputIntentPhase::Begin) {
+				InputMouseButtonPress(callbacks, intent.Timestamp, button);
+			} else if (intent.Phase == InputIntentPhase::End) {
+				InputMouseButtonRelease(callbacks, intent.Timestamp, button);
+			} else if (intent.Phase == InputIntentPhase::Cancel) {
+				InputMouseButtonCancel(button);
+				if (CursorState == CursorStates::PieMenu) {
+					CursorState = CursorStates::Point;
+					GameCursor = UI.Point.Cursor;
+				}
+			}
+			return true;
+		}
+		case ControllerActionCode::OpenMenu:
+			if (intent.Phase == InputIntentPhase::Begin) {
+				InputKeyButtonPress(callbacks, intent.Timestamp, SDLK_F10, 0);
+			} else if (intent.Phase == InputIntentPhase::End
+			           || intent.Phase == InputIntentPhase::Cancel) {
+				InputKeyButtonRelease(callbacks, intent.Timestamp, SDLK_F10, 0);
+			}
+			return true;
+		case ControllerActionCode::Confirm:
+		case ControllerActionCode::NavigateUp:
+		case ControllerActionCode::NavigateDown:
+		case ControllerActionCode::NavigateLeft:
+		case ControllerActionCode::NavigateRight:
+			return false;
+	}
+	return false;
+}
+
 bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent)
 {
 	switch (intent.Kind) {
@@ -1468,6 +1570,8 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
 			InputMouseMove(callbacks, intent.Timestamp, intent.Position.x, intent.Position.y);
 			return true;
 		case InputIntentKind::PointerButton:
+		{
+			ScopedControllerModifiers modifiers(intent.Modifiers);
 			switch (intent.Phase) {
 				case InputIntentPhase::Begin:
 					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
@@ -1485,6 +1589,7 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
 					return false;
 			}
 			return false;
+		}
 		case InputIntentKind::PointerExit:
 			InputMouseExit(callbacks, intent.Timestamp);
 			return true;
@@ -1520,6 +1625,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
 				return true;
 			}
 			return false;
+		case InputIntentKind::ControllerAction:
+			if (&callbacks == &GameCallbacks) {
+				return DispatchGameplayControllerAction(callbacks, intent);
+			}
+			return DispatchMenuInputIntent(intent);
+		case InputIntentKind::Modifier:
+			return true;
 	}
 	return false;
 }

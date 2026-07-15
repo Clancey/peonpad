@@ -42,6 +42,7 @@
 #include "network.h"
 #include "netconnect.h"
 #include "editor.h"
+#include "input_intent.h"
 #include "sound.h"
 #include "util.h"
 
@@ -53,7 +54,26 @@
 
 // Guichan stuff we need
 std::unique_ptr<gcn::Gui> Gui; /// A Gui object - binds it all together
-static std::unique_ptr<gcn::SDLInput> Input; /// Input driver
+class PeonPadSDLInput final : public gcn::SDLInput
+{
+public:
+	void PushControllerKey(int key, InputIntentPhase phase, int modifiers)
+	{
+		gcn::KeyInput input;
+		input.setKey(gcn::Key(key));
+		input.setType(phase == InputIntentPhase::End
+		              || phase == InputIntentPhase::Cancel
+		              ? gcn::KeyInput::Released : gcn::KeyInput::Pressed);
+		input.setShiftPressed(modifiers & InputModifierAdditiveSelection);
+		input.setControlPressed(false);
+		input.setAltPressed(false);
+		input.setMetaPressed(false);
+		input.setNumericPad(false);
+		mKeyInputQueue.push(input);
+	}
+};
+
+static std::unique_ptr<PeonPadSDLInput> Input; /// Input driver
 
 static EventCallback GuichanCallbacks;
 
@@ -183,7 +203,7 @@ void initGuichan()
 	// Note, any surface will do, it doesn't have to be the screen.
 	graphics->setTarget(TheScreen);
 
-	Input = std::make_unique<gcn::SDLInput>();
+	Input = std::make_unique<PeonPadSDLInput>();
 
 	Gui = std::make_unique<gcn::Gui>();
 	Gui->setGraphics(graphics);
@@ -233,6 +253,40 @@ void handleInput(const SDL_Event *event)
 			Gui->logic();
 		}
 	}
+}
+
+bool DispatchMenuInputIntent(const InputIntent &intent)
+{
+	if (!Input || intent.Kind != InputIntentKind::ControllerAction) {
+		return false;
+	}
+
+	int key = 0;
+	switch (static_cast<ControllerActionCode>(intent.Code)) {
+		case ControllerActionCode::Confirm:
+			key = gcn::Key::Enter;
+			break;
+		case ControllerActionCode::Cancel:
+		case ControllerActionCode::OpenMenu:
+			key = gcn::Key::Escape;
+			break;
+		case ControllerActionCode::NavigateUp:
+			key = gcn::Key::Up;
+			break;
+		case ControllerActionCode::NavigateDown:
+			key = gcn::Key::Down;
+			break;
+		case ControllerActionCode::NavigateLeft:
+			key = gcn::Key::Left;
+			break;
+		case ControllerActionCode::NavigateRight:
+			key = gcn::Key::Right;
+			break;
+		case ControllerActionCode::ContextSurface:
+			return false;
+	}
+	Input->PushControllerKey(key, intent.Phase, intent.Modifiers);
+	return true;
 }
 
 void DrawGuichanWidgets()

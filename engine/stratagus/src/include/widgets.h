@@ -39,11 +39,14 @@
 #include <guisan/keylistener.hpp>
 #include <guisan/mouselistener.hpp>
 
+struct InputIntent;
+
 extern bool GuichanActive;
 
 void initGuichan();
 void freeGuichan();
 void handleInput(const SDL_Event *event);
+bool DispatchMenuInputIntent(const InputIntent &intent);
 
 #if USING_TOLUAPP
 void addActionListener(gcn::Widget *, gcn::ActionListener *);

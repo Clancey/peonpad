@@ -1,0 +1,1491 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 43a8799..d33fdba 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -301,6 +301,7 @@ source_group(stratagusmain FILES ${stratagus_SRCS})
+ set(ui_SRCS
+ 	src/ui/botpanel.cpp
+ 	src/ui/button_checks.cpp
++	src/ui/controller_input.cpp
+ 	src/ui/contenttype.cpp
+ 	src/ui/icons.cpp
+ 	src/ui/input_intent.cpp
+@@ -343,6 +344,7 @@ set(video_SRCS
+ 	src/video/movie.cpp
+ 	src/video/png.cpp
+ 	src/video/sdl.cpp
++	src/video/sdl_controller_adapter.cpp
+ 	src/video/sdl_input_adapter.cpp
+ 	src/video/video.cpp
+ 	src/video/shaders.cpp
+@@ -471,6 +473,7 @@ set(stratagus_generic_HDRS
+ 	src/include/color.h
+ 	src/include/commands.h
+ 	src/include/construct.h
++	src/include/controller_input.h
+ 	src/include/cursor.h
+ 	src/include/depend.h
+ 	src/include/editor.h
+@@ -510,6 +513,7 @@ set(stratagus_generic_HDRS
+ 	src/include/script.h
+ 	src/include/script_sound.h
+ 	src/include/sdl2_helper.h
++	src/include/sdl_controller_adapter.h
+ 	src/include/sdl_input_adapter.h
+ 	src/include/settings.h
+ 	src/include/sound.h
+diff --git a/src/include/controller_input.h b/src/include/controller_input.h
+new file mode 100644
+index 0000000..9496f29
+--- /dev/null
++++ b/src/include/controller_input.h
+@@ -0,0 +1,135 @@
++#ifndef CONTROLLER_INPUT_H
++#define CONTROLLER_INPUT_H
++
++#include "input_intent.h"
++
++#include <cstdint>
++#include <optional>
++#include <set>
++#include <vector>
++
++enum class ControllerInputContext
++{
++	Gameplay,
++	Menu
++};
++
++enum class ControllerAxis
++{
++	LeftX,
++	LeftY,
++	RightX,
++	RightY,
++	LeftTrigger,
++	RightTrigger
++};
++
++enum class ControllerButton
++{
++	Confirm,
++	Cancel,
++	ContextCommand,
++	ContextSurface,
++	LeftShoulder,
++	RightShoulder,
++	DpadUp,
++	DpadDown,
++	DpadLeft,
++	DpadRight,
++	Menu
++};
++
++struct ControllerInputConfig
++{
++	float CursorDeadZone = 0.20f;
++	float CameraDeadZone = 0.24f;
++	float ResponseExponent = 1.6f;
++	float CursorAcceleration = 2400.0f;
++	float CursorMaximumSpeed = 900.0f;
++	float CameraMaximumSpeed = 720.0f;
++	float TriggerThreshold = 0.55f;
++	std::uint32_t MaximumFrameTime = 50;
++	std::uint32_t MenuRepeatDelay = 350;
++	std::uint32_t MenuRepeatInterval = 100;
++};
++
++class ControllerDeviceRegistry
++{
++public:
++	bool Connect(int instanceId);
++	bool Disconnect(int instanceId);
++	bool Activate(int instanceId);
++
++	bool Contains(int instanceId) const;
++	bool IsActive(int instanceId) const;
++	std::optional<int> Active() const { return ActiveInstance; }
++	std::size_t Size() const { return Instances.size(); }
++	void Clear();
++
++private:
++	std::set<int> Instances;
++	std::optional<int> ActiveInstance;
++};
++
++class ControllerInputState
++{
++public:
++	explicit ControllerInputState(ControllerInputConfig config = {});
++
++	void SetContext(ControllerInputContext context);
++	ControllerInputContext Context() const { return CurrentContext; }
++
++	std::vector<InputIntent> SetAxis(ControllerAxis axis, float value, std::uint32_t timestamp);
++	std::vector<InputIntent>
++	SetButton(ControllerButton button, bool pressed, std::uint32_t timestamp);
++	std::vector<InputIntent>
++	Update(std::uint32_t timestamp, int width, int height, InputPoint cursorPosition);
++	std::vector<InputIntent> Cancel(std::uint32_t timestamp, InputPoint cursorPosition);
++
++	int ActiveModifiers() const;
++	bool IsButtonPressed(ControllerButton button) const;
++
++	static InputDelta ShapeRadial(float x, float y, float deadZone, float exponent, float scale);
++
++private:
++	struct AxisPair
++	{
++		float X = 0.0f;
++		float Y = 0.0f;
++	};
++
++	InputIntent MakeIntent(InputIntentKind kind,
++	                       InputIntentPhase phase,
++	                       InputPoint position,
++	                       InputDelta delta,
++	                       std::uint32_t timestamp,
++	                       unsigned code = 0) const;
++	std::vector<InputIntent>
++	UpdateTrigger(ControllerAxis axis, float value, std::uint32_t timestamp);
++	std::vector<InputIntent> UpdateMenuDirection(std::uint32_t timestamp);
++	std::optional<ControllerActionCode> DesiredMenuDirection() const;
++	std::vector<InputIntent>
++	ButtonIntent(ControllerButton button, bool pressed, std::uint32_t timestamp);
++	void ResetMotion();
++
++	ControllerInputConfig Config;
++	ControllerInputContext CurrentContext = ControllerInputContext::Gameplay;
++	AxisPair LeftStick;
++	AxisPair RightStick;
++	std::set<ControllerButton> PressedButtons;
++	std::set<InputModifierCode> PressedModifiers;
++	std::optional<ControllerActionCode> MenuDirection;
++	std::uint32_t NextMenuRepeat = 0;
++	std::uint32_t LastUpdate = 0;
++	bool HasLastUpdate = false;
++	bool CameraPanActive = false;
++	float CursorVelocityX = 0.0f;
++	float CursorVelocityY = 0.0f;
++	float CursorRemainderX = 0.0f;
++	float CursorRemainderY = 0.0f;
++	float CameraRemainderX = 0.0f;
++	float CameraRemainderY = 0.0f;
++	InputPoint CursorPosition;
++};
++
++#endif
+diff --git a/src/include/input_intent.h b/src/include/input_intent.h
+index ff0e3fb..7471b66 100644
+--- a/src/include/input_intent.h
++++ b/src/include/input_intent.h
+@@ -13,7 +13,9 @@ enum class InputIntentKind {
+ 	PointerButton,
+ 	PointerExit,
+ 	ViewportPan,
+-	Key
++	Key,
++	ControllerAction,
++	Modifier
+ };
+ 
+ enum class InputIntentPhase {
+@@ -46,6 +48,24 @@ struct InputIntent {
+ 
+ constexpr unsigned InputPrimaryButton = 1;
+ constexpr unsigned InputContextButton = 3;
++constexpr int InputModifierAdditiveSelection = 1 << 8;
++constexpr int InputModifierQueuedOrder = 1 << 9;
++
++enum class InputModifierCode : unsigned {
++	AdditiveSelection = 1,
++	QueuedOrder
++};
++
++enum class ControllerActionCode : unsigned {
++	Confirm = 1,
++	Cancel,
++	ContextSurface,
++	NavigateUp,
++	NavigateDown,
++	NavigateLeft,
++	NavigateRight,
++	OpenMenu
++};
+ 
+ class InputIntentTarget
+ {
+@@ -63,9 +83,13 @@ class InputIntentRouter
+ 
+ 	bool IsPointerButtonActive(unsigned button) const;
+ 	bool IsViewportPanActive() const { return ViewportPanActive; }
++	bool IsControllerActionActive(unsigned action) const;
++	bool IsModifierActive(unsigned modifier) const;
+ 
+ private:
+ 	std::set<unsigned> ActivePointerButtons;
++	std::set<unsigned> ActiveControllerActions;
++	std::set<unsigned> ActiveModifiers;
+ 	bool ViewportPanActive = false;
+ };
+ 
+diff --git a/src/include/sdl_controller_adapter.h b/src/include/sdl_controller_adapter.h
+new file mode 100644
+index 0000000..50b9496
+--- /dev/null
++++ b/src/include/sdl_controller_adapter.h
+@@ -0,0 +1,15 @@
++#ifndef SDL_CONTROLLER_ADAPTER_H
++#define SDL_CONTROLLER_ADAPTER_H
++
++#include "controller_input.h"
++
++#include <SDL_events.h>
++
++std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state,
++                                                     const SDL_ControllerAxisEvent &event,
++                                                     std::uint32_t timestamp);
++std::vector<InputIntent> AdaptSdlControllerButtonEvent(ControllerInputState &state,
++                                                       const SDL_ControllerButtonEvent &event,
++                                                       std::uint32_t timestamp);
++
++#endif
+diff --git a/src/include/widgets.h b/src/include/widgets.h
+index 1a936ce..eebe111 100644
+--- a/src/include/widgets.h
++++ b/src/include/widgets.h
+@@ -39,11 +39,14 @@
+ #include <guisan/keylistener.hpp>
+ #include <guisan/mouselistener.hpp>
+ 
++struct InputIntent;
++
+ extern bool GuichanActive;
+ 
+ void initGuichan();
+ void freeGuichan();
+ void handleInput(const SDL_Event *event);
++bool DispatchMenuInputIntent(const InputIntent &intent);
+ 
+ #if USING_TOLUAPP
+ void addActionListener(gcn::Widget *, gcn::ActionListener *);
+diff --git a/src/ui/controller_input.cpp b/src/ui/controller_input.cpp
+new file mode 100644
+index 0000000..b895f16
+--- /dev/null
++++ b/src/ui/controller_input.cpp
+@@ -0,0 +1,538 @@
++#include "controller_input.h"
++
++#include <algorithm>
++#include <cmath>
++
++namespace
++{
++
++float ClampAxis(float value)
++{
++	return std::max(-1.0f, std::min(1.0f, value));
++}
++
++float Approach(float current, float target, float amount)
++{
++	if (current < target) {
++		return std::min(current + amount, target);
++	}
++	return std::max(current - amount, target);
++}
++
++unsigned ActionCode(ControllerActionCode action)
++{
++	return static_cast<unsigned>(action);
++}
++
++unsigned ModifierCode(InputModifierCode modifier)
++{
++	return static_cast<unsigned>(modifier);
++}
++
++} // namespace
++
++bool ControllerDeviceRegistry::Connect(int instanceId)
++{
++	const bool inserted = Instances.insert(instanceId).second;
++	if (inserted && !ActiveInstance) {
++		ActiveInstance = instanceId;
++	}
++	return inserted;
++}
++
++bool ControllerDeviceRegistry::Disconnect(int instanceId)
++{
++	if (Instances.erase(instanceId) == 0) {
++		return false;
++	}
++	if (ActiveInstance == instanceId) {
++		ActiveInstance =
++			Instances.empty() ? std::optional<int>{} : std::optional<int>{*Instances.begin()};
++	}
++	return true;
++}
++
++bool ControllerDeviceRegistry::Activate(int instanceId)
++{
++	if (!Contains(instanceId)) {
++		return false;
++	}
++	const bool changed = ActiveInstance != instanceId;
++	ActiveInstance = instanceId;
++	return changed;
++}
++
++bool ControllerDeviceRegistry::Contains(int instanceId) const
++{
++	return Instances.find(instanceId) != Instances.end();
++}
++
++bool ControllerDeviceRegistry::IsActive(int instanceId) const
++{
++	return ActiveInstance == instanceId;
++}
++
++void ControllerDeviceRegistry::Clear()
++{
++	Instances.clear();
++	ActiveInstance.reset();
++}
++
++ControllerInputState::ControllerInputState(ControllerInputConfig config) : Config(config)
++{}
++
++void ControllerInputState::SetContext(ControllerInputContext context)
++{
++	CurrentContext = context;
++	ResetMotion();
++}
++
++std::vector<InputIntent>
++ControllerInputState::SetAxis(ControllerAxis axis, float value, std::uint32_t timestamp)
++{
++	value = ClampAxis(value);
++	if (CurrentContext == ControllerInputContext::Menu
++	    && (axis == ControllerAxis::LeftTrigger || axis == ControllerAxis::RightTrigger)) {
++		return {};
++	}
++	switch (axis) {
++		case ControllerAxis::LeftX: LeftStick.X = value; break;
++		case ControllerAxis::LeftY: LeftStick.Y = value; break;
++		case ControllerAxis::RightX: RightStick.X = value; break;
++		case ControllerAxis::RightY: RightStick.Y = value; break;
++		case ControllerAxis::LeftTrigger:
++		case ControllerAxis::RightTrigger:
++			return UpdateTrigger(axis, std::max(0.0f, value), timestamp);
++	}
++	if (CurrentContext == ControllerInputContext::Menu
++	    && (axis == ControllerAxis::LeftX || axis == ControllerAxis::LeftY)) {
++		return UpdateMenuDirection(timestamp);
++	}
++	return {};
++}
++
++std::vector<InputIntent>
++ControllerInputState::SetButton(ControllerButton button, bool pressed, std::uint32_t timestamp)
++{
++	const bool wasPressed = IsButtonPressed(button);
++	if (wasPressed == pressed) {
++		return {};
++	}
++	if (pressed) {
++		PressedButtons.insert(button);
++	} else {
++		PressedButtons.erase(button);
++	}
++
++	if (CurrentContext == ControllerInputContext::Menu
++	    && (button == ControllerButton::DpadUp || button == ControllerButton::DpadDown
++	        || button == ControllerButton::DpadLeft || button == ControllerButton::DpadRight)) {
++		return UpdateMenuDirection(timestamp);
++	}
++	return ButtonIntent(button, pressed, timestamp);
++}
++
++std::vector<InputIntent> ControllerInputState::Update(std::uint32_t timestamp,
++                                                      int width,
++                                                      int height,
++                                                      InputPoint cursorPosition)
++{
++	std::vector<InputIntent> intents;
++	CursorPosition = cursorPosition;
++	if (CurrentContext == ControllerInputContext::Menu) {
++		if (MenuDirection && timestamp >= NextMenuRepeat) {
++			do {
++				intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++				                             InputIntentPhase::Update,
++				                             cursorPosition,
++				                             {},
++				                             timestamp,
++				                             ActionCode(*MenuDirection)));
++				NextMenuRepeat += Config.MenuRepeatInterval;
++			} while (timestamp >= NextMenuRepeat);
++		}
++		LastUpdate = timestamp;
++		HasLastUpdate = true;
++		return intents;
++	}
++
++	if (!HasLastUpdate) {
++		LastUpdate = timestamp;
++		HasLastUpdate = true;
++		return intents;
++	}
++	const std::uint32_t elapsed = std::min(timestamp - LastUpdate, Config.MaximumFrameTime);
++	LastUpdate = timestamp;
++	if (elapsed == 0 || width <= 0 || height <= 0) {
++		return intents;
++	}
++	const float seconds = elapsed / 1000.0f;
++
++	const InputDelta cursorTarget = ShapeRadial(LeftStick.X,
++	                                            LeftStick.Y,
++	                                            Config.CursorDeadZone,
++	                                            Config.ResponseExponent,
++	                                            Config.CursorMaximumSpeed);
++	const float acceleration = Config.CursorAcceleration * seconds;
++	CursorVelocityX = Approach(CursorVelocityX, cursorTarget.x, acceleration);
++	CursorVelocityY = Approach(CursorVelocityY, cursorTarget.y, acceleration);
++	CursorRemainderX += CursorVelocityX * seconds;
++	CursorRemainderY += CursorVelocityY * seconds;
++	const int cursorDeltaX = static_cast<int>(std::trunc(CursorRemainderX));
++	const int cursorDeltaY = static_cast<int>(std::trunc(CursorRemainderY));
++	CursorRemainderX -= cursorDeltaX;
++	CursorRemainderY -= cursorDeltaY;
++
++	InputPoint nextCursor{std::max(0, std::min(width - 1, cursorPosition.x + cursorDeltaX)),
++	                      std::max(0, std::min(height - 1, cursorPosition.y + cursorDeltaY))};
++	if (nextCursor.x != cursorPosition.x || nextCursor.y != cursorPosition.y) {
++		if (nextCursor.x == 0 || nextCursor.x == width - 1) {
++			CursorRemainderX = 0.0f;
++		}
++		if (nextCursor.y == 0 || nextCursor.y == height - 1) {
++			CursorRemainderY = 0.0f;
++		}
++		intents.push_back(
++			MakeIntent(InputIntentKind::PointerMotion,
++		               InputIntentPhase::Update,
++		               nextCursor,
++		               {nextCursor.x - cursorPosition.x, nextCursor.y - cursorPosition.y},
++		               timestamp));
++		CursorPosition = nextCursor;
++	}
++
++	const InputDelta cameraVelocity = ShapeRadial(RightStick.X,
++	                                              RightStick.Y,
++	                                              Config.CameraDeadZone,
++	                                              Config.ResponseExponent,
++	                                              Config.CameraMaximumSpeed);
++	const bool cameraMoving = cameraVelocity.x != 0 || cameraVelocity.y != 0;
++	const InputPoint panAnchor{width / 2, height / 2};
++	if (cameraMoving && !CameraPanActive) {
++		CameraPanActive = true;
++		intents.push_back(MakeIntent(
++			InputIntentKind::ViewportPan, InputIntentPhase::Begin, panAnchor, {}, timestamp));
++	}
++	if (cameraMoving) {
++		CameraRemainderX -= cameraVelocity.x * seconds;
++		CameraRemainderY -= cameraVelocity.y * seconds;
++		const int cameraDeltaX = static_cast<int>(std::trunc(CameraRemainderX));
++		const int cameraDeltaY = static_cast<int>(std::trunc(CameraRemainderY));
++		CameraRemainderX -= cameraDeltaX;
++		CameraRemainderY -= cameraDeltaY;
++		if (cameraDeltaX != 0 || cameraDeltaY != 0) {
++			intents.push_back(MakeIntent(InputIntentKind::ViewportPan,
++			                             InputIntentPhase::Update,
++			                             panAnchor,
++			                             {cameraDeltaX, cameraDeltaY},
++			                             timestamp));
++		}
++	} else if (CameraPanActive) {
++		CameraPanActive = false;
++		CameraRemainderX = 0.0f;
++		CameraRemainderY = 0.0f;
++		intents.push_back(MakeIntent(
++			InputIntentKind::ViewportPan, InputIntentPhase::End, panAnchor, {}, timestamp));
++	}
++	return intents;
++}
++
++std::vector<InputIntent> ControllerInputState::Cancel(std::uint32_t timestamp,
++                                                      InputPoint cursorPosition)
++{
++	CursorPosition = cursorPosition;
++	std::vector<InputIntent> intents;
++	if (IsButtonPressed(ControllerButton::Confirm)
++	    && CurrentContext == ControllerInputContext::Gameplay) {
++		intents.push_back(MakeIntent(InputIntentKind::PointerButton,
++		                             InputIntentPhase::Cancel,
++		                             cursorPosition,
++		                             {},
++		                             timestamp,
++		                             InputPrimaryButton));
++	}
++	if (IsButtonPressed(ControllerButton::ContextCommand)
++	    && CurrentContext == ControllerInputContext::Gameplay) {
++		intents.push_back(MakeIntent(InputIntentKind::PointerButton,
++		                             InputIntentPhase::Cancel,
++		                             cursorPosition,
++		                             {},
++		                             timestamp,
++		                             InputContextButton));
++	}
++	if (CameraPanActive) {
++		intents.push_back(MakeIntent(
++			InputIntentKind::ViewportPan, InputIntentPhase::Cancel, cursorPosition, {}, timestamp));
++	}
++
++	for (const InputModifierCode modifier : PressedModifiers) {
++		intents.push_back(MakeIntent(InputIntentKind::Modifier,
++		                             InputIntentPhase::Cancel,
++		                             cursorPosition,
++		                             {},
++		                             timestamp,
++		                             ModifierCode(modifier)));
++	}
++
++	if (CurrentContext == ControllerInputContext::Gameplay
++	    && IsButtonPressed(ControllerButton::ContextSurface)) {
++		intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++		                             InputIntentPhase::Cancel,
++		                             cursorPosition,
++		                             {},
++		                             timestamp,
++		                             ActionCode(ControllerActionCode::ContextSurface)));
++	} else if (CurrentContext == ControllerInputContext::Menu) {
++		if (IsButtonPressed(ControllerButton::Confirm)) {
++			intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++			                             InputIntentPhase::Cancel,
++			                             cursorPosition,
++			                             {},
++			                             timestamp,
++			                             ActionCode(ControllerActionCode::Confirm)));
++		}
++		if (IsButtonPressed(ControllerButton::Cancel) || IsButtonPressed(ControllerButton::Menu)) {
++			intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++			                             InputIntentPhase::Cancel,
++			                             cursorPosition,
++			                             {},
++			                             timestamp,
++			                             ActionCode(ControllerActionCode::Cancel)));
++		}
++	}
++	if (MenuDirection) {
++		intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++		                             InputIntentPhase::Cancel,
++		                             cursorPosition,
++		                             {},
++		                             timestamp,
++		                             ActionCode(*MenuDirection)));
++	}
++
++	PressedButtons.clear();
++	PressedModifiers.clear();
++	LeftStick = {};
++	RightStick = {};
++	MenuDirection.reset();
++	ResetMotion();
++	return intents;
++}
++
++int ControllerInputState::ActiveModifiers() const
++{
++	int modifiers = 0;
++	if (PressedModifiers.find(InputModifierCode::AdditiveSelection) != PressedModifiers.end()) {
++		modifiers |= InputModifierAdditiveSelection;
++	}
++	if (PressedModifiers.find(InputModifierCode::QueuedOrder) != PressedModifiers.end()) {
++		modifiers |= InputModifierQueuedOrder;
++	}
++	return modifiers;
++}
++
++bool ControllerInputState::IsButtonPressed(ControllerButton button) const
++{
++	return PressedButtons.find(button) != PressedButtons.end();
++}
++
++InputDelta
++ControllerInputState::ShapeRadial(float x, float y, float deadZone, float exponent, float scale)
++{
++	const float magnitude = std::sqrt(x * x + y * y);
++	if (magnitude <= deadZone || magnitude == 0.0f) {
++		return {};
++	}
++	const float clampedMagnitude = std::min(1.0f, magnitude);
++	const float normalized = (clampedMagnitude - deadZone) / (1.0f - deadZone);
++	const float response = std::pow(normalized, exponent) * scale;
++	return {static_cast<int>(std::lround((x / magnitude) * response)),
++	        static_cast<int>(std::lround((y / magnitude) * response))};
++}
++
++InputIntent ControllerInputState::MakeIntent(InputIntentKind kind,
++                                             InputIntentPhase phase,
++                                             InputPoint position,
++                                             InputDelta delta,
++                                             std::uint32_t timestamp,
++                                             unsigned code) const
++{
++	return {kind, phase, position, delta, ActiveModifiers(), timestamp, code, 0};
++}
++
++std::vector<InputIntent>
++ControllerInputState::UpdateTrigger(ControllerAxis axis, float value, std::uint32_t timestamp)
++{
++	const InputModifierCode modifier = axis == ControllerAxis::LeftTrigger
++	                                     ? InputModifierCode::AdditiveSelection
++	                                     : InputModifierCode::QueuedOrder;
++	const bool pressed = value >= Config.TriggerThreshold;
++	const bool wasPressed = PressedModifiers.find(modifier) != PressedModifiers.end();
++	if (pressed == wasPressed) {
++		return {};
++	}
++	if (pressed) {
++		PressedModifiers.insert(modifier);
++	} else {
++		PressedModifiers.erase(modifier);
++	}
++	return {MakeIntent(InputIntentKind::Modifier,
++	                   pressed ? InputIntentPhase::Begin : InputIntentPhase::End,
++	                   {},
++	                   {},
++	                   timestamp,
++	                   ModifierCode(modifier))};
++}
++
++std::vector<InputIntent> ControllerInputState::UpdateMenuDirection(std::uint32_t timestamp)
++{
++	const std::optional<ControllerActionCode> desired = DesiredMenuDirection();
++	if (desired == MenuDirection) {
++		return {};
++	}
++	std::vector<InputIntent> intents;
++	if (MenuDirection) {
++		intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++		                             InputIntentPhase::End,
++		                             {},
++		                             {},
++		                             timestamp,
++		                             ActionCode(*MenuDirection)));
++	}
++	MenuDirection = desired;
++	if (MenuDirection) {
++		intents.push_back(MakeIntent(InputIntentKind::ControllerAction,
++		                             InputIntentPhase::Begin,
++		                             {},
++		                             {},
++		                             timestamp,
++		                             ActionCode(*MenuDirection)));
++		NextMenuRepeat = timestamp + Config.MenuRepeatDelay;
++	}
++	return intents;
++}
++
++std::optional<ControllerActionCode> ControllerInputState::DesiredMenuDirection() const
++{
++	if (IsButtonPressed(ControllerButton::DpadUp)) {
++		return ControllerActionCode::NavigateUp;
++	}
++	if (IsButtonPressed(ControllerButton::DpadDown)) {
++		return ControllerActionCode::NavigateDown;
++	}
++	if (IsButtonPressed(ControllerButton::DpadLeft)) {
++		return ControllerActionCode::NavigateLeft;
++	}
++	if (IsButtonPressed(ControllerButton::DpadRight)) {
++		return ControllerActionCode::NavigateRight;
++	}
++
++	constexpr float PressThreshold = 0.55f;
++	constexpr float ReleaseThreshold = 0.35f;
++	const float threshold = MenuDirection ? ReleaseThreshold : PressThreshold;
++	if (std::abs(LeftStick.Y) >= std::abs(LeftStick.X) && std::abs(LeftStick.Y) >= threshold) {
++		return LeftStick.Y < 0.0f ? ControllerActionCode::NavigateUp
++		                          : ControllerActionCode::NavigateDown;
++	}
++	if (std::abs(LeftStick.X) >= threshold) {
++		return LeftStick.X < 0.0f ? ControllerActionCode::NavigateLeft
++		                          : ControllerActionCode::NavigateRight;
++	}
++	return std::nullopt;
++}
++
++std::vector<InputIntent>
++ControllerInputState::ButtonIntent(ControllerButton button, bool pressed, std::uint32_t timestamp)
++{
++	const InputIntentPhase phase = pressed ? InputIntentPhase::Begin : InputIntentPhase::End;
++	if (CurrentContext == ControllerInputContext::Gameplay) {
++		switch (button) {
++			case ControllerButton::Confirm:
++				return {MakeIntent(InputIntentKind::PointerButton,
++				                   phase,
++				                   CursorPosition,
++				                   {},
++				                   timestamp,
++				                   InputPrimaryButton)};
++			case ControllerButton::ContextCommand:
++				return {MakeIntent(InputIntentKind::PointerButton,
++				                   phase,
++				                   CursorPosition,
++				                   {},
++				                   timestamp,
++				                   InputContextButton)};
++			case ControllerButton::Cancel:
++				return pressed
++				         ? std::vector<InputIntent>{MakeIntent(
++														InputIntentKind::ControllerAction,
++														InputIntentPhase::Begin,
++														CursorPosition,
++														{},
++														timestamp,
++														ActionCode(ControllerActionCode::Cancel)),
++				                                    MakeIntent(
++														InputIntentKind::ControllerAction,
++														InputIntentPhase::End,
++														CursorPosition,
++														{},
++														timestamp,
++														ActionCode(ControllerActionCode::Cancel))}
++				         : std::vector<InputIntent>{};
++			case ControllerButton::ContextSurface:
++				return {MakeIntent(InputIntentKind::ControllerAction,
++				                   phase,
++				                   CursorPosition,
++				                   {},
++				                   timestamp,
++				                   ActionCode(ControllerActionCode::ContextSurface))};
++			case ControllerButton::Menu:
++				return pressed
++				         ? std::vector<InputIntent>{MakeIntent(
++														InputIntentKind::ControllerAction,
++														InputIntentPhase::Begin,
++														CursorPosition,
++														{},
++														timestamp,
++														ActionCode(ControllerActionCode::OpenMenu)),
++				                                    MakeIntent(
++														InputIntentKind::ControllerAction,
++														InputIntentPhase::End,
++														CursorPosition,
++														{},
++														timestamp,
++														ActionCode(ControllerActionCode::OpenMenu))}
++				         : std::vector<InputIntent>{};
++			default: return {};
++		}
++	}
++
++	switch (button) {
++		case ControllerButton::Confirm:
++			return {MakeIntent(InputIntentKind::ControllerAction,
++			                   phase,
++			                   {},
++			                   {},
++			                   timestamp,
++			                   ActionCode(ControllerActionCode::Confirm))};
++		case ControllerButton::Cancel:
++		case ControllerButton::Menu:
++			return {MakeIntent(InputIntentKind::ControllerAction,
++			                   phase,
++			                   {},
++			                   {},
++			                   timestamp,
++			                   ActionCode(ControllerActionCode::Cancel))};
++		default: return {};
++	}
++}
++
++void ControllerInputState::ResetMotion()
++{
++	HasLastUpdate = false;
++	CameraPanActive = false;
++	CursorVelocityX = 0.0f;
++	CursorVelocityY = 0.0f;
++	CursorRemainderX = 0.0f;
++	CursorRemainderY = 0.0f;
++	CameraRemainderX = 0.0f;
++	CameraRemainderY = 0.0f;
++}
+diff --git a/src/ui/input_intent.cpp b/src/ui/input_intent.cpp
+index 45bae17..d9b3344 100644
+--- a/src/ui/input_intent.cpp
++++ b/src/ui/input_intent.cpp
+@@ -16,9 +16,10 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 			return intent.Phase == InputIntentPhase::Update && target.Dispatch(intent);
+ 		case InputIntentKind::PointerButton:
+ 			if (intent.Phase == InputIntentPhase::Begin) {
++				ActivePointerButtons.insert(intent.Code);
+ 				const bool handled = target.Dispatch(intent);
+-				if (handled) {
+-					ActivePointerButtons.insert(intent.Code);
++				if (!handled) {
++					ActivePointerButtons.erase(intent.Code);
+ 				}
+ 				return handled;
+ 			}
+@@ -40,8 +41,12 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 			return intent.Phase == InputIntentPhase::Cancel && target.Dispatch(intent);
+ 		case InputIntentKind::ViewportPan:
+ 			if (intent.Phase == InputIntentPhase::Begin) {
+-				ViewportPanActive = target.Dispatch(intent);
+-				return ViewportPanActive;
++				ViewportPanActive = true;
++				const bool handled = target.Dispatch(intent);
++				if (!handled) {
++					ViewportPanActive = false;
++				}
++				return handled;
+ 			}
+ 			if (!ViewportPanActive) {
+ 				return false;
+@@ -63,6 +68,34 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
+ 				return target.Dispatch(intent);
+ 			}
+ 			return false;
++		case InputIntentKind::ControllerAction:
++		case InputIntentKind::Modifier: {
++			std::set<unsigned> &active =
++				intent.Kind == InputIntentKind::ControllerAction
++				? ActiveControllerActions : ActiveModifiers;
++			if (intent.Phase == InputIntentPhase::Begin) {
++				active.insert(intent.Code);
++				const bool handled = target.Dispatch(intent);
++				if (!handled) {
++					active.erase(intent.Code);
++				}
++				return handled;
++			}
++			if (intent.Phase == InputIntentPhase::Update) {
++				return active.find(intent.Code) != active.end()
++				    && target.Dispatch(intent);
++			}
++			if (intent.Phase == InputIntentPhase::End
++			    || intent.Phase == InputIntentPhase::Cancel) {
++				if (active.find(intent.Code) == active.end()) {
++					return false;
++				}
++				const bool handled = target.Dispatch(intent);
++				active.erase(intent.Code);
++				return handled;
++			}
++			return false;
++		}
+ 	}
+ 	return false;
+ }
+@@ -87,6 +120,16 @@ bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
+ 	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
+ }
+ 
++bool InputIntentRouter::IsControllerActionActive(unsigned action) const
++{
++	return ActiveControllerActions.find(action) != ActiveControllerActions.end();
++}
++
++bool InputIntentRouter::IsModifierActive(unsigned modifier) const
++{
++	return ActiveModifiers.find(modifier) != ActiveModifiers.end();
++}
++
+ std::vector<InputIntent> TouchInputState::Begin(std::int64_t contact, TouchPoint position,
+                                                 std::uint32_t timestamp, int modifiers)
+ {
+diff --git a/src/ui/interface.cpp b/src/ui/interface.cpp
+index 4c376fe..4b8da3b 100644
+--- a/src/ui/interface.cpp
++++ b/src/ui/interface.cpp
+@@ -1461,6 +1461,108 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
+ 	}
+ }
+ 
++class ScopedControllerModifiers
++{
++public:
++	explicit ScopedControllerModifiers(int modifiers)
++		: Previous(KeyModifiers)
++	{
++		if (modifiers & (InputModifierAdditiveSelection
++		                 | InputModifierQueuedOrder)) {
++			KeyModifiers |= ModifierShift;
++		}
++	}
++
++	~ScopedControllerModifiers()
++	{
++		KeyModifiers = Previous;
++	}
++
++private:
++	int Previous;
++};
++
++static bool CancelControllerGameplayAction()
++{
++	if (KeyState == EKeyState::Input) {
++		InputKey(SDLK_ESCAPE);
++		return true;
++	}
++	if (CursorBuilding || CursorState != CursorStates::Point
++	    || CurrentButtonLevel != 0) {
++		InputMouseButtonCancel(InputPrimaryButton);
++		InputMouseButtonCancel(InputContextButton);
++		CancelMouseSelection();
++		CursorBuilding = nullptr;
++		CursorState = CursorStates::Point;
++		GameCursor = UI.Point.Cursor;
++		CustomCursor.clear();
++		CurrentButtonLevel = 0;
++		UI.ButtonPanel.Update();
++		UI.StatusLine.Clear();
++		UI.StatusLine.ClearCosts();
++		return true;
++	}
++	if (!Selected.empty()) {
++		UiUnselectAll();
++	}
++	return true;
++}
++
++static unsigned PieMenuButton()
++{
++	for (unsigned button = 1; button < 8; ++button) {
++		if ((1U << button) == static_cast<unsigned>(UI.PieMenu.MouseButton)) {
++			return button;
++		}
++	}
++	return 0;
++}
++
++static bool DispatchGameplayControllerAction(const EventCallback &callbacks,
++                                             const InputIntent &intent)
++{
++	switch (static_cast<ControllerActionCode>(intent.Code)) {
++		case ControllerActionCode::Cancel:
++			return intent.Phase == InputIntentPhase::Begin
++			    ? CancelControllerGameplayAction() : true;
++		case ControllerActionCode::ContextSurface: {
++			const unsigned button = PieMenuButton();
++			if (button == 0) {
++				return false;
++			}
++			ScopedControllerModifiers modifiers(intent.Modifiers);
++			if (intent.Phase == InputIntentPhase::Begin) {
++				InputMouseButtonPress(callbacks, intent.Timestamp, button);
++			} else if (intent.Phase == InputIntentPhase::End) {
++				InputMouseButtonRelease(callbacks, intent.Timestamp, button);
++			} else if (intent.Phase == InputIntentPhase::Cancel) {
++				InputMouseButtonCancel(button);
++				if (CursorState == CursorStates::PieMenu) {
++					CursorState = CursorStates::Point;
++					GameCursor = UI.Point.Cursor;
++				}
++			}
++			return true;
++		}
++		case ControllerActionCode::OpenMenu:
++			if (intent.Phase == InputIntentPhase::Begin) {
++				InputKeyButtonPress(callbacks, intent.Timestamp, SDLK_F10, 0);
++			} else if (intent.Phase == InputIntentPhase::End
++			           || intent.Phase == InputIntentPhase::Cancel) {
++				InputKeyButtonRelease(callbacks, intent.Timestamp, SDLK_F10, 0);
++			}
++			return true;
++		case ControllerActionCode::Confirm:
++		case ControllerActionCode::NavigateUp:
++		case ControllerActionCode::NavigateDown:
++		case ControllerActionCode::NavigateLeft:
++		case ControllerActionCode::NavigateRight:
++			return false;
++	}
++	return false;
++}
++
+ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent)
+ {
+ 	switch (intent.Kind) {
+@@ -1468,6 +1570,8 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+ 			InputMouseMove(callbacks, intent.Timestamp, intent.Position.x, intent.Position.y);
+ 			return true;
+ 		case InputIntentKind::PointerButton:
++		{
++			ScopedControllerModifiers modifiers(intent.Modifiers);
+ 			switch (intent.Phase) {
+ 				case InputIntentPhase::Begin:
+ 					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
+@@ -1485,6 +1589,7 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+ 					return false;
+ 			}
+ 			return false;
++		}
+ 		case InputIntentKind::PointerExit:
+ 			InputMouseExit(callbacks, intent.Timestamp);
+ 			return true;
+@@ -1520,6 +1625,13 @@ bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &inte
+ 				return true;
+ 			}
+ 			return false;
++		case InputIntentKind::ControllerAction:
++			if (&callbacks == &GameCallbacks) {
++				return DispatchGameplayControllerAction(callbacks, intent);
++			}
++			return DispatchMenuInputIntent(intent);
++		case InputIntentKind::Modifier:
++			return true;
+ 	}
+ 	return false;
+ }
+diff --git a/src/ui/widgets.cpp b/src/ui/widgets.cpp
+index a7a0195..358de5d 100644
+--- a/src/ui/widgets.cpp
++++ b/src/ui/widgets.cpp
+@@ -42,6 +42,7 @@
+ #include "network.h"
+ #include "netconnect.h"
+ #include "editor.h"
++#include "input_intent.h"
+ #include "sound.h"
+ #include "util.h"
+ 
+@@ -53,7 +54,26 @@
+ 
+ // Guichan stuff we need
+ std::unique_ptr<gcn::Gui> Gui; /// A Gui object - binds it all together
+-static std::unique_ptr<gcn::SDLInput> Input; /// Input driver
++class PeonPadSDLInput final : public gcn::SDLInput
++{
++public:
++	void PushControllerKey(int key, InputIntentPhase phase, int modifiers)
++	{
++		gcn::KeyInput input;
++		input.setKey(gcn::Key(key));
++		input.setType(phase == InputIntentPhase::End
++		              || phase == InputIntentPhase::Cancel
++		              ? gcn::KeyInput::Released : gcn::KeyInput::Pressed);
++		input.setShiftPressed(modifiers & InputModifierAdditiveSelection);
++		input.setControlPressed(false);
++		input.setAltPressed(false);
++		input.setMetaPressed(false);
++		input.setNumericPad(false);
++		mKeyInputQueue.push(input);
++	}
++};
++
++static std::unique_ptr<PeonPadSDLInput> Input; /// Input driver
+ 
+ static EventCallback GuichanCallbacks;
+ 
+@@ -183,7 +203,7 @@ void initGuichan()
+ 	// Note, any surface will do, it doesn't have to be the screen.
+ 	graphics->setTarget(TheScreen);
+ 
+-	Input = std::make_unique<gcn::SDLInput>();
++	Input = std::make_unique<PeonPadSDLInput>();
+ 
+ 	Gui = std::make_unique<gcn::Gui>();
+ 	Gui->setGraphics(graphics);
+@@ -235,6 +255,40 @@ void handleInput(const SDL_Event *event)
+ 	}
+ }
+ 
++bool DispatchMenuInputIntent(const InputIntent &intent)
++{
++	if (!Input || intent.Kind != InputIntentKind::ControllerAction) {
++		return false;
++	}
++
++	int key = 0;
++	switch (static_cast<ControllerActionCode>(intent.Code)) {
++		case ControllerActionCode::Confirm:
++			key = gcn::Key::Enter;
++			break;
++		case ControllerActionCode::Cancel:
++		case ControllerActionCode::OpenMenu:
++			key = gcn::Key::Escape;
++			break;
++		case ControllerActionCode::NavigateUp:
++			key = gcn::Key::Up;
++			break;
++		case ControllerActionCode::NavigateDown:
++			key = gcn::Key::Down;
++			break;
++		case ControllerActionCode::NavigateLeft:
++			key = gcn::Key::Left;
++			break;
++		case ControllerActionCode::NavigateRight:
++			key = gcn::Key::Right;
++			break;
++		case ControllerActionCode::ContextSurface:
++			return false;
++	}
++	Input->PushControllerKey(key, intent.Phase, intent.Modifiers);
++	return true;
++}
++
+ void DrawGuichanWidgets()
+ {
+ 	if (Gui) {
+diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
+index 57115bb..eea6469 100644
+--- a/src/video/sdl.cpp
++++ b/src/video/sdl.cpp
+@@ -36,11 +36,14 @@
+ 
+ #include "stratagus.h"
+ 
++#include "controller_input.h"
++#include "cursor.h"
+ #include "game.h"
+ #include "input_intent.h"
+ #include "network.h"
+ #include "online_service.h"
+ #include "parameters.h"
++#include "sdl_controller_adapter.h"
+ #include "sdl_input_adapter.h"
+ #include "sound_server.h"
+ #include "translate.h"
+@@ -51,6 +54,7 @@
+ 
+ #include <climits>
+ #include <cmath>
++#include <map>
+ #include <sstream>
+ #include <string>
+ #include <vector>
+@@ -112,11 +116,24 @@ static bool dummyRenderer = false;
+ 
+ uint32_t SDL_CUSTOM_KEY_UP;
+ 
++static std::map<SDL_JoystickID, SDL_GameController *> SdlControllers;
++static ControllerDeviceRegistry SdlControllerRegistry;
++static ControllerInputState SdlControllerState;
++
++static void OpenSdlController(int deviceIndex);
++
+ /**
+ **  Clean up SDL video resources properly
+ */
+ static void CleanUpVideoSdl()
+ {
++	for (const auto &[instanceId, controller] : SdlControllers) {
++		(void)instanceId;
++		SDL_GameControllerClose(controller);
++	}
++	SdlControllers.clear();
++	SdlControllerRegistry.Clear();
++
+ 	if (TheRenderer) {
+ 		SDL_DestroyRenderer(TheRenderer);
+ 		TheRenderer = nullptr;
+@@ -135,6 +152,29 @@ static void CleanUpVideoSdl()
+ 	SDL_Quit();
+ }
+ 
++static void OpenSdlController(int deviceIndex)
++{
++	if (!SDL_IsGameController(deviceIndex)) {
++		return;
++	}
++	SDL_GameController *controller = SDL_GameControllerOpen(deviceIndex);
++	if (!controller) {
++		ErrorPrint("Couldn't open game controller %d: %s\n",
++		           deviceIndex, SDL_GetError());
++		return;
++	}
++	SDL_Joystick *joystick = SDL_GameControllerGetJoystick(controller);
++	const SDL_JoystickID instanceId = SDL_JoystickInstanceID(joystick);
++	if (instanceId < 0 || !SdlControllerRegistry.Connect(instanceId)) {
++		SDL_GameControllerClose(controller);
++		return;
++	}
++	SdlControllers.emplace(instanceId, controller);
++	const char *name = SDL_GameControllerName(controller);
++	DebugPrint("Opened game controller %d: %s\n", instanceId,
++	           name ? name : "unknown controller");
++}
++
+ /*----------------------------------------------------------------------------
+ --  Sync
+ ----------------------------------------------------------------------------*/
+@@ -349,7 +389,6 @@ void InitVideoSdl()
+ 			ErrorPrint("Couldn't initialize SDL: %s\n", SDL_GetError());
+ 			exit(1);
+ 		}
+-
+ 		SDL_CUSTOM_KEY_UP = SDL_RegisterEvents(1);
+ 		SDL_StartTextInput();
+ 
+@@ -371,6 +410,16 @@ void InitVideoSdl()
+ 		signal(SIGABRT, +cleanExit);
+ #endif
+ 	}
++	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0
++	    && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
++		ErrorPrint("Couldn't initialize SDL game controllers: %s\n",
++		           SDL_GetError());
++	} else {
++		SDL_GameControllerEventState(SDL_ENABLE);
++		for (int deviceIndex = 0; deviceIndex < SDL_NumJoysticks(); ++deviceIndex) {
++			OpenSdlController(deviceIndex);
++		}
++	}
+ 
+ 	// Initialize the display
+ 
+@@ -600,6 +649,7 @@ class SdlInputIntentTarget final : public InputIntentTarget
+ };
+ 
+ static InputIntentRouter SdlInputRouter;
++static InputIntentRouter SdlControllerInputRouter;
+ 
+ static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &intent)
+ {
+@@ -607,6 +657,75 @@ static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &int
+ 	return SdlInputRouter.Route(intent, target);
+ }
+ 
++static bool RouteSdlControllerInput(const EventCallback &callbacks,
++                                    const InputIntent &intent)
++{
++	SdlInputIntentTarget target(callbacks);
++	return SdlControllerInputRouter.Route(intent, target);
++}
++
++static void RouteSdlControllerIntents(const EventCallback &callbacks,
++                                      const std::vector<InputIntent> &intents)
++{
++	for (const InputIntent &intent : intents) {
++		RouteSdlControllerInput(callbacks, intent);
++	}
++}
++
++static void CancelSdlControllerInput(const EventCallback &callbacks, unsigned ticks)
++{
++	RouteSdlControllerIntents(
++		callbacks,
++		SdlControllerState.Cancel(ticks, {CursorScreenPos.x, CursorScreenPos.y}));
++}
++
++static ControllerInputContext ControllerContextForCallbacks(
++	const EventCallback *callbacks)
++{
++	return callbacks == &GameCallbacks
++		? ControllerInputContext::Gameplay
++		: ControllerInputContext::Menu;
++}
++
++static bool ActivateSdlController(const EventCallback &callbacks,
++                                  SDL_JoystickID instanceId, unsigned ticks,
++                                  bool allowSwitch)
++{
++	if (!SdlControllerRegistry.Contains(instanceId)) {
++		return false;
++	}
++	if (!SdlControllerRegistry.IsActive(instanceId)) {
++		if (!allowSwitch) {
++			return false;
++		}
++		CancelSdlControllerInput(callbacks, ticks);
++		SdlControllerRegistry.Activate(instanceId);
++	}
++	return true;
++}
++
++static void RemoveSdlController(const EventCallback &callbacks,
++                                SDL_JoystickID instanceId, unsigned ticks)
++{
++	const auto controller = SdlControllers.find(instanceId);
++	if (controller == SdlControllers.end()) {
++		return;
++	}
++	const bool wasActive = SdlControllerRegistry.IsActive(instanceId);
++	if (wasActive) {
++		CancelSdlControllerInput(callbacks, ticks);
++	}
++	SDL_GameControllerClose(controller->second);
++	SdlControllers.erase(controller);
++	SdlControllerRegistry.Disconnect(instanceId);
++
++	if (wasActive && &callbacks == &GameCallbacks && GameRunning
++	    && !IsNetworkGame() && !GamePaused) {
++		SetGamePaused(true);
++		UI.StatusLine.Set(_("Game Paused"));
++	}
++}
++
+ static void CancelSdlPointerInput(const EventCallback &callbacks, unsigned ticks)
+ {
+ 	SdlInputIntentTarget target(callbacks);
+@@ -653,6 +772,45 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 	unsigned int keysym = 0;
+ 
+ 	switch (event.type) {
++		case SDL_CONTROLLERDEVICEADDED:
++			OpenSdlController(event.cdevice.which);
++			break;
++
++		case SDL_CONTROLLERDEVICEREMOVED:
++			RemoveSdlController(callbacks, event.cdevice.which, SDL_GetTicks());
++			break;
++
++		case SDL_CONTROLLERAXISMOTION:
++			if (ActivateSdlController(callbacks, event.caxis.which,
++			                         SDL_GetTicks(), false)) {
++				RouteSdlControllerIntents(
++					callbacks,
++					AdaptSdlControllerAxisEvent(
++						SdlControllerState, event.caxis, SDL_GetTicks()));
++			}
++			break;
++
++		case SDL_CONTROLLERBUTTONDOWN:
++		case SDL_CONTROLLERBUTTONUP:
++			if (ActivateSdlController(
++				    callbacks, event.cbutton.which, SDL_GetTicks(),
++				    event.type == SDL_CONTROLLERBUTTONDOWN)) {
++				RouteSdlControllerIntents(
++					callbacks,
++					AdaptSdlControllerButtonEvent(
++						SdlControllerState, event.cbutton, SDL_GetTicks()));
++			}
++			break;
++
++		case SDL_JOYAXISMOTION:
++		case SDL_JOYBALLMOTION:
++		case SDL_JOYHATMOTION:
++		case SDL_JOYBUTTONDOWN:
++		case SDL_JOYBUTTONUP:
++		case SDL_JOYDEVICEADDED:
++		case SDL_JOYDEVICEREMOVED:
++			break;
++
+ 		case SDL_MOUSEBUTTONDOWN:
+ #ifdef PEONPAD_IOS
+ 			if (event.button.which == SDL_TOUCH_MOUSEID
+@@ -718,6 +876,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 		case SDL_APP_DIDENTERBACKGROUND:
+ 		case SDL_APP_TERMINATING:
+ 			PeonPadCancelTouches(callbacks, SDL_GetTicks());
++			CancelSdlControllerInput(callbacks, SDL_GetTicks());
+ 			break;
+ #endif
+ 
+@@ -785,6 +944,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 					                       IsNetworkGame(), Preference.PauseOnLeave);
+ 				if (focusPolicy.CancelInput) {
+ 					CancelSdlPointerInput(callbacks, SDL_GetTicks());
++					CancelSdlControllerInput(callbacks, SDL_GetTicks());
+ #ifdef PEONPAD_IOS
+ 					PeonPadRouteTouchIntents(
+ 						callbacks,
+@@ -898,6 +1058,12 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ */
+ void SetCallbacks(const EventCallback *callbacks)
+ {
++	if (Callbacks != callbacks) {
++		if (Callbacks) {
++			CancelSdlControllerInput(*Callbacks, SDL_GetTicks());
++		}
++		SdlControllerState.SetContext(ControllerContextForCallbacks(callbacks));
++	}
+ #ifdef PEONPAD_IOS
+ 	if (Callbacks && Callbacks != callbacks) {
+ 		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
+@@ -935,6 +1101,13 @@ void WaitEventsOneFrame()
+ 		++SlowFrameCounter;
+ 	}
+ 
++	if (SdlControllerRegistry.Active()) {
++		RouteSdlControllerIntents(
++			*GetCallbacks(),
++			SdlControllerState.Update(
++				ticks, Video.Width, Video.Height,
++				{CursorScreenPos.x, CursorScreenPos.y}));
++	}
+ 	InputMouseTimeout(*GetCallbacks(), ticks);
+ 	InputKeyTimeout(*GetCallbacks(), ticks);
+ 	CursorAnimate(ticks);
+diff --git a/src/video/sdl_controller_adapter.cpp b/src/video/sdl_controller_adapter.cpp
+new file mode 100644
+index 0000000..8c10f3e
+--- /dev/null
++++ b/src/video/sdl_controller_adapter.cpp
+@@ -0,0 +1,72 @@
++#include "sdl_controller_adapter.h"
++
++#include <SDL_gamecontroller.h>
++#include <optional>
++
++namespace
++{
++
++std::optional<ControllerAxis> AdaptAxis(Uint8 axis)
++{
++	switch (axis) {
++		case SDL_CONTROLLER_AXIS_LEFTX: return ControllerAxis::LeftX;
++		case SDL_CONTROLLER_AXIS_LEFTY: return ControllerAxis::LeftY;
++		case SDL_CONTROLLER_AXIS_RIGHTX: return ControllerAxis::RightX;
++		case SDL_CONTROLLER_AXIS_RIGHTY: return ControllerAxis::RightY;
++		case SDL_CONTROLLER_AXIS_TRIGGERLEFT: return ControllerAxis::LeftTrigger;
++		case SDL_CONTROLLER_AXIS_TRIGGERRIGHT: return ControllerAxis::RightTrigger;
++		default: return std::nullopt;
++	}
++}
++
++std::optional<ControllerButton> AdaptButton(Uint8 button)
++{
++	switch (button) {
++		case SDL_CONTROLLER_BUTTON_A: return ControllerButton::Confirm;
++		case SDL_CONTROLLER_BUTTON_B: return ControllerButton::Cancel;
++		case SDL_CONTROLLER_BUTTON_X: return ControllerButton::ContextCommand;
++		case SDL_CONTROLLER_BUTTON_Y: return ControllerButton::ContextSurface;
++		case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return ControllerButton::LeftShoulder;
++		case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return ControllerButton::RightShoulder;
++		case SDL_CONTROLLER_BUTTON_DPAD_UP: return ControllerButton::DpadUp;
++		case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return ControllerButton::DpadDown;
++		case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return ControllerButton::DpadLeft;
++		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return ControllerButton::DpadRight;
++		case SDL_CONTROLLER_BUTTON_START: return ControllerButton::Menu;
++		default: return std::nullopt;
++	}
++}
++
++float NormalizeAxis(Sint16 value, bool trigger)
++{
++	if (trigger) {
++		return value <= 0 ? 0.0f : value / 32767.0f;
++	}
++	return value < 0 ? value / 32768.0f : value / 32767.0f;
++}
++
++} // namespace
++
++std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state,
++                                                     const SDL_ControllerAxisEvent &event,
++                                                     std::uint32_t timestamp)
++{
++	const std::optional<ControllerAxis> axis = AdaptAxis(event.axis);
++	if (!axis) {
++		return {};
++	}
++	const bool trigger =
++		*axis == ControllerAxis::LeftTrigger || *axis == ControllerAxis::RightTrigger;
++	return state.SetAxis(*axis, NormalizeAxis(event.value, trigger), timestamp);
++}
++
++std::vector<InputIntent> AdaptSdlControllerButtonEvent(ControllerInputState &state,
++                                                       const SDL_ControllerButtonEvent &event,
++                                                       std::uint32_t timestamp)
++{
++	const std::optional<ControllerButton> button = AdaptButton(event.button);
++	if (!button) {
++		return {};
++	}
++	return state.SetButton(*button, event.state == SDL_PRESSED, timestamp);
++}

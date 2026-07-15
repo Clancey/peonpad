@@ -118,6 +118,38 @@ modifier combinations. Trackpad gestures reserved by iPadOS, including system
 three-finger navigation, are not available to the game; trackpad scrolling is
 delivered as mouse-wheel input rather than as PeonPad's direct-touch pan.
 
+## Game controller control model
+
+SDL-recognized game controllers use the same platform-neutral interaction
+router as touch and pointer input. The SDL2-specific adapter is deliberately
+narrow so the gameplay mapping can survive a later SDL3 source port.
+
+- Left stick moves a bounded virtual cursor with a radial dead zone, curved
+  response, acceleration, and maximum speed.
+- Right stick pans the camera with an independent radial dead zone and
+  frame-time clamping.
+- A/Cross selects or confirms at the virtual cursor; X/Square issues the
+  existing context command at that position.
+- B/Circle cancels text entry, an active target/build command, a command page,
+  or the current selection in that order.
+- Y/Triangle uses the existing pie-menu command surface only when the active
+  game configuration enables it; otherwise it is a safe no-op.
+- Left trigger exposes additive selection and right trigger exposes queued
+  orders. Both reuse the engine's Shift semantics only for the routed
+  controller action, without altering hardware-keyboard modifier state.
+- The D-pad and left stick navigate menus and dialogs directly. A/Cross
+  confirms existing or prefilled values, B/Circle goes back, and Menu/Options
+  opens the in-game menu.
+- Gameplay D-pad control-group recall and bumper command-page cycling remain
+  unassigned because the engine has no generic, unambiguous mapping for them.
+
+Controller disconnect, focus loss, app backgrounding, and gameplay/menu
+transitions cancel held buttons, axes, modifiers, pans, and virtual-cursor
+interactions. An active-controller disconnect pauses only a running local
+single-player game; network timing is never changed. Touch, keyboard, mouse,
+and the system keyboard path remain available regardless of the last active
+device.
+
 ## Vision Pro Designed-for-iPad probe
 
 The existing iPad target has a separate compatibility-simulator build path:
@@ -191,3 +223,7 @@ scenario expands the list rather than requiring dropdown scrolling.
 10. Confirm Replay Game is absent from the main menu and Save Replay is absent
     from the results screen. Replay playback remains deferred rather than
     presenting files that cannot be used reliably.
+11. Connect a supported controller before launch and while running, then verify
+    menu navigation, default/prefilled dialog confirmation, live-match
+    select/context-command/pan/cancel/menu actions, disconnect cancellation,
+    and immediate touch or keyboard fallback.

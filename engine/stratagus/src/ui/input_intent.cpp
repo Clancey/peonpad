@@ -16,9 +16,10 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 			return intent.Phase == InputIntentPhase::Update && target.Dispatch(intent);
 		case InputIntentKind::PointerButton:
 			if (intent.Phase == InputIntentPhase::Begin) {
+				ActivePointerButtons.insert(intent.Code);
 				const bool handled = target.Dispatch(intent);
-				if (handled) {
-					ActivePointerButtons.insert(intent.Code);
+				if (!handled) {
+					ActivePointerButtons.erase(intent.Code);
 				}
 				return handled;
 			}
@@ -40,8 +41,12 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 			return intent.Phase == InputIntentPhase::Cancel && target.Dispatch(intent);
 		case InputIntentKind::ViewportPan:
 			if (intent.Phase == InputIntentPhase::Begin) {
-				ViewportPanActive = target.Dispatch(intent);
-				return ViewportPanActive;
+				ViewportPanActive = true;
+				const bool handled = target.Dispatch(intent);
+				if (!handled) {
+					ViewportPanActive = false;
+				}
+				return handled;
 			}
 			if (!ViewportPanActive) {
 				return false;
@@ -63,6 +68,34 @@ bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &targ
 				return target.Dispatch(intent);
 			}
 			return false;
+		case InputIntentKind::ControllerAction:
+		case InputIntentKind::Modifier: {
+			std::set<unsigned> &active =
+				intent.Kind == InputIntentKind::ControllerAction
+				? ActiveControllerActions : ActiveModifiers;
+			if (intent.Phase == InputIntentPhase::Begin) {
+				active.insert(intent.Code);
+				const bool handled = target.Dispatch(intent);
+				if (!handled) {
+					active.erase(intent.Code);
+				}
+				return handled;
+			}
+			if (intent.Phase == InputIntentPhase::Update) {
+				return active.find(intent.Code) != active.end()
+				    && target.Dispatch(intent);
+			}
+			if (intent.Phase == InputIntentPhase::End
+			    || intent.Phase == InputIntentPhase::Cancel) {
+				if (active.find(intent.Code) == active.end()) {
+					return false;
+				}
+				const bool handled = target.Dispatch(intent);
+				active.erase(intent.Code);
+				return handled;
+			}
+			return false;
+		}
 	}
 	return false;
 }
@@ -85,6 +118,16 @@ void InputIntentRouter::CancelPointer(InputIntentTarget &target, std::uint32_t t
 bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
 {
 	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
+}
+
+bool InputIntentRouter::IsControllerActionActive(unsigned action) const
+{
+	return ActiveControllerActions.find(action) != ActiveControllerActions.end();
+}
+
+bool InputIntentRouter::IsModifierActive(unsigned modifier) const
+{
+	return ActiveModifiers.find(modifier) != ActiveModifiers.end();
 }
 
 std::vector<InputIntent> TouchInputState::Begin(std::int64_t contact, TouchPoint position,

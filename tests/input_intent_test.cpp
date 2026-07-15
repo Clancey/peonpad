@@ -1,10 +1,14 @@
+#include "controller_input.h"
 #include "input_intent.h"
+#include "sdl_controller_adapter.h"
 #include "sdl_input_adapter.h"
 
 #include <cassert>
+#include <cmath>
 #include <vector>
 
-namespace {
+namespace
+{
 
 class RecordingTarget final : public InputIntentTarget
 {
@@ -19,18 +23,21 @@ public:
 	std::vector<InputIntent> Intents;
 };
 
+void RouteAll(InputIntentRouter &router,
+              RecordingTarget &target,
+              const std::vector<InputIntent> &intents)
+{
+	for (const InputIntent &intent : intents) {
+		router.Route(intent, target);
+	}
+}
+
 void TestRouterPropagation()
 {
 	InputIntentRouter router;
 	RecordingTarget target;
 	const InputIntent motion{
-		InputIntentKind::PointerMotion,
-		InputIntentPhase::Update,
-		{23, 42},
-		{-4, 8},
-		5,
-		1234
-	};
+		InputIntentKind::PointerMotion, InputIntentPhase::Update, {23, 42}, {-4, 8}, 5, 1234};
 
 	assert(router.Route(motion, target));
 	assert(target.Intents.size() == 1);
@@ -47,11 +54,17 @@ void TestRouterPhasesAndCancellation()
 	InputIntentRouter router;
 	RecordingTarget target;
 
-	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::Begin,
-	                     {10, 20}, {}, 1, 100, InputPrimaryButton}, target));
+	assert(router.Route({InputIntentKind::PointerButton,
+	                     InputIntentPhase::Begin,
+	                     {10, 20},
+	                     {},
+	                     1,
+	                     100,
+	                     InputPrimaryButton},
+	                    target));
 	assert(router.IsPointerButtonActive(InputPrimaryButton));
-	assert(router.Route({InputIntentKind::ViewportPan, InputIntentPhase::Begin,
-	                     {30, 40}, {}, 2, 110}, target));
+	assert(router.Route(
+		{InputIntentKind::ViewportPan, InputIntentPhase::Begin, {30, 40}, {}, 2, 110}, target));
 	assert(router.IsViewportPanActive());
 
 	router.CancelPointer(target, 120, 3, {50, 60});
@@ -68,13 +81,13 @@ void TestRouterPhasesAndCancellation()
 	assert(target.Intents[3].Timestamp == 120);
 
 	const std::size_t count = target.Intents.size();
-	assert(!router.Route({InputIntentKind::ViewportPan, InputIntentPhase::Update,
-	                      {}, {2, 3}, 0, 130}, target));
+	assert(!router.Route(
+		{InputIntentKind::ViewportPan, InputIntentPhase::Update, {}, {2, 3}, 0, 130}, target));
 	assert(target.Intents.size() == count);
 
 	target.Accept = false;
-	assert(!router.Route({InputIntentKind::ViewportPan, InputIntentPhase::Begin,
-	                      {1, 2}, {}, 0, 140}, target));
+	assert(!router.Route(
+		{InputIntentKind::ViewportPan, InputIntentPhase::Begin, {1, 2}, {}, 0, 140}, target));
 	assert(!router.IsViewportPanActive());
 }
 
@@ -83,20 +96,44 @@ void TestDelayedPointerEndAfterCancellation()
 	InputIntentRouter router;
 	RecordingTarget target;
 
-	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::Begin,
-	                     {10, 20}, {}, 0, 1, InputPrimaryButton}, target));
+	assert(router.Route({InputIntentKind::PointerButton,
+	                     InputIntentPhase::Begin,
+	                     {10, 20},
+	                     {},
+	                     0,
+	                     1,
+	                     InputPrimaryButton},
+	                    target));
 	router.CancelPointer(target, 2, 0, {10, 20});
 	assert(target.Intents.size() == 2);
 	assert(target.Intents.back().Phase == InputIntentPhase::Cancel);
 
-	assert(!router.Route({InputIntentKind::PointerButton, InputIntentPhase::End,
-	                      {10, 20}, {}, 0, 3, InputPrimaryButton}, target));
+	assert(!router.Route({InputIntentKind::PointerButton,
+	                      InputIntentPhase::End,
+	                      {10, 20},
+	                      {},
+	                      0,
+	                      3,
+	                      InputPrimaryButton},
+	                     target));
 	assert(target.Intents.size() == 2);
 
-	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::Begin,
-	                     {30, 40}, {}, 0, 4, InputPrimaryButton}, target));
-	assert(router.Route({InputIntentKind::PointerButton, InputIntentPhase::End,
-	                     {30, 40}, {}, 0, 5, InputPrimaryButton}, target));
+	assert(router.Route({InputIntentKind::PointerButton,
+	                     InputIntentPhase::Begin,
+	                     {30, 40},
+	                     {},
+	                     0,
+	                     4,
+	                     InputPrimaryButton},
+	                    target));
+	assert(router.Route({InputIntentKind::PointerButton,
+	                     InputIntentPhase::End,
+	                     {30, 40},
+	                     {},
+	                     0,
+	                     5,
+	                     InputPrimaryButton},
+	                    target));
 	assert(target.Intents.size() == 4);
 	assert(target.Intents.back().Phase == InputIntentPhase::End);
 	assert(target.Intents.back().Timestamp == 5);
@@ -168,8 +205,7 @@ void TestSdlTouchCancellationAdapter()
 	event.fingerId = 2;
 	event.x = 0.2f;
 	event.y = 0.6f;
-	const std::vector<InputIntent> second =
-		AdaptSdlTouchEvent(touch, event, 1000, 500, 2, 4);
+	const std::vector<InputIntent> second = AdaptSdlTouchEvent(touch, event, 1000, 500, 2, 4);
 	assert(second.size() == 1);
 	assert(second[0].Position.x == 200);
 	assert(second[0].Position.y == 300);
@@ -178,8 +214,7 @@ void TestSdlTouchCancellationAdapter()
 	assert(touch.HasPendingContextAction());
 
 	event.type = SDL_FINGERCANCEL;
-	const std::vector<InputIntent> canceled =
-		AdaptSdlTouchEvent(touch, event, 1000, 500, 3, 0);
+	const std::vector<InputIntent> canceled = AdaptSdlTouchEvent(touch, event, 1000, 500, 3, 0);
 	assert(canceled.empty());
 	assert(!touch.HasPendingContextAction());
 	assert(touch.ContactCount() == 0);
@@ -243,6 +278,271 @@ void TestPanAndTouchCancellation()
 	assert(touch.ContactCount() == 0);
 }
 
+void TestControllerDeviceRegistry()
+{
+	ControllerDeviceRegistry devices;
+	assert(devices.Connect(10));
+	assert(!devices.Connect(10));
+	assert(devices.Size() == 1);
+	assert(devices.IsActive(10));
+	assert(devices.Connect(20));
+	assert(devices.Size() == 2);
+	assert(devices.Activate(20));
+	assert(devices.IsActive(20));
+	assert(devices.Disconnect(20));
+	assert(devices.IsActive(10));
+	assert(!devices.Disconnect(20));
+	assert(devices.Disconnect(10));
+	assert(!devices.Active());
+}
+
+void TestControllerDeadZoneAndCurve()
+{
+	assert(ControllerInputState::ShapeRadial(0.19f, 0.0f, 0.2f, 1.6f, 100.0f).x == 0);
+	const InputDelta curved = ControllerInputState::ShapeRadial(0.6f, 0.0f, 0.2f, 1.6f, 100.0f);
+	assert(curved.x > 30 && curved.x < 35);
+	const InputDelta diagonal = ControllerInputState::ShapeRadial(1.0f, 1.0f, 0.2f, 1.6f, 100.0f);
+	assert(std::abs(diagonal.x - diagonal.y) <= 1);
+	assert(diagonal.x > 69 && diagonal.x < 72);
+}
+
+InputPoint SimulateCursor(std::uint32_t frameTime)
+{
+	ControllerInputState controller;
+	controller.SetAxis(ControllerAxis::LeftX, 1.0f, 0);
+	InputPoint cursor{100, 100};
+	controller.Update(0, 2000, 1000, cursor);
+	for (std::uint32_t timestamp = frameTime; timestamp <= 1000; timestamp += frameTime) {
+		for (const InputIntent &intent : controller.Update(timestamp, 2000, 1000, cursor)) {
+			if (intent.Kind == InputIntentKind::PointerMotion) {
+				cursor = intent.Position;
+			}
+		}
+	}
+	return cursor;
+}
+
+InputDelta SimulateCameraPan(std::uint32_t frameTime)
+{
+	ControllerInputState controller;
+	controller.SetAxis(ControllerAxis::RightX, 1.0f, 0);
+	controller.Update(0, 2000, 1000, {1000, 500});
+	InputDelta total;
+	for (std::uint32_t timestamp = frameTime; timestamp <= 1000; timestamp += frameTime) {
+		for (const InputIntent &intent : controller.Update(timestamp, 2000, 1000, {1000, 500})) {
+			if (intent.Kind == InputIntentKind::ViewportPan
+			    && intent.Phase == InputIntentPhase::Update) {
+				total.x += intent.Delta.x;
+				total.y += intent.Delta.y;
+			}
+		}
+	}
+	return total;
+}
+
+void TestControllerCursorBoundsAndFrameRate()
+{
+	const InputPoint sixtyFps = SimulateCursor(10);
+	const InputPoint thirtyFps = SimulateCursor(20);
+	assert(std::abs(sixtyFps.x - thirtyFps.x) <= 10);
+	assert(sixtyFps.y == 100);
+
+	ControllerInputState controller;
+	controller.SetAxis(ControllerAxis::LeftX, 1.0f, 0);
+	InputPoint cursor{98, 20};
+	controller.Update(0, 100, 50, cursor);
+	for (std::uint32_t timestamp = 16; timestamp <= 500; timestamp += 16) {
+		for (const InputIntent &intent : controller.Update(timestamp, 100, 50, cursor)) {
+			if (intent.Kind == InputIntentKind::PointerMotion) {
+				cursor = intent.Position;
+			}
+		}
+	}
+	assert(cursor.x == 99);
+	assert(cursor.y == 20);
+
+	const InputDelta fastPan = SimulateCameraPan(10);
+	const InputDelta slowPan = SimulateCameraPan(20);
+	assert(std::abs(fastPan.x - slowPan.x) <= 3);
+	assert(fastPan.y == 0);
+
+	ControllerInputState clamped;
+	clamped.SetAxis(ControllerAxis::RightX, 1.0f, 0);
+	clamped.Update(0, 1000, 500, {500, 250});
+	const std::vector<InputIntent> delayed = clamped.Update(1000, 1000, 500, {500, 250});
+	int delayedPan = 0;
+	for (const InputIntent &intent : delayed) {
+		if (intent.Kind == InputIntentKind::ViewportPan
+		    && intent.Phase == InputIntentPhase::Update) {
+			delayedPan += std::abs(intent.Delta.x);
+		}
+	}
+	assert(delayedPan <= 36);
+}
+
+void TestControllerAxisReturnToZero()
+{
+	ControllerInputState controller;
+	InputIntentRouter router;
+	RecordingTarget target;
+	controller.SetAxis(ControllerAxis::RightX, 1.0f, 0);
+	controller.Update(0, 1000, 500, {500, 250});
+	RouteAll(router, target, controller.Update(16, 1000, 500, {500, 250}));
+	assert(router.IsViewportPanActive());
+
+	controller.SetAxis(ControllerAxis::RightX, 0.0f, 17);
+	RouteAll(router, target, controller.Update(32, 1000, 500, {500, 250}));
+	assert(!router.IsViewportPanActive());
+	assert(target.Intents.back().Kind == InputIntentKind::ViewportPan);
+	assert(target.Intents.back().Phase == InputIntentPhase::End);
+
+	ControllerInputState cursorController;
+	InputPoint cursor{100, 100};
+	cursorController.SetAxis(ControllerAxis::LeftX, 1.0f, 0);
+	cursorController.Update(0, 2000, 500, cursor);
+	for (std::uint32_t timestamp = 16; timestamp <= 400; timestamp += 16) {
+		for (const InputIntent &intent : cursorController.Update(timestamp, 2000, 500, cursor)) {
+			if (intent.Kind == InputIntentKind::PointerMotion) {
+				cursor = intent.Position;
+			}
+		}
+	}
+	cursorController.SetAxis(ControllerAxis::LeftX, 0.0f, 401);
+	for (std::uint32_t timestamp = 416; timestamp <= 1200; timestamp += 16) {
+		for (const InputIntent &intent : cursorController.Update(timestamp, 2000, 500, cursor)) {
+			if (intent.Kind == InputIntentKind::PointerMotion) {
+				cursor = intent.Position;
+			}
+		}
+	}
+	const InputPoint settled = cursor;
+	for (std::uint32_t timestamp = 1216; timestamp <= 1600; timestamp += 16) {
+		for (const InputIntent &intent : cursorController.Update(timestamp, 2000, 500, cursor)) {
+			if (intent.Kind == InputIntentKind::PointerMotion) {
+				cursor = intent.Position;
+			}
+		}
+	}
+	assert(cursor.x == settled.x);
+	assert(cursor.y == settled.y);
+}
+
+void TestControllerModifierCleanup()
+{
+	ControllerInputState controller;
+	InputIntentRouter router;
+	RecordingTarget target;
+	const unsigned additive = static_cast<unsigned>(InputModifierCode::AdditiveSelection);
+
+	RouteAll(router, target, controller.SetAxis(ControllerAxis::LeftTrigger, 0.8f, 1));
+	assert(router.IsModifierActive(additive));
+	assert(controller.ActiveModifiers() & InputModifierAdditiveSelection);
+	RouteAll(router, target, controller.Cancel(2, {30, 40}));
+	assert(!router.IsModifierActive(additive));
+	assert(controller.ActiveModifiers() == 0);
+	assert(controller.SetAxis(ControllerAxis::LeftTrigger, 0.0f, 3).empty());
+
+	RouteAll(router, target, controller.SetAxis(ControllerAxis::LeftTrigger, 0.8f, 4));
+	assert(router.IsModifierActive(additive));
+}
+
+void TestControllerContextSwitchAndCancellationRecovery()
+{
+	ControllerInputState controller;
+	InputIntentRouter router;
+	RecordingTarget target;
+	controller.Update(0, 100, 100, {40, 50});
+
+	RouteAll(router, target, controller.SetButton(ControllerButton::Confirm, true, 1));
+	assert(router.IsPointerButtonActive(InputPrimaryButton));
+	RouteAll(router, target, controller.Cancel(2, {40, 50}));
+	assert(!router.IsPointerButtonActive(InputPrimaryButton));
+	assert(target.Intents.back().Phase == InputIntentPhase::Cancel);
+
+	controller.SetContext(ControllerInputContext::Menu);
+	assert(controller.SetButton(ControllerButton::Confirm, false, 3).empty());
+	const std::vector<InputIntent> confirm =
+		controller.SetButton(ControllerButton::Confirm, true, 4);
+	assert(confirm.size() == 1);
+	assert(confirm[0].Kind == InputIntentKind::ControllerAction);
+	assert(confirm[0].Code == static_cast<unsigned>(ControllerActionCode::Confirm));
+	RouteAll(router, target, confirm);
+	assert(router.IsControllerActionActive(confirm[0].Code));
+	RouteAll(router, target, controller.SetButton(ControllerButton::Confirm, false, 5));
+	assert(!router.IsControllerActionActive(confirm[0].Code));
+}
+
+void TestDisconnectDuringContextCommand()
+{
+	ControllerInputState controller;
+	InputIntentRouter router;
+	RecordingTarget target;
+	controller.Update(0, 100, 100, {25, 30});
+
+	RouteAll(router, target, controller.SetButton(ControllerButton::ContextCommand, true, 1));
+	assert(router.IsPointerButtonActive(InputContextButton));
+	RouteAll(router, target, controller.Cancel(2, {25, 30}));
+	assert(!router.IsPointerButtonActive(InputContextButton));
+	assert(target.Intents.back().Kind == InputIntentKind::PointerButton);
+	assert(target.Intents.back().Phase == InputIntentPhase::Cancel);
+	assert(controller.SetButton(ControllerButton::ContextCommand, false, 3).empty());
+
+	RouteAll(router, target, controller.SetButton(ControllerButton::ContextCommand, true, 4));
+	RouteAll(router, target, controller.SetButton(ControllerButton::ContextCommand, false, 5));
+	assert(!router.IsPointerButtonActive(InputContextButton));
+	assert(target.Intents.back().Phase == InputIntentPhase::End);
+	assert(target.Intents.back().Timestamp == 5);
+}
+
+void TestControllerMenuRepeat()
+{
+	ControllerInputState controller;
+	controller.SetContext(ControllerInputContext::Menu);
+	const std::vector<InputIntent> begin =
+		controller.SetButton(ControllerButton::DpadDown, true, 100);
+	assert(begin.size() == 1);
+	assert(begin[0].Phase == InputIntentPhase::Begin);
+	assert(begin[0].Code == static_cast<unsigned>(ControllerActionCode::NavigateDown));
+	assert(controller.SetButton(ControllerButton::DpadDown, true, 101).empty());
+	assert(controller.Update(449, 100, 100, {}).empty());
+	const std::vector<InputIntent> repeat = controller.Update(450, 100, 100, {});
+	assert(repeat.size() == 1);
+	assert(repeat[0].Phase == InputIntentPhase::Update);
+	const std::vector<InputIntent> end =
+		controller.SetButton(ControllerButton::DpadDown, false, 451);
+	assert(end.size() == 1);
+	assert(end[0].Phase == InputIntentPhase::End);
+	assert(controller.Update(1000, 100, 100, {}).empty());
+}
+
+void TestControllerUnsupportedGameplayMappings()
+{
+	ControllerInputState controller;
+	assert(controller.SetButton(ControllerButton::LeftShoulder, true, 1).empty());
+	assert(controller.SetButton(ControllerButton::RightShoulder, true, 2).empty());
+	assert(controller.SetButton(ControllerButton::DpadUp, true, 3).empty());
+}
+
+void TestSdlControllerAdapter()
+{
+	ControllerInputState controller;
+	SDL_ControllerAxisEvent axis{};
+	axis.axis = SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+	axis.value = 32767;
+	const std::vector<InputIntent> modifier = AdaptSdlControllerAxisEvent(controller, axis, 10);
+	assert(modifier.size() == 1);
+	assert(modifier[0].Kind == InputIntentKind::Modifier);
+
+	SDL_ControllerButtonEvent button{};
+	button.button = SDL_CONTROLLER_BUTTON_X;
+	button.state = SDL_PRESSED;
+	const std::vector<InputIntent> context = AdaptSdlControllerButtonEvent(controller, button, 11);
+	assert(context.size() == 1);
+	assert(context[0].Kind == InputIntentKind::PointerButton);
+	assert(context[0].Code == InputContextButton);
+	assert(context[0].Modifiers & InputModifierAdditiveSelection);
+}
+
 } // namespace
 
 int main()
@@ -256,5 +556,15 @@ int main()
 	TestSdlTouchCancellationAdapter();
 	TestFocusLossPolicy();
 	TestPanAndTouchCancellation();
+	TestControllerDeviceRegistry();
+	TestControllerDeadZoneAndCurve();
+	TestControllerCursorBoundsAndFrameRate();
+	TestControllerAxisReturnToZero();
+	TestControllerModifierCleanup();
+	TestControllerContextSwitchAndCancellationRecovery();
+	TestDisconnectDuringContextCommand();
+	TestControllerMenuRepeat();
+	TestControllerUnsupportedGameplayMappings();
+	TestSdlControllerAdapter();
 	return 0;
 }

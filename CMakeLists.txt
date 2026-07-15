@@ -25,7 +25,9 @@ include(CTest)
 if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
   add_executable(peonpad_input_intent_test
     tests/input_intent_test.cpp
+    engine/stratagus/src/ui/controller_input.cpp
     engine/stratagus/src/ui/input_intent.cpp
+    engine/stratagus/src/video/sdl_controller_adapter.cpp
     engine/stratagus/src/video/sdl_input_adapter.cpp
   )
   target_include_directories(peonpad_input_intent_test PRIVATE

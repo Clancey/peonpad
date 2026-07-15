@@ -36,11 +36,14 @@
 
 #include "stratagus.h"
 
+#include "controller_input.h"
+#include "cursor.h"
 #include "game.h"
 #include "input_intent.h"
 #include "network.h"
 #include "online_service.h"
 #include "parameters.h"
+#include "sdl_controller_adapter.h"
 #include "sdl_input_adapter.h"
 #include "sound_server.h"
 #include "translate.h"
@@ -51,6 +54,7 @@
 
 #include <climits>
 #include <cmath>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -112,11 +116,24 @@ static bool dummyRenderer = false;
 
 uint32_t SDL_CUSTOM_KEY_UP;
 
+static std::map<SDL_JoystickID, SDL_GameController *> SdlControllers;
+static ControllerDeviceRegistry SdlControllerRegistry;
+static ControllerInputState SdlControllerState;
+
+static void OpenSdlController(int deviceIndex);
+
 /**
 **  Clean up SDL video resources properly
 */
 static void CleanUpVideoSdl()
 {
+	for (const auto &[instanceId, controller] : SdlControllers) {
+		(void)instanceId;
+		SDL_GameControllerClose(controller);
+	}
+	SdlControllers.clear();
+	SdlControllerRegistry.Clear();
+
 	if (TheRenderer) {
 		SDL_DestroyRenderer(TheRenderer);
 		TheRenderer = nullptr;
@@ -133,6 +150,29 @@ static void CleanUpVideoSdl()
 
 	SDL_StopTextInput();
 	SDL_Quit();
+}
+
+static void OpenSdlController(int deviceIndex)
+{
+	if (!SDL_IsGameController(deviceIndex)) {
+		return;
+	}
+	SDL_GameController *controller = SDL_GameControllerOpen(deviceIndex);
+	if (!controller) {
+		ErrorPrint("Couldn't open game controller %d: %s\n",
+		           deviceIndex, SDL_GetError());
+		return;
+	}
+	SDL_Joystick *joystick = SDL_GameControllerGetJoystick(controller);
+	const SDL_JoystickID instanceId = SDL_JoystickInstanceID(joystick);
+	if (instanceId < 0 || !SdlControllerRegistry.Connect(instanceId)) {
+		SDL_GameControllerClose(controller);
+		return;
+	}
+	SdlControllers.emplace(instanceId, controller);
+	const char *name = SDL_GameControllerName(controller);
+	DebugPrint("Opened game controller %d: %s\n", instanceId,
+	           name ? name : "unknown controller");
 }
 
 /*----------------------------------------------------------------------------
@@ -349,7 +389,6 @@ void InitVideoSdl()
 			ErrorPrint("Couldn't initialize SDL: %s\n", SDL_GetError());
 			exit(1);
 		}
-
 		SDL_CUSTOM_KEY_UP = SDL_RegisterEvents(1);
 		SDL_StartTextInput();
 
@@ -370,6 +409,16 @@ void InitVideoSdl()
 		signal(SIGSEGV, +cleanExit);
 		signal(SIGABRT, +cleanExit);
 #endif
+	}
+	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0
+	    && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
+		ErrorPrint("Couldn't initialize SDL game controllers: %s\n",
+		           SDL_GetError());
+	} else {
+		SDL_GameControllerEventState(SDL_ENABLE);
+		for (int deviceIndex = 0; deviceIndex < SDL_NumJoysticks(); ++deviceIndex) {
+			OpenSdlController(deviceIndex);
+		}
 	}
 
 	// Initialize the display
@@ -600,11 +649,81 @@ private:
 };
 
 static InputIntentRouter SdlInputRouter;
+static InputIntentRouter SdlControllerInputRouter;
 
 static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &intent)
 {
 	SdlInputIntentTarget target(callbacks);
 	return SdlInputRouter.Route(intent, target);
+}
+
+static bool RouteSdlControllerInput(const EventCallback &callbacks,
+                                    const InputIntent &intent)
+{
+	SdlInputIntentTarget target(callbacks);
+	return SdlControllerInputRouter.Route(intent, target);
+}
+
+static void RouteSdlControllerIntents(const EventCallback &callbacks,
+                                      const std::vector<InputIntent> &intents)
+{
+	for (const InputIntent &intent : intents) {
+		RouteSdlControllerInput(callbacks, intent);
+	}
+}
+
+static void CancelSdlControllerInput(const EventCallback &callbacks, unsigned ticks)
+{
+	RouteSdlControllerIntents(
+		callbacks,
+		SdlControllerState.Cancel(ticks, {CursorScreenPos.x, CursorScreenPos.y}));
+}
+
+static ControllerInputContext ControllerContextForCallbacks(
+	const EventCallback *callbacks)
+{
+	return callbacks == &GameCallbacks
+		? ControllerInputContext::Gameplay
+		: ControllerInputContext::Menu;
+}
+
+static bool ActivateSdlController(const EventCallback &callbacks,
+                                  SDL_JoystickID instanceId, unsigned ticks,
+                                  bool allowSwitch)
+{
+	if (!SdlControllerRegistry.Contains(instanceId)) {
+		return false;
+	}
+	if (!SdlControllerRegistry.IsActive(instanceId)) {
+		if (!allowSwitch) {
+			return false;
+		}
+		CancelSdlControllerInput(callbacks, ticks);
+		SdlControllerRegistry.Activate(instanceId);
+	}
+	return true;
+}
+
+static void RemoveSdlController(const EventCallback &callbacks,
+                                SDL_JoystickID instanceId, unsigned ticks)
+{
+	const auto controller = SdlControllers.find(instanceId);
+	if (controller == SdlControllers.end()) {
+		return;
+	}
+	const bool wasActive = SdlControllerRegistry.IsActive(instanceId);
+	if (wasActive) {
+		CancelSdlControllerInput(callbacks, ticks);
+	}
+	SDL_GameControllerClose(controller->second);
+	SdlControllers.erase(controller);
+	SdlControllerRegistry.Disconnect(instanceId);
+
+	if (wasActive && &callbacks == &GameCallbacks && GameRunning
+	    && !IsNetworkGame() && !GamePaused) {
+		SetGamePaused(true);
+		UI.StatusLine.Set(_("Game Paused"));
+	}
 }
 
 static void CancelSdlPointerInput(const EventCallback &callbacks, unsigned ticks)
@@ -653,6 +772,45 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 	unsigned int keysym = 0;
 
 	switch (event.type) {
+		case SDL_CONTROLLERDEVICEADDED:
+			OpenSdlController(event.cdevice.which);
+			break;
+
+		case SDL_CONTROLLERDEVICEREMOVED:
+			RemoveSdlController(callbacks, event.cdevice.which, SDL_GetTicks());
+			break;
+
+		case SDL_CONTROLLERAXISMOTION:
+			if (ActivateSdlController(callbacks, event.caxis.which,
+			                         SDL_GetTicks(), false)) {
+				RouteSdlControllerIntents(
+					callbacks,
+					AdaptSdlControllerAxisEvent(
+						SdlControllerState, event.caxis, SDL_GetTicks()));
+			}
+			break;
+
+		case SDL_CONTROLLERBUTTONDOWN:
+		case SDL_CONTROLLERBUTTONUP:
+			if (ActivateSdlController(
+				    callbacks, event.cbutton.which, SDL_GetTicks(),
+				    event.type == SDL_CONTROLLERBUTTONDOWN)) {
+				RouteSdlControllerIntents(
+					callbacks,
+					AdaptSdlControllerButtonEvent(
+						SdlControllerState, event.cbutton, SDL_GetTicks()));
+			}
+			break;
+
+		case SDL_JOYAXISMOTION:
+		case SDL_JOYBALLMOTION:
+		case SDL_JOYHATMOTION:
+		case SDL_JOYBUTTONDOWN:
+		case SDL_JOYBUTTONUP:
+		case SDL_JOYDEVICEADDED:
+		case SDL_JOYDEVICEREMOVED:
+			break;
+
 		case SDL_MOUSEBUTTONDOWN:
 #ifdef PEONPAD_IOS
 			if (event.button.which == SDL_TOUCH_MOUSEID
@@ -718,6 +876,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 		case SDL_APP_DIDENTERBACKGROUND:
 		case SDL_APP_TERMINATING:
 			PeonPadCancelTouches(callbacks, SDL_GetTicks());
+			CancelSdlControllerInput(callbacks, SDL_GetTicks());
 			break;
 #endif
 
@@ -785,6 +944,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 					                       IsNetworkGame(), Preference.PauseOnLeave);
 				if (focusPolicy.CancelInput) {
 					CancelSdlPointerInput(callbacks, SDL_GetTicks());
+					CancelSdlControllerInput(callbacks, SDL_GetTicks());
 #ifdef PEONPAD_IOS
 					PeonPadRouteTouchIntents(
 						callbacks,
@@ -898,6 +1058,12 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 */
 void SetCallbacks(const EventCallback *callbacks)
 {
+	if (Callbacks != callbacks) {
+		if (Callbacks) {
+			CancelSdlControllerInput(*Callbacks, SDL_GetTicks());
+		}
+		SdlControllerState.SetContext(ControllerContextForCallbacks(callbacks));
+	}
 #ifdef PEONPAD_IOS
 	if (Callbacks && Callbacks != callbacks) {
 		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
@@ -935,6 +1101,13 @@ void WaitEventsOneFrame()
 		++SlowFrameCounter;
 	}
 
+	if (SdlControllerRegistry.Active()) {
+		RouteSdlControllerIntents(
+			*GetCallbacks(),
+			SdlControllerState.Update(
+				ticks, Video.Width, Video.Height,
+				{CursorScreenPos.x, CursorScreenPos.y}));
+	}
 	InputMouseTimeout(*GetCallbacks(), ticks);
 	InputKeyTimeout(*GetCallbacks(), ticks);
 	CursorAnimate(ticks);

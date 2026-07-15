@@ -301,6 +301,7 @@ source_group(stratagusmain FILES ${stratagus_SRCS})
 set(ui_SRCS
 	src/ui/botpanel.cpp
 	src/ui/button_checks.cpp
+	src/ui/controller_input.cpp
 	src/ui/contenttype.cpp
 	src/ui/icons.cpp
 	src/ui/input_intent.cpp
@@ -343,6 +344,7 @@ set(video_SRCS
 	src/video/movie.cpp
 	src/video/png.cpp
 	src/video/sdl.cpp
+	src/video/sdl_controller_adapter.cpp
 	src/video/sdl_input_adapter.cpp
 	src/video/video.cpp
 	src/video/shaders.cpp
@@ -471,6 +473,7 @@ set(stratagus_generic_HDRS
 	src/include/color.h
 	src/include/commands.h
 	src/include/construct.h
+	src/include/controller_input.h
 	src/include/cursor.h
 	src/include/depend.h
 	src/include/editor.h
@@ -510,6 +513,7 @@ set(stratagus_generic_HDRS
 	src/include/script.h
 	src/include/script_sound.h
 	src/include/sdl2_helper.h
+	src/include/sdl_controller_adapter.h
 	src/include/sdl_input_adapter.h
 	src/include/settings.h
 	src/include/sound.h

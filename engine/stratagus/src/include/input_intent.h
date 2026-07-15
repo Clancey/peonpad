@@ -13,7 +13,9 @@ enum class InputIntentKind {
 	PointerButton,
 	PointerExit,
 	ViewportPan,
-	Key
+	Key,
+	ControllerAction,
+	Modifier
 };
 
 enum class InputIntentPhase {
@@ -46,6 +48,24 @@ struct InputIntent {
 
 constexpr unsigned InputPrimaryButton = 1;
 constexpr unsigned InputContextButton = 3;
+constexpr int InputModifierAdditiveSelection = 1 << 8;
+constexpr int InputModifierQueuedOrder = 1 << 9;
+
+enum class InputModifierCode : unsigned {
+	AdditiveSelection = 1,
+	QueuedOrder
+};
+
+enum class ControllerActionCode : unsigned {
+	Confirm = 1,
+	Cancel,
+	ContextSurface,
+	NavigateUp,
+	NavigateDown,
+	NavigateLeft,
+	NavigateRight,
+	OpenMenu
+};
 
 class InputIntentTarget
 {
@@ -63,9 +83,13 @@ public:
 
 	bool IsPointerButtonActive(unsigned button) const;
 	bool IsViewportPanActive() const { return ViewportPanActive; }
+	bool IsControllerActionActive(unsigned action) const;
+	bool IsModifierActive(unsigned modifier) const;
 
 private:
 	std::set<unsigned> ActivePointerButtons;
+	std::set<unsigned> ActiveControllerActions;
+	std::set<unsigned> ActiveModifiers;
 	bool ViewportPanActive = false;
 };
 

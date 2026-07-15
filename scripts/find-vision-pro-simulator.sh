@@ -15,8 +15,13 @@ fi
 DEVICES=$(xcrun simctl list devices available)
 REQUESTED_UDID=${PEONPAD_VISION_SIMULATOR_UDID:-}
 if [[ -n "$REQUESTED_UDID" ]]; then
-  if ! awk -v id="$REQUESTED_UDID" 'index($0, id) {found = 1} END {exit !found}' \
-      <<< "$DEVICES"; then
+  if ! awk -v id="$REQUESTED_UDID" '
+      /^-- visionOS / {in_vision_runtime = 1; next}
+      /^-- / {in_vision_runtime = 0}
+      in_vision_runtime && /Apple Vision Pro/ &&
+          index($0, "(" id ")") {found = 1}
+      END {exit !found}
+    ' <<< "$DEVICES"; then
     print -u2 "requested Vision Pro simulator is not available: $REQUESTED_UDID"
     exit 1
   fi

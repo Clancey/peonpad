@@ -62,6 +62,16 @@ rg -q 'SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD YES' "$VISION_TOOLCHAIN"
 XROS_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-simulator-arm64.cmake"
 rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_TOOLCHAIN"
 rg -q 'CMAKE_OSX_SYSROOT xrsimulator' "$XROS_TOOLCHAIN"
+rg -q 'PEONPAD_EXPECT_VISIONOS=1' "$ROOT_DIR/CMakeLists.txt"
+rg -q 'defined\(PEONPAD_EXPECT_VISIONOS\).*TARGET_OS_VISION' \
+  "$ROOT_DIR/tests/toolchain_probe.cpp"
+
+SDL3_BUILD_SCRIPT="$ROOT_DIR/scripts/build-sdl3-foundation.sh"
+rg -q 'cmake --build "\$BUILD_DIR" --parallel' "$SDL3_BUILD_SCRIPT"
+if rg -q -- '--target peonpad_sdl3_smoke' "$SDL3_BUILD_SCRIPT"; then
+  print -u2 "SDL3 foundation validation builds only the smoke target"
+  exit 1
+fi
 
 rg -q 'option\(PEONPAD_ENABLE_SDL3' "$ROOT_DIR/CMakeLists.txt"
 rg -q 'SDL-release-3\.4\.12\.tar\.gz' "$ROOT_DIR/config/inputs.lock"

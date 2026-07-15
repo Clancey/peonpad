@@ -71,9 +71,9 @@ Evidence captured July 15, 2026:
 
 | Lane | Result |
 | --- | --- |
-| macOS 13 arm64 | The callback payload ran with both software and Metal renderers and reported exact core `3.4.12`, image `3.4.4`, and mixer `3.2.4` runtime versions. |
-| iOS Simulator 16 arm64 | The SDL3-family payload and Apple bridge compiled and linked as Mach-O platform 7 with SDK 26.5. |
-| visionOS Simulator 2 arm64 | The SDL3-family payload and Apple bridge compiled and linked natively as Mach-O platform 12 with SDK 26.5. It was not launched. |
+| macOS 13 arm64 | All foundation targets built, and the callback payload ran with both software and Metal renderers and reported exact core `3.4.12`, image `3.4.4`, and mixer `3.2.4` runtime versions. |
+| iOS Simulator 16 arm64 | All foundation targets, including the toolchain probe and input adapter, compiled; the SDL3-family payload and Apple bridge linked as Mach-O platform 7 with SDK 26.5. |
+| visionOS Simulator 2 arm64 | All foundation targets, including the visionOS toolchain probe and input adapter, compiled; the SDL3-family payload and Apple bridge linked natively as Mach-O platform 12 with SDK 26.5. It was not launched. |
 | Default SDL2 | The full macOS Stratagus/Wargus app and tools built, and the default input/guardrail CTests passed. |
 
 The native xrsimulator build currently emits upstream SDL/SDL_image warnings

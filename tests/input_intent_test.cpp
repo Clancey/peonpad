@@ -7,8 +7,19 @@
 #include <cmath>
 #include <vector>
 
+#if defined(NDEBUG)
+#error "peonpad_input_intent_test requires active assertions"
+#endif
+
 namespace
 {
+
+bool AssertionsAreActive()
+{
+	bool evaluated = false;
+	assert((evaluated = true));
+	return evaluated;
+}
 
 class RecordingTarget final : public InputIntentTarget
 {
@@ -765,8 +776,11 @@ void TestSdlControllerAdapter()
 
 } // namespace
 
-int main()
+int main(int argc, char **)
 {
+	if (argc > 1) {
+		return AssertionsAreActive() ? 0 : 1;
+	}
 	TestRouterPropagation();
 	TestRouterPhasesAndCancellation();
 	TestDelayedPointerEndAfterCancellation();

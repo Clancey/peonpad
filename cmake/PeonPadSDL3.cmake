@@ -113,11 +113,16 @@ if(BUILD_TESTING AND
     engine/stratagus/src/include
   )
   target_compile_features(peonpad_sdl3_input_adapter_test PRIVATE cxx_std_17)
+  target_compile_options(peonpad_sdl3_input_adapter_test PRIVATE
+    "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-UNDEBUG>"
+  )
   target_link_libraries(peonpad_sdl3_input_adapter_test PRIVATE
     peonpad_sdl3_input_adapter
   )
   add_test(NAME peonpad_sdl3_input_adapter
     COMMAND peonpad_sdl3_input_adapter_test)
+  add_test(NAME peonpad_sdl3_input_assertions_active
+    COMMAND peonpad_sdl3_input_adapter_test --verify-assertions)
   add_test(NAME peonpad_sdl3_foundation
     COMMAND peonpad_sdl3_smoke --headless)
 endif()

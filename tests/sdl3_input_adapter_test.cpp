@@ -2,8 +2,27 @@
 
 #include <cassert>
 
-int main()
+#if defined(NDEBUG)
+#error "peonpad_sdl3_input_adapter_test requires active assertions"
+#endif
+
+namespace
 {
+
+bool AssertionsAreActive()
+{
+	bool evaluated = false;
+	assert((evaluated = true));
+	return evaluated;
+}
+
+} // namespace
+
+int main(int argc, char **)
+{
+	if (argc > 1) {
+		return AssertionsAreActive() ? 0 : 1;
+	}
 	ControllerInputState controller;
 
 	SDL_GamepadAxisEvent axis{};
@@ -13,9 +32,11 @@ int main()
 	const std::vector<InputIntent> trigger =
 		PeonPadAdaptSDL3GamepadAxisEvent(controller, axis, 10);
 	assert(trigger.size() == 1);
-	assert(trigger[0].Kind == InputIntentKind::PointerButton);
+	assert(trigger[0].Kind == InputIntentKind::Modifier);
 	assert(trigger[0].Phase == InputIntentPhase::Begin);
-	assert(trigger[0].Code == InputPrimaryButton);
+	assert(trigger[0].Code
+	       == static_cast<unsigned>(InputModifierCode::AdditiveSelection));
+	assert(trigger[0].Source == InputIntentSource::Controller);
 
 	SDL_GamepadButtonEvent button{};
 	button.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
@@ -34,11 +55,30 @@ int main()
 	finger.x = 0.25f;
 	finger.y = 0.5f;
 	assert(PeonPadAdaptSDL3TouchEvent(touch, finger, 640, 480, 12, 0).empty());
+	finger.fingerID = 8;
+	finger.x = 0.75f;
+	const std::vector<InputIntent> second =
+		PeonPadAdaptSDL3TouchEvent(touch, finger, 640, 480, 13, 0);
+	assert(second.size() == 1);
+	assert(second[0].Kind == InputIntentKind::PointerButton);
+	assert(second[0].Phase == InputIntentPhase::Cancel);
+	finger.fingerID = 9;
+	finger.x = 0.5f;
+	finger.y = 0.75f;
+	const std::vector<InputIntent> pan =
+		PeonPadAdaptSDL3TouchEvent(touch, finger, 640, 480, 14, 0);
+	assert(pan.size() == 1);
+	assert(pan[0].Kind == InputIntentKind::ViewportPan);
+	assert(pan[0].Phase == InputIntentPhase::Begin);
 	finger.type = SDL_EVENT_FINGER_CANCELED;
 	const std::vector<InputIntent> canceled =
-		PeonPadAdaptSDL3TouchEvent(touch, finger, 640, 480, 13, 0);
+		PeonPadAdaptSDL3TouchEvent(touch, finger, 640, 480, 15, 0);
 	assert(canceled.size() == 1);
+	assert(canceled[0].Kind == InputIntentKind::ViewportPan);
 	assert(canceled[0].Phase == InputIntentPhase::Cancel);
+	assert(touch.ContactCount() == 0);
+	assert(!touch.IsPanning());
+	assert(!touch.SuppressPointerEvents());
 
 	const PeonPadSDL3FocusEventPolicy focus =
 		PeonPadGetSDL3FocusEventPolicy(

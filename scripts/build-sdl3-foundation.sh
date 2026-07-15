@@ -59,7 +59,7 @@ esac
 cmake -E remove_directory "$BUILD_DIR"
 cmake --fresh -S "$ROOT_DIR" -B "$BUILD_DIR" -G "Unix Makefiles" \
   "${CMAKE_ARGS[@]}"
-cmake --build "$BUILD_DIR" --target peonpad_sdl3_smoke --parallel
+cmake --build "$BUILD_DIR" --parallel
 
 if [[ "$TARGET" == macos ]]; then
   BINARY="$BUILD_DIR/peonpad_sdl3_smoke"

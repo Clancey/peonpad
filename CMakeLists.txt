@@ -45,9 +45,16 @@ if(BUILD_TESTING AND
     engine/stratagus/third-party/SDL/include
   )
   target_compile_features(peonpad_input_intent_test PRIVATE cxx_std_17)
+  target_compile_options(peonpad_input_intent_test PRIVATE
+    "$<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-UNDEBUG>"
+  )
   add_test(
     NAME peonpad_input_intent
     COMMAND peonpad_input_intent_test
+  )
+  add_test(
+    NAME peonpad_input_assertions_active
+    COMMAND peonpad_input_intent_test --verify-assertions
   )
   add_test(
     NAME peonpad_script_guardrails
@@ -58,6 +65,10 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_compile_definitions(peonpad_toolchain_probe PRIVATE
     PEONPAD_EXPECT_IOS=1
+  )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  target_compile_definitions(peonpad_toolchain_probe PRIVATE
+    PEONPAD_EXPECT_VISIONOS=1
   )
 else()
   target_compile_definitions(peonpad_toolchain_probe PRIVATE

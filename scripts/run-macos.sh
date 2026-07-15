@@ -63,7 +63,7 @@ done
 
 case "$PROFILE" in
   wc2)
-    [[ -n "$DATA_PATH" ]] || DATA_PATH="$ROOT_DIR/ref/data.Wargus"
+    [[ -n "$DATA_PATH" ]] || DATA_PATH="$ROOT_DIR/data.Wargus"
     ;;
   aleona)
     [[ -n "$DATA_PATH" ]] || DATA_PATH="$ROOT_DIR/assets/aleonas-tales/source"

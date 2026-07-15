@@ -73,8 +73,8 @@ icons, and the build verifies that every declared raster is in the bundle.
 
 ## Remaining Phase 2 acceptance
 
-The command-line app is deliberately unsigned. Generate the native Xcode
-project used for automatic personal-team signing with:
+After staging owned Warcraft II data, generate the native Xcode project used
+for automatic personal-team signing with:
 
 ```sh
 ./scripts/generate-ios-xcode.sh
@@ -86,16 +86,14 @@ choose your Personal Team. Select the connected iPad as the run destination
 and press Run. This uses only Xcode and the Apple account stored by Xcode; no
 third-party credential tool is involved.
 
-The generator removes its script-owned build tree first so stale
+The generator defaults to ignored `build/ios-wc2-data` and removes its
+script-owned build tree first so stale
 ExternalProject caches cannot retain an incompatible CMake generator. The
 generated project has been proven through a complete unsigned Xcode Release
 build. Its top-level PeonPad target is native Xcode while vendored
 dependencies use their verified single-configuration CMake builds. A
 connected, paired iPad and a signing team configured natively in Xcode are
-still required to install it. Phase 2 is not
-accepted until it launches on the M2 iPad, reaches the Stratagus menu, and an
-Aleona match is played. At the time of this build, `xcrun devicectl` reports no
-connected devices and the keychain reports no code-signing identity.
-
-Do not start Phase 3 input behavior until that physical-device acceptance test
-passes.
+still required to install it. Physical M2 iPad testing has since accepted
+launch, menus, Warcraft II campaigns and skirmishes, Metal rendering, audio,
+save/load, and the current touch controls; see `ipad-test-notes.md` for the
+remaining regression matrix.

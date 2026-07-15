@@ -12,8 +12,8 @@ is the only complete non-Blizzard payload available without an import step. It
 is a test payload, not a disguised or expanded edition of Warcraft II. Its
 current asset audit also prevents distribution.
 
-For private USB testing, the repository already contains the user's extracted
-Warcraft II runtime at `ref/data.Wargus`. A device-only staging copy excludes
+For private USB testing, an ignored local Warcraft II runtime is supplied as
+`data.Wargus`. A device-only staging copy excludes
 the redundant 468 MB installer MPQ and produces a roughly 296 MB payload. The
 2026-07-12 signed iPad build now runs that Warcraft II payload instead of
 Aleona. Neither the extracted data nor the staged copy may be committed.
@@ -25,7 +25,8 @@ Recreate that private payload with:
 ```
 
 The staging script also removes incompatible legacy custom modes from the
-device-facing Standard Game list without modifying `ref/data.Wargus`.
+device-facing Standard Game list without modifying its source. Set
+`PEONPAD_WC2_DATA_DIR=/path/to/data.Wargus` when the source is outside the repo.
 
 The iPad runs Stratagus as a native ARM64 iPadOS executable with SDL2 and
 Metal. The Windows installer `.exe`, `.bin`, and MPQ are source material for

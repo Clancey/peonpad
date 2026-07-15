@@ -1,6 +1,6 @@
 # PeonPad build status
 
-Status captured: 2026-07-12
+Status updated: 2026-07-15
 
 Remote-to-local handoff updated: 2026-07-11
 
@@ -11,10 +11,17 @@ three-finger camera pan is now working in device testing. Current findings,
 content decisions, and the control design are recorded in
 [ipad-test-notes.md](ipad-test-notes.md).
 
-The private device profile now uses the existing extracted Warcraft II payload
-from `ref/data.Wargus`, staged without its redundant installer MPQ. The engine
+The public device profile now accepts an ignored root-level or external
+`data.Wargus`, staged without its redundant installer MPQ. The engine
 remains a native ARM64 iPadOS/Metal build; no Windows executable is run or
 emulated. Proprietary data remains ignored and is not part of the repository.
+
+The public preparation path no longer requires the private `ref/` fixture.
+`scripts/prepare-ipad-build.sh` accepts either the exact validated English GOG
+Battle.net Edition 2.02 installer pair or an existing `data.Wargus`, builds the
+host tools, stages the payload, and generates the native Xcode project. The
+already-extracted route has completed locally from a clean host build tree. A
+true unrelated clean clone and the raw-installer branch remain acceptance work.
 
 The first delayed-touch recognizer was rejected during physical testing after
 it swallowed taps in gameplay and in-game menus. The installed recovery build
@@ -53,65 +60,38 @@ This is the handoff point for resuming the active PeonPad goal with a physical
 M2 iPad Pro. It distinguishes completed engineering from acceptance work that
 still requires the device or external licensing evidence.
 
-## Remote Mac to local Mac handoff
+## Public build handoff
 
-Development through the first native iOS application was performed on the
-remote Mac. The pushed GitHub revision is the authoritative portable project
-state. The ignored `ref/`, `assets/aleonas-tales/source/`, `build/`, and
-`runtime/` trees are intentionally not portable through Git and must not be
-added to the repository.
+The pushed GitHub source is now the authoritative portable build input. The
+ignored `ref/`, `data.Wargus`, `build/`, and `runtime/` trees are local state and
+must never be added to the repository.
 
-At handoff time the remote Mac reports:
+From a clone, install the prerequisites shown in the root README and choose one
+preparation route:
 
-```text
-Xcode 26.6 (17F113)
-iPhoneOS SDK 26.5
-xcrun devicectl list devices: No devices found.
-security find-identity -p codesigning: 0 valid identities found
+```sh
+./scripts/prepare-ipad-build.sh --installer "/path/to/validated/setup.exe"
 ```
 
-Consequently, the current source has produced a valid unsigned arm64 iOS app,
-but no PeonPad build has yet been signed, installed, launched, or exercised on
-a physical iPad. This is the precise resume boundary; do not interpret the
-locally successful Xcode build as Phase 2 acceptance.
+or:
 
-On the local Mac:
+```sh
+./scripts/prepare-ipad-build.sh --data "/path/to/data.Wargus"
+```
 
-1. Pull the current GitHub `main` branch.
-2. Restore the required local-only reference material under `ref/` without
-   committing it. Run `./scripts/preflight.sh` and confirm the locked reference
-   digest printed below. If the reference material is intentionally different,
-   validate it before updating `config/inputs.lock`; do not bypass the guard.
-3. Restore a local-test Aleona tree at `assets/aleonas-tales/source/`, or replace
-   it with a verified compatible libre payload. A fresh clone intentionally
-   cannot generate the app project without one of those payloads.
-4. Run `./scripts/build-macos.sh` first. The iOS generator requires the host
-   `toluapp` produced by that build.
-5. Connect and trust the unlocked iPad, enable Developer Mode if requested,
-   and confirm it appears in `xcrun devicectl list devices`.
-6. Add the Apple ID only through Xcode's native **Settings → Accounts** flow and
-   allow Xcode to create an Apple Development certificate.
-7. Run `./scripts/generate-ios-xcode.sh`, open
-   `build/ios-xcode/stratagus.xcodeproj`, select the `stratagus` target and the
-   Personal Team, select the iPad, and press **Run**. If the fixed
-   `org.peonpad.ios` identifier is unavailable, use a unique local bundle ID in
-   Xcode for the first test and record the change before making it permanent.
-8. Complete the physical acceptance checklist later in this document and save
-   device logs/screenshots outside `ref/`.
+The command runs the public preflight, creates a clean host build, stages an
+ignored Warcraft II payload and generates
+`build/ios-xcode/stratagus.xcodeproj`. It does not download game data, install
+packages, modify the source data, or manage Apple credentials.
 
-The next engineering gate is deliberately narrow: get the current Aleona-based
-vertical slice through one complete physical-device match. After it passes,
-implement Phase 3 touch/Pencil/pointer input. Actual Warcraft II on iPad is a
-later and separate Phase 4 milestone: add a Files/`UIDocumentPicker` import and
-validation flow for the user's locally extracted `data.Wargus`, then verify
-campaigns, skirmishes, audio, caching, and save/load. Blizzard content must
-remain local and must never be committed or distributed.
+Connect and trust the iPad, confirm it appears in
+`xcrun devicectl list devices`, then choose the Personal Team and connected
+device in Xcode. A unique bundle identifier may still be required for a new
+Apple account.
 
-The Generals iOS reference reinforces the expected device-only work after the
-first launch: lifecycle-safe render/simulation pausing, cancelled-touch
-handling, gesture arbitration, persistent device logs, and memory profiling.
-PeonPad does not need Generals' DXVK/Vulkan/MoltenVK translation stack because
-Stratagus already renders through SDL2's Metal backend.
+Maintainers can separately run `./scripts/preflight.sh --maintainer` to verify
+the original private evidence fixture. That check is intentionally outside the
+public installation contract.
 
 ## Executive status
 
@@ -130,8 +110,8 @@ not be published or distributed.
 
 | Goal | State | Current evidence |
 | --- | --- | --- |
-| Goal 0 — reproducible baseline | Complete | `scripts/preflight.sh` passes; all input revisions and tools are locked; `ref/` is ignored, untracked, and unchanged. |
-| Goal 1 — macOS baseline | Complete | The PeonPad-built arm64 engine completed both a WC2 skirmish using read-only `ref/data.Wargus` and an independent Aleona match. Writable state was isolated under `runtime/`. |
+| Goal 0 — reproducible baseline | Complete | Public preflight passes from tracked source snapshots; optional maintainer mode preserves the private reference gate. |
+| Goal 1 — macOS baseline | Complete | A clean host build produces Stratagus, Wargus, `wartool`, `pudconvert`, and the required `toluapp`; runtime state is isolated under `runtime/`. |
 | Goal 2 — iOS arm64 libraries | Complete | Stratagus, Wargus data layer, SDL2, SDL2_image, SDL2_mixer, Lua, tolua++, zlib, PNG, Ogg, Vorbis, Theora, and the remaining confirmed dependencies build as iOS arm64 artifacts. Architecture/platform verification passes. |
 | Goal 3 — first playable iPad slice | Physical regression in progress | The signed app launches on the M2 iPad; campaigns and skirmishes render and play; manual save, autosave, load, and repeated Quit-to-Menu checks pass. A complete-match regression remains. The Aleona snapshot is not redistribution-cleared. |
 | Goal 4 — Apple input | In progress | One-finger selection, leftmost-target two-finger commands, and three-finger camera pan are implemented and undergoing physical regression testing. Discoverable Shift/Control/Alt controls are designed but not implemented. |
@@ -219,10 +199,10 @@ entry points run the strict audit and stop before compilation. See
 5. In **Xcode → Settings → Accounts**, add the Apple ID natively and allow
    Xcode to create a Personal Team development certificate. No third-party
    credential tool is used.
-6. From the PeonPad root, regenerate the native project:
+6. From the PeonPad root, prepare the native project from owned data:
 
    ```sh
-   ./scripts/generate-ios-xcode.sh
+   ./scripts/prepare-ipad-build.sh --data "/path/to/data.Wargus"
    open build/ios-xcode/stratagus.xcodeproj
    ```
 
@@ -231,31 +211,32 @@ entry points run the strict audit and stop before compilation. See
    **Run**.
 8. Verify the PeonPad launch mark appears, the app remains landscape, the menu
    stays inside safe areas at Retina resolution, and no import prompt appears.
-9. Start an Aleona skirmish, verify Metal rendering and OGG audio, play through
+9. Start a Warcraft II skirmish, verify Metal rendering and OGG audio, play through
    a complete match, then relaunch and confirm preferences/saves remain inside
    the application container.
-10. Capture Xcode device-console output and any visual defects. Re-run
-    `scripts/reference-digest.sh` after testing and confirm the locked digest is
-    unchanged.
+10. Capture Xcode device-console output and any visual defects outside the
+    repository's proprietary-data and build directories.
 
-Passing all ten steps completes the remaining physical portion of Goal 3. It
-does not clear Aleona for distribution; that remains a separate content gate.
-Only after the physical match passes should Goal 4 input implementation begin.
+Passing all ten steps completes the remaining full-match regression. It does
+not grant redistribution rights for the user's Warcraft II data.
 
 ## Revalidation commands
 
-The iOS application commands below require the ignored local-test snapshot at
-`assets/aleonas-tales/source/` in this existing workspace. A fresh GitHub clone
-will intentionally not contain that unresolved payload; use a future
-license-cleared Aleona snapshot or another verified compatible libre payload.
+Public source and toolchain checks:
 
 ```sh
 ./scripts/preflight.sh
 ./tests/script-guardrails.sh
 ./scripts/test-ios-viewport.sh
-./scripts/build-ios-libs.sh
-./scripts/build-ios-app.sh
-./scripts/audit-aleona-assets.sh --local-test
+./scripts/build-macos.sh
+PEONPAD_WC2_DATA_DIR="/path/to/data.Wargus" ./scripts/smoke-macos.sh
+```
+
+Optional private maintainer evidence checks:
+
+```sh
+./scripts/preflight.sh --maintainer
+./tests/script-guardrails.sh --maintainer
 ./scripts/reference-digest.sh
 ```
 

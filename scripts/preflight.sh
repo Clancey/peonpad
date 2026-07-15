@@ -7,6 +7,28 @@ ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 INPUT_LOCK="$ROOT_DIR/config/inputs.lock"
 FAILURES=0
 IOS_SDK_PATH=""
+MODE=public
+
+usage() {
+  cat <<'EOF'
+Usage: ./scripts/preflight.sh [--maintainer]
+
+Checks the tracked PeonPad sources and Apple build toolchain. Maintainers can
+add --maintainer to verify the private, immutable ref/ fixture as well.
+EOF
+}
+
+case "$#" in
+  0) ;;
+  1)
+    case "$1" in
+      --maintainer) MODE=maintainer ;;
+      -h|--help) usage; exit 0 ;;
+      *) printf 'unexpected argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    esac
+    ;;
+  *) usage >&2; exit 2 ;;
+esac
 
 pass() {
   printf 'PASS  %s\n' "$1"
@@ -71,7 +93,31 @@ verify_git_input() {
   fi
 }
 
-printf 'PeonPad Goal 0 preflight\n'
+verify_staged_input() {
+  label=$1
+  section=$2
+  directory=$3
+  marker="$directory/.peonpad-source-revision"
+
+  if [ ! -d "$directory" ] || [ ! -f "$marker" ]; then
+    fail "$label tracked source snapshot is incomplete: ${directory#"$ROOT_DIR/"}"
+    return
+  fi
+
+  expected_revision=$(manifest_value "$section" revision)
+  actual_revision=$(sed -n '1p' "$marker")
+  if [ -n "$expected_revision" ] && [ "$actual_revision" = "$expected_revision" ]; then
+    pass "$label tracked source snapshot matches $expected_revision"
+  else
+    fail "$label tracked source snapshot mismatch: expected $expected_revision, got ${actual_revision:-none}"
+  fi
+}
+
+if [ "$MODE" = maintainer ]; then
+  printf 'PeonPad maintainer preflight\n'
+else
+  printf 'PeonPad public build preflight\n'
+fi
 printf 'Workspace: %s\n\n' "$ROOT_DIR"
 
 if [ ! -f "$INPUT_LOCK" ]; then
@@ -91,20 +137,7 @@ else
   fi
 fi
 
-START_REF_DIGEST=""
-if [ -d "$ROOT_DIR/ref" ]; then
-  START_REF_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
-  if [ -n "$EXPECTED_REF_DIGEST" ] && \
-      [ "$START_REF_DIGEST" = "$EXPECTED_REF_DIGEST" ]; then
-    pass "immutable ref/ digest matches config/inputs.lock"
-  else
-    fail "ref/ digest differs from config/inputs.lock (got $START_REF_DIGEST)"
-  fi
-else
-  fail "ref/ directory is missing"
-fi
-
-if git -C "$ROOT_DIR" check-ignore -q ref; then
+if git -C "$ROOT_DIR" check-ignore -q --no-index ref/; then
   pass "ref/ is ignored by Git"
 else
   fail "ref/ is not ignored by Git"
@@ -116,15 +149,42 @@ else
   fail "ref/ contains tracked files"
 fi
 
-printf '\nRequired immutable inputs\n'
-verify_git_input "Stratagus source" "sources.stratagus" \
-  "${PEONPAD_REF_STRATAGUS:-$ROOT_DIR/ref/stratagus}"
-verify_git_input "Wargus source" "sources.wargus" \
-  "${PEONPAD_REF_WARGUS:-$ROOT_DIR/ref/wargus}"
-verify_git_input "Stratagus Vita source" "sources.stratagus_vita" \
-  "${PEONPAD_REF_VITA:-$ROOT_DIR/ref/stratagus-vita}"
-verify_git_input "Aleona's Tales source" "assets.aleonas_tales" \
-  "${PEONPAD_REF_ALEONA:-$ROOT_DIR/ref/aleonas-tales}"
+if git -C "$ROOT_DIR" check-ignore -q --no-index data.Wargus/; then
+  pass "user-owned data.Wargus/ is ignored by Git"
+else
+  fail "data.Wargus/ is not ignored by Git"
+fi
+
+printf '\nTracked build inputs\n'
+verify_staged_input "Stratagus" "sources.stratagus" \
+  "$ROOT_DIR/engine/stratagus"
+verify_staged_input "Wargus" "sources.wargus" \
+  "$ROOT_DIR/game/wargus"
+
+START_REF_DIGEST=""
+if [ "$MODE" = maintainer ]; then
+  printf '\nMaintainer reference inputs\n'
+  if [ -d "$ROOT_DIR/ref" ]; then
+    START_REF_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
+    if [ -n "$EXPECTED_REF_DIGEST" ] && \
+        [ "$START_REF_DIGEST" = "$EXPECTED_REF_DIGEST" ]; then
+      pass "immutable ref/ digest matches config/inputs.lock"
+    else
+      fail "ref/ digest differs from config/inputs.lock (got $START_REF_DIGEST)"
+    fi
+  else
+    fail "ref/ directory is missing"
+  fi
+
+  verify_git_input "Stratagus source" "sources.stratagus" \
+    "${PEONPAD_REF_STRATAGUS:-$ROOT_DIR/ref/stratagus}"
+  verify_git_input "Wargus source" "sources.wargus" \
+    "${PEONPAD_REF_WARGUS:-$ROOT_DIR/ref/wargus}"
+  verify_git_input "Stratagus Vita source" "sources.stratagus_vita" \
+    "${PEONPAD_REF_VITA:-$ROOT_DIR/ref/stratagus-vita}"
+  verify_git_input "Aleona's Tales source" "assets.aleonas_tales" \
+    "${PEONPAD_REF_ALEONA:-$ROOT_DIR/ref/aleonas-tales}"
+fi
 
 printf '\nHost toolchain\n'
 if command -v cmake >/dev/null 2>&1; then
@@ -203,7 +263,7 @@ if command -v cmake >/dev/null 2>&1; then
   fi
 fi
 
-if [ -n "$START_REF_DIGEST" ]; then
+if [ "$MODE" = maintainer ] && [ -n "$START_REF_DIGEST" ]; then
   END_REF_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
   if [ "$START_REF_DIGEST" = "$END_REF_DIGEST" ]; then
     pass "ref/ remained byte-for-byte unchanged during preflight"
@@ -214,7 +274,11 @@ fi
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
-  printf 'Goal 0 preflight passed.\n'
+  if [ "$MODE" = maintainer ]; then
+    printf 'Maintainer preflight passed.\n'
+  else
+    printf 'Public build preflight passed.\n'
+  fi
   exit 0
 fi
 

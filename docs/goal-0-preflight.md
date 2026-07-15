@@ -8,7 +8,10 @@ Goal 0 is accepted. All required source repositories, submodules, dependency
 snapshots, reference content, and Apple toolchains are locked and verified.
 Both the native macOS and iPhoneOS arm64 compiler probes pass.
 
-The authoritative machine-readable record is `config/inputs.lock`.
+The authoritative machine-readable record is `config/inputs.lock`. The public
+and maintainer contracts are now separate: a clone verifies the tracked source
+snapshots and Apple toolchain, while maintainers can additionally verify the
+private evidence fixture.
 
 ## Passing evidence
 
@@ -49,12 +52,23 @@ that audit is completed.
 ## Reproduction
 
 ```sh
-./scripts/reference-digest.sh
 ./scripts/preflight.sh
 ./tests/script-guardrails.sh
 file build/preflight-macos/libpeonpad_toolchain_probe.a
 lipo -info build/preflight-macos/libpeonpad_toolchain_probe.a
 ```
 
-`preflight.sh` downloads nothing and never writes into `ref/`. Any revision,
-toolchain, or reference-content drift turns it red.
+The public commands download nothing and do not require `ref/`. They verify the
+tracked Stratagus and Wargus revision markers, proprietary-data ignore rules,
+host tools, and macOS/iOS ARM64 compiler probes.
+
+Maintainers can reproduce the original immutable-input evidence with:
+
+```sh
+./scripts/reference-digest.sh
+./scripts/preflight.sh --maintainer
+./tests/script-guardrails.sh --maintainer
+```
+
+Maintainer mode never writes into `ref/`; revision, worktree, or content drift
+turns that optional gate red without blocking a public user build.

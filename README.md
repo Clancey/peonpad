@@ -129,16 +129,29 @@ Shift/Control/Alt modifier dock is designed but not yet implemented.
 ### What you need
 
 - An Apple Silicon Mac with full Xcode installed and first-launch setup complete
-- CMake 3.27 or newer, Git and `pkg-config`
+- Homebrew, CMake 3.27 or newer, Git and `pkg-config`
 - An iPad running iPadOS 16 or newer, a USB cable and Developer Mode
 - An Apple ID available to Xcode for a Personal Team development signature
-- A legally owned Warcraft II installation supported by the Wargus extractor
-- A locally extracted folder named `data.Wargus`
+- A legally owned Warcraft II installation or an extracted `data.Wargus`
 
 The accepted device is an M2 iPad Pro on iPadOS 26.5.2. The deployment target
 is iPadOS 16.0. Other iPad hardware still requires testing.
 
-### 1. Clone and verify the source tree
+Install the public build dependencies once:
+
+```sh
+brew install cmake pkg-config
+```
+
+The raw-installer route also needs:
+
+```sh
+brew install innoextract ffmpeg
+```
+
+PeonPad checks for these tools but never installs or upgrades packages for you.
+
+### 1. Clone PeonPad
 
 ```sh
 git clone https://github.com/chrissotraidis/peonpad.git
@@ -146,75 +159,96 @@ cd peonpad
 ./scripts/preflight.sh
 ```
 
-PeonPad uses a locked, local-only `ref/` fixture to make engine, dependency and
-extraction inputs reproducible. A fresh clone intentionally does not contain
-that fixture and **cannot complete the current build gate yet**. The proven USB
-deployment path therefore assumes an authorized maintainer has restored the
-fixture described by [`config/inputs.lock`](config/inputs.lock).
+The public preflight checks the tracked source snapshots, ignore rules, Xcode,
+the iPhoneOS SDK and both compiler probes. It does not require the private
+maintainer fixture.
 
-Do not work around a failed digest with unverified downloads or publish the
-fixture as part of a build. Automating clean-clone hydration without weakening
-the game-data boundary is an explicit release task. Once the authorized fixture
-is present, `./scripts/preflight.sh` must pass before continuing.
+### 2. Prepare the Xcode project
 
-### 2. Extract your own game data
+Choose one route. The command builds the host tools, prepares and stages your
+game data, and generates `build/ios-xcode/stratagus.xcodeproj`.
 
-Use the upstream Wargus extractor appropriate to your legally owned release on
-the desktop. Upstream documents the macOS extraction path in the
-[Wargus README](https://github.com/Wargus/wargus#extracting-data-for-macos).
-The PeonPad macOS build also produces `build/macos/wargus/wartool`.
+**From the validated English GOG installer**
 
-The expected result is a directory with this marker:
+Keep these two original files together in the same directory:
 
 ```text
-data.Wargus/
-└── scripts/
-    └── stratagus.lua
+setup_warcraft_ii_2.02_v5_(78104).exe
+setup_warcraft_ii_2.02_v5_(78104)-1.bin
 ```
 
-Place that directory at `ref/data.Wargus`. It is covered by `.gitignore` and
-must remain local.
+Then run:
+
+```sh
+./scripts/prepare-ipad-build.sh --installer \
+  "$HOME/Downloads/setup_warcraft_ii_2.02_v5_(78104).exe"
+```
+
+This automated route is pinned to Warcraft II Battle.net Edition 2.02 v5,
+English, GOG build 78104. PeonPad verifies both files by SHA-256 before running
+`innoextract`, then converts the data with the `wartool` built from this repo.
+Other editions are deliberately rejected rather than guessed at.
+
+**From an existing `data.Wargus`**
+
+If Wargus has already extracted your legally owned game, run:
+
+```sh
+./scripts/prepare-ipad-build.sh --data "/path/to/data.Wargus"
+```
+
+For unsupported installers, use the extraction guidance in the
+[Wargus README](https://github.com/Wargus/wargus#extracting-data-for-macos),
+then use this `--data` route. PeonPad validates the expected scripts, extraction
+marker, graphics, maps and sounds before staging anything.
 
 > [!WARNING]
 > Do not copy the original `.exe`, `.bin`, `INSTALL.MPQ`, disc image, or store
 > installer into the app bundle. Those files are desktop extraction inputs;
 > the iPad does not execute them.
 
-### 3. Stage a private iPad payload
+Both routes leave proprietary content only in ignored local directories. The
+staging step removes the redundant installer MPQ and incompatible custom modes
+without changing the source data.
 
-```sh
-./scripts/stage-ios-wc2-test-data.sh
-```
-
-This creates ignored `build/ios-wc2-data`, removes the redundant installer MPQ
-and filters the known-incompatible custom modes. Your source folder is not
-modified.
-
-### 4. Build the host tools and Xcode project
-
-```sh
-./scripts/build-macos.sh
-PEONPAD_IOS_DATA_DIR="$PWD/build/ios-wc2-data" \
-  ./scripts/generate-ios-xcode.sh
-open build/ios-xcode/stratagus.xcodeproj
-```
-
-The host build supplies the `toluapp` code generator. The second command creates
-a native Xcode project configured with your ignored staging directory.
-
-### 5. Sign and deploy over USB
+### 3. Sign and deploy over USB
 
 1. Connect and unlock the iPad, tap **Trust**, and enable Developer Mode if
    iPadOS requests it.
 2. Confirm the device appears in `xcrun devicectl list devices`.
 3. In **Xcode → Settings → Accounts**, add your Apple ID. Credentials remain in
    Xcode; PeonPad never receives them.
-4. Select the `stratagus` target, choose your Personal Team under **Signing &
+4. Open `build/ios-xcode/stratagus.xcodeproj`.
+5. Select the `stratagus` target, choose your Personal Team under **Signing &
    Capabilities**, and use a unique bundle identifier if Xcode requests one.
-5. Select the connected iPad and press **Run**.
+6. Select the connected iPad and press **Run**.
 
 The result runs directly on the iPad. The Mac is needed to compile and sign the
 developer build, not to stream or host gameplay.
+
+> [!TIP]
+> This is a source build with CMake, Xcode signing and user-owned game data.
+> If that toolchain is unfamiliar, using Codex from the cloned repository is
+> recommended: ask it to follow this installation section and diagnose any
+> preflight or Xcode error. Keep your installer and `data.Wargus` local; they
+> should never be uploaded, committed or pasted into a task.
+
+<details>
+  <summary><strong>Manual command breakdown</strong></summary>
+
+```sh
+./scripts/preflight.sh
+./scripts/build-macos.sh
+PEONPAD_WC2_DATA_DIR="/path/to/data.Wargus" \
+  ./scripts/stage-ios-wc2-test-data.sh
+./scripts/generate-ios-xcode.sh
+open build/ios-xcode/stratagus.xcodeproj
+```
+
+`generate-ios-xcode.sh` defaults to the staged `build/ios-wc2-data` payload.
+The one-command preparation script runs this same sequence and adds installer
+extraction when `--installer` is selected.
+</details>
 
 <details>
   <summary><strong>Fast macOS development loop</strong></summary>
@@ -225,20 +259,23 @@ developer build, not to stream or host gameplay.
 ./scripts/run-macos.sh --profile wc2 -- -W
 ```
 
-Runtime state stays under ignored `runtime/`; the reference data remains
-read-only.
+These defaults use ignored root-level `data.Wargus`. Pass `--data PATH` to the
+runtime command, or `PEONPAD_WC2_DATA_DIR=PATH` to the smoke command, when your
+extracted folder lives elsewhere. Runtime state stays under ignored `runtime/`.
 </details>
 
 <details>
-  <summary><strong>Unsigned iOS build gates</strong></summary>
+  <summary><strong>Maintainer reference verification</strong></summary>
 
 ```sh
-./scripts/build-ios-libs.sh
-./scripts/build-ios-app.sh
+./scripts/preflight.sh --maintainer
+./scripts/build-macos.sh --maintainer
+./tests/script-guardrails.sh --maintainer
 ```
 
-These verify that the static libraries and app binary contain physical-device
-iOS ARM64 objects. They do not replace Xcode signing and an actual device run.
+This optional mode verifies the private, immutable `ref/` evidence fixture from
+the original port. Normal users do not need or have that fixture and should not
+create it.
 </details>
 
 ## Project boundary
@@ -311,7 +348,7 @@ is explanatory, not legal advice.
 - [ ] Accept Magic Keyboard, mouse and trackpad combinations on hardware
 - [ ] Test local and online multiplayer on iPad
 - [ ] Repair or replace replay playback
-- [ ] Automate clean-clone reference hydration
+- [ ] Validate the public installer route from an unrelated clean clone
 - [ ] Find a redistribution-cleared libre content path
 
 ## Contributing

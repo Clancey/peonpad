@@ -18,3 +18,7 @@ Warcraft and Blizzard Entertainment are trademarks or registered trademarks
 of Blizzard Entertainment, Inc. PeonPad is not affiliated with or endorsed by
 Blizzard Entertainment.
 
+The opt-in direct SDL3 foundation includes SDL 3.4.12, SDL_image 3.4.4, and
+SDL_mixer 3.2.4 under their Zlib licenses. Complete top-level notices are in
+LICENSES/; bundled codec notices remain intact inside the immutable upstream
+source archives.

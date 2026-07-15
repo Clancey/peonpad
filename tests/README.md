@@ -33,3 +33,10 @@ runtime, then compiles an arm64 iOS Simulator platform-7 probe. The full
 Designed-for-iPad build and optional launch are exercised separately by
 `scripts/build-vision-compat-simulator.sh`; neither substitutes for Vision Pro
 hardware acceptance.
+
+The opt-in SDL3 CTest configuration adds `peonpad_sdl3_input_adapter` and
+`peonpad_sdl3_foundation`. These compile the SDL3 event adapter against the
+existing controller/touch intent state and run a headless SDL3 core,
+SDL3_image, SDL3_mixer, filesystem, renderer, texture, and gamepad smoke
+payload. `scripts/build-sdl3-foundation.sh macos` additionally runs the native
+Metal/window-properties path; simulator targets are compile/link evidence.

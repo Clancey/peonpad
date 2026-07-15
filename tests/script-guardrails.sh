@@ -36,6 +36,8 @@ fi
 "$ROOT_DIR/scripts/prepare-ipad-build.sh" --help >/dev/null
 "$ROOT_DIR/scripts/preflight-vision-compat.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
+"$ROOT_DIR/scripts/build-sdl3-foundation.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
   print -u2 "prepare script accepted multiple input modes"
@@ -46,11 +48,30 @@ if "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" \
   print -u2 "Vision compatibility build accepted an unsupported option"
   exit 1
 fi
+if "$ROOT_DIR/scripts/build-sdl3-foundation.sh" \
+    unsupported >/dev/null 2>&1; then
+  print -u2 "SDL3 foundation build accepted an unsupported target"
+  exit 1
+fi
 
 VISION_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-simulator-arm64.cmake"
 rg -q 'CMAKE_OSX_SYSROOT iphonesimulator' "$VISION_TOOLCHAIN"
 rg -q 'SUPPORTED_PLATFORMS' "$VISION_TOOLCHAIN"
 rg -q 'SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD YES' "$VISION_TOOLCHAIN"
+
+XROS_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-simulator-arm64.cmake"
+rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_TOOLCHAIN"
+rg -q 'CMAKE_OSX_SYSROOT xrsimulator' "$XROS_TOOLCHAIN"
+
+rg -q 'option\(PEONPAD_ENABLE_SDL3' "$ROOT_DIR/CMakeLists.txt"
+rg -q 'SDL-release-3\.4\.12\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
+rg -q 'SDL_image-release-3\.4\.4\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
+rg -q 'SDL_mixer-release-3\.2\.4\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
+if find "$ROOT_DIR/third_party/sdl3" -iname '*sdl2-compat*' -print -quit \
+    | grep -q .; then
+  print -u2 "sdl2-compat entered the direct SDL3 dependency tree"
+  exit 1
+fi
 
 SIMCTL_TEST_ROOT="$TEST_RUNTIME/simctl"
 SIMCTL_TEST_BIN="$SIMCTL_TEST_ROOT/bin"

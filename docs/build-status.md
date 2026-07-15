@@ -51,6 +51,14 @@ fields reactivate UIKit's software keyboard when tapped. SDL's separate
 hardware keyboard, mouse, and trackpad paths remain enabled for Magic Keyboard
 and external pointer testing.
 
+The next stacked layer now has an opt-in direct SDL3 foundation. SDL 3.4.12,
+SDL_image 3.4.4, and SDL_mixer 3.2.4 are immutable local inputs; the default
+Stratagus application remains on SDL2. The public foundation payload runs both
+software and Metal renderers on macOS and links the full SDL3-family stack for
+iOS Simulator and native xrsimulator. This is dependency/API evidence, not a
+ported gameplay build or native visionOS shell. See
+[sdl3-foundation.md](sdl3-foundation.md).
+
 The existing iPad target now has a separate Designed-for-iPad Vision Pro
 simulator path. Xcode 26.6 advertises the scheme at a `visionOS Simulator`
 destination with the `Designed for [iPad,iPhone]` variant, while actually

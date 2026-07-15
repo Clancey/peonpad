@@ -1,0 +1,2 @@
+LICENSES/SDL3*.txt -text whitespace=-blank-at-eol,-blank-at-eof
+third_party/sdl3/sources/*.tar.gz binary

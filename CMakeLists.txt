@@ -17,12 +17,22 @@ option(PEONPAD_ENABLE_ENGINE
   "Configure staged Stratagus and Wargus sources"
   OFF
 )
+option(PEONPAD_ENABLE_SDL3
+  "Build the direct SDL3 foundation lane (SDL2 remains the default)"
+  OFF
+)
 
 add_library(peonpad_toolchain_probe STATIC tests/toolchain_probe.cpp)
 target_compile_features(peonpad_toolchain_probe PUBLIC cxx_std_17)
 
 include(CTest)
-if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(PEONPAD_ENABLE_SDL3)
+  include(cmake/PeonPadSDL3.cmake)
+endif()
+
+if(BUILD_TESTING AND
+    NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
+    NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
   add_executable(peonpad_input_intent_test
     tests/input_intent_test.cpp
     engine/stratagus/src/ui/controller_input.cpp

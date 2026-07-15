@@ -1461,6 +1461,69 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
 	}
 }
 
+bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent)
+{
+	switch (intent.Kind) {
+		case InputIntentKind::PointerMotion:
+			InputMouseMove(callbacks, intent.Timestamp, intent.Position.x, intent.Position.y);
+			return true;
+		case InputIntentKind::PointerButton:
+			switch (intent.Phase) {
+				case InputIntentPhase::Begin:
+					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
+					return true;
+				case InputIntentPhase::End:
+					InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
+					return true;
+				case InputIntentPhase::Cancel:
+					InputMouseButtonCancel(intent.Code);
+					if (&callbacks == &GameCallbacks && intent.Code == InputPrimaryButton) {
+						CancelMouseSelection();
+					}
+					return true;
+				case InputIntentPhase::Update:
+					return false;
+			}
+			return false;
+		case InputIntentKind::PointerExit:
+			InputMouseExit(callbacks, intent.Timestamp);
+			return true;
+		case InputIntentKind::ViewportPan:
+			if (&callbacks != &GameCallbacks || !UI.MouseViewport) {
+				return false;
+			}
+			if (intent.Phase == InputIntentPhase::Begin) {
+				const PixelPos position(intent.Position.x, intent.Position.y);
+				if (!UI.MouseViewport->IsInsideMapArea(position)) {
+					return false;
+				}
+				InputMouseButtonCancel(InputPrimaryButton);
+				CancelMouseSelection();
+				return true;
+			}
+			if (intent.Phase == InputIntentPhase::Update) {
+				const PixelDiff delta(intent.Delta.x, intent.Delta.y);
+				UI.MouseViewport->Set(UI.MouseViewport->MapPos,
+				                      UI.MouseViewport->Offset - delta);
+			}
+			return true;
+		case InputIntentKind::Key:
+			if (intent.Phase == InputIntentPhase::Begin) {
+				InputKeyButtonPress(callbacks, intent.Timestamp,
+				                    intent.Code, intent.Character);
+				return true;
+			}
+			if (intent.Phase == InputIntentPhase::End
+			    || intent.Phase == InputIntentPhase::Cancel) {
+				InputKeyButtonRelease(callbacks, intent.Timestamp,
+				                      intent.Code, intent.Character);
+				return true;
+			}
+			return false;
+	}
+	return false;
+}
+
 
 static const int HoldKeyDelay = 250;          /// Time to detect hold key
 static const int HoldKeyAdditionalDelay = 50; /// Time to detect additional hold key

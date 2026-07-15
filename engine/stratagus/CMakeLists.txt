@@ -303,6 +303,7 @@ set(ui_SRCS
 	src/ui/button_checks.cpp
 	src/ui/contenttype.cpp
 	src/ui/icons.cpp
+	src/ui/input_intent.cpp
 	src/ui/interface.cpp
 	src/ui/mainscr.cpp
 	src/ui/uibuttons_proc.cpp
@@ -482,6 +483,7 @@ set(stratagus_generic_HDRS
 	src/include/fow_utils.h
 	src/include/game.h
 	src/include/icons.h
+	src/include/input_intent.h
 	src/include/interface.h
 	src/include/iolib.h
 	src/include/luacallback.h

@@ -16,3 +16,8 @@ ordered Stratagus patch series.
 the host and checks full-screen 4:3, asymmetric safe insets, aspect fitting,
 and invalid geometry. Device acceptance remains necessary to verify the live
 UIKit insets and rendered result on the target iPad.
+
+The default CTest configuration also builds `peonpad_input_intent_test`. It
+checks platform-neutral pointer, key, context-action, and viewport-pan intent
+phases, propagation, cancellation, and the pure multi-touch gesture state
+without requiring game data.

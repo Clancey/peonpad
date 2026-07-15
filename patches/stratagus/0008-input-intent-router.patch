@@ -1,0 +1,819 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7accb04..30ae7f8 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -303,6 +303,7 @@ set(ui_SRCS
+ 	src/ui/button_checks.cpp
+ 	src/ui/contenttype.cpp
+ 	src/ui/icons.cpp
++	src/ui/input_intent.cpp
+ 	src/ui/interface.cpp
+ 	src/ui/mainscr.cpp
+ 	src/ui/uibuttons_proc.cpp
+@@ -482,6 +483,7 @@ set(stratagus_generic_HDRS
+ 	src/include/fow_utils.h
+ 	src/include/game.h
+ 	src/include/icons.h
++	src/include/input_intent.h
+ 	src/include/interface.h
+ 	src/include/iolib.h
+ 	src/include/luacallback.h
+diff --git a/src/include/interface.h b/src/include/interface.h
+index 1a210eb..e5a0bd1 100644
+--- a/src/include/interface.h
++++ b/src/include/interface.h
+@@ -39,6 +39,7 @@
+ #include "icons.h"
+ #endif
+ 
++#include "input_intent.h"
+ #include "stratagus.h"
+ #include "unitsound.h"
+ #include "vec2i.h"
+@@ -316,6 +317,10 @@ extern void HandleKeyRepeat(unsigned keycode, unsigned keychar);
+ extern void InputMouseButtonPress(const EventCallback &callbacks, unsigned ticks, unsigned button);
+ /// Called if any mouse button is released up
+ extern void InputMouseButtonRelease(const EventCallback &callbacks, unsigned ticks, unsigned button);
++/// Cancel a pressed mouse button without invoking gameplay callbacks
++extern void InputMouseButtonCancel(unsigned button);
++/// Cancel an in-progress map selection rectangle
++extern void CancelMouseSelection();
+ /// Called if the mouse is moved
+ extern void InputMouseMove(const EventCallback &callbacks, unsigned ticks, int x, int y);
+ /// Called if the mouse exits the game window (when supported by videomode)
+@@ -329,6 +334,8 @@ extern void InputKeyButtonPress(const EventCallback &callbacks, unsigned ticks,
+ extern void InputKeyButtonRelease(const EventCallback &callbacks, unsigned ticks, unsigned ikey, unsigned ikeychar);
+ /// Called to look for key timeouts
+ extern void InputKeyTimeout(const EventCallback &callbacks, unsigned ticks);
++/// Route a platform-neutral input intent to the active engine callbacks
++extern bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent);
+ 
+ /// Get double click delay
+ extern int GetDoubleClickDelay();
+diff --git a/src/ui/interface.cpp b/src/ui/interface.cpp
+index 5fea085..4c376fe 100644
+--- a/src/ui/interface.cpp
++++ b/src/ui/interface.cpp
+@@ -1394,6 +1394,13 @@ void InputMouseButtonRelease(const EventCallback &callbacks,
+ 	}
+ }
+ 
++void InputMouseButtonCancel(unsigned button)
++{
++	MouseButtons &= ~(0x01010101 << button);
++	LastMouseButton = 0;
++	MouseState = InitialMouseState;
++}
++
+ /**
+ **  Called if the mouse is moved
+ **
+@@ -1454,6 +1461,69 @@ void InputMouseTimeout(const EventCallback &callbacks, unsigned ticks)
+ 	}
+ }
+ 
++bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent)
++{
++	switch (intent.Kind) {
++		case InputIntentKind::PointerMotion:
++			InputMouseMove(callbacks, intent.Timestamp, intent.Position.x, intent.Position.y);
++			return true;
++		case InputIntentKind::PointerButton:
++			switch (intent.Phase) {
++				case InputIntentPhase::Begin:
++					InputMouseButtonPress(callbacks, intent.Timestamp, intent.Code);
++					return true;
++				case InputIntentPhase::End:
++					InputMouseButtonRelease(callbacks, intent.Timestamp, intent.Code);
++					return true;
++				case InputIntentPhase::Cancel:
++					InputMouseButtonCancel(intent.Code);
++					if (&callbacks == &GameCallbacks && intent.Code == InputPrimaryButton) {
++						CancelMouseSelection();
++					}
++					return true;
++				case InputIntentPhase::Update:
++					return false;
++			}
++			return false;
++		case InputIntentKind::PointerExit:
++			InputMouseExit(callbacks, intent.Timestamp);
++			return true;
++		case InputIntentKind::ViewportPan:
++			if (&callbacks != &GameCallbacks || !UI.MouseViewport) {
++				return false;
++			}
++			if (intent.Phase == InputIntentPhase::Begin) {
++				const PixelPos position(intent.Position.x, intent.Position.y);
++				if (!UI.MouseViewport->IsInsideMapArea(position)) {
++					return false;
++				}
++				InputMouseButtonCancel(InputPrimaryButton);
++				CancelMouseSelection();
++				return true;
++			}
++			if (intent.Phase == InputIntentPhase::Update) {
++				const PixelDiff delta(intent.Delta.x, intent.Delta.y);
++				UI.MouseViewport->Set(UI.MouseViewport->MapPos,
++				                      UI.MouseViewport->Offset - delta);
++			}
++			return true;
++		case InputIntentKind::Key:
++			if (intent.Phase == InputIntentPhase::Begin) {
++				InputKeyButtonPress(callbacks, intent.Timestamp,
++				                    intent.Code, intent.Character);
++				return true;
++			}
++			if (intent.Phase == InputIntentPhase::End
++			    || intent.Phase == InputIntentPhase::Cancel) {
++				InputKeyButtonRelease(callbacks, intent.Timestamp,
++				                      intent.Code, intent.Character);
++				return true;
++			}
++			return false;
++	}
++	return false;
++}
++
+ 
+ static const int HoldKeyDelay = 250;          /// Time to detect hold key
+ static const int HoldKeyAdditionalDelay = 50; /// Time to detect additional hold key
+diff --git a/src/ui/mouse.cpp b/src/ui/mouse.cpp
+index f4338a0..f28f44b 100644
+--- a/src/ui/mouse.cpp
++++ b/src/ui/mouse.cpp
+@@ -1764,6 +1764,16 @@ static void UIHandleButtonDown_OnMap(unsigned button)
+ 	}
+ }
+ 
++void CancelMouseSelection()
++{
++	if (CursorState != CursorStates::Rectangle) {
++		return;
++	}
++	CursorStartScreenPos = {0, 0};
++	GameCursor = UI.Point.Cursor;
++	CursorState = CursorStates::Point;
++}
++
+ static void UIHandleButtonDown_OnMinimap(unsigned button)
+ {
+ 	const Vec2i cursorTilePos = UI.Minimap.ScreenToTilePos(CursorScreenPos);
+@@ -2161,6 +2171,13 @@ void UIHandleButtonUp(unsigned button)
+ 				}
+ 			} else {
+ 				num = 0;
++#ifdef PEONPAD_IOS
++				if (!(KeyModifiers & (ModifierShift | ModifierControl | ModifierAlt))) {
++					UnSelectAll();
++					NetworkSendSelection((CUnit **)nullptr, 0);
++					SelectionChanged();
++				}
++#endif
+ 			}
+ 		}
+ 
+diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
+index 8232b44..79c8ac1 100644
+--- a/src/video/sdl.cpp
++++ b/src/video/sdl.cpp
+@@ -37,6 +37,7 @@
+ #include "stratagus.h"
+ 
+ #include "game.h"
++#include "input_intent.h"
+ #include "network.h"
+ #include "online_service.h"
+ #include "parameters.h"
+@@ -49,7 +50,6 @@
+ 
+ #include <climits>
+ #include <cmath>
+-#include <map>
+ #include <sstream>
+ #include <string>
+ #include <vector>
+@@ -584,6 +584,68 @@ static bool isTextInput(int key) {
+ 	return key >= 32 && key <= 128 && !(KeyModifiers & (ModifierAlt | ModifierControl | ModifierSuper));
+ }
+ 
++class SdlInputIntentTarget final : public InputIntentTarget
++{
++public:
++	explicit SdlInputIntentTarget(const EventCallback &callbacks) : Callbacks(callbacks) {}
++
++	bool Dispatch(const InputIntent &intent) override
++	{
++		return DispatchInputIntent(Callbacks, intent);
++	}
++
++private:
++	const EventCallback &Callbacks;
++};
++
++static InputIntentRouter SdlInputRouter;
++
++static bool RouteSdlInput(const EventCallback &callbacks, const InputIntent &intent)
++{
++	SdlInputIntentTarget target(callbacks);
++	return SdlInputRouter.Route(intent, target);
++}
++
++static void CancelSdlPointerInput(const EventCallback &callbacks, unsigned ticks)
++{
++	SdlInputIntentTarget target(callbacks);
++	SdlInputRouter.CancelPointer(target, ticks, KeyModifiers, {});
++}
++
++#ifdef PEONPAD_IOS
++static bool PeonPadShouldHandleKeyDirectly(const EventCallback &callbacks)
++{
++	return &callbacks == &GameCallbacks && KeyState == EKeyState::Command;
++}
++
++static TouchInputState PeonPadTouchInput;
++
++static TouchPoint PeonPadTouchPoint(const SDL_TouchFingerEvent &event)
++{
++	return {event.x * Video.Width, event.y * Video.Height};
++}
++
++static void PeonPadRouteTouchIntents(const EventCallback &callbacks,
++                                     const std::vector<InputIntent> &intents)
++{
++	for (const InputIntent &intent : intents) {
++		if (intent.Kind == InputIntentKind::PointerButton
++		    && intent.Phase == InputIntentPhase::Begin) {
++			RouteSdlInput(callbacks,
++			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
++			               intent.Position, {}, intent.Modifiers, intent.Timestamp});
++		}
++		RouteSdlInput(callbacks, intent);
++	}
++}
++
++static void PeonPadCancelTouches(const EventCallback &callbacks, unsigned ticks)
++{
++	PeonPadRouteTouchIntents(callbacks, PeonPadTouchInput.Cancel(ticks, KeyModifiers));
++	CancelSdlPointerInput(callbacks, ticks);
++}
++#endif
++
+ /**
+ **  Handle interactive input event.
+ **
+@@ -596,19 +658,90 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 
+ 	switch (event.type) {
+ 		case SDL_MOUSEBUTTONDOWN:
++#ifdef PEONPAD_IOS
++			if (event.button.which == SDL_TOUCH_MOUSEID
++			    && PeonPadTouchInput.SuppressPointerEvents()) {
++				break;
++			}
++#endif
+ 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+-			InputMouseButtonPress(callbacks, SDL_GetTicks(), event.button.button);
++			RouteSdlInput(callbacks,
++			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
++			               {event.button.x, event.button.y}, {}, KeyModifiers,
++			               SDL_GetTicks(), event.button.button});
+ 			break;
+ 
+ 		case SDL_MOUSEBUTTONUP:
++#ifdef PEONPAD_IOS
++			if (event.button.which == SDL_TOUCH_MOUSEID
++			    && PeonPadTouchInput.SuppressPointerEvents()) {
++				break;
++			}
++#endif
+ 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+-			InputMouseButtonRelease(callbacks, SDL_GetTicks(), event.button.button);
++			RouteSdlInput(callbacks,
++			              {InputIntentKind::PointerButton, InputIntentPhase::End,
++			               {event.button.x, event.button.y}, {}, KeyModifiers,
++			               SDL_GetTicks(), event.button.button});
+ 			break;
+ 
+ 		case SDL_MOUSEMOTION:
++#ifdef PEONPAD_IOS
++			if (event.motion.which == SDL_TOUCH_MOUSEID
++			    && PeonPadTouchInput.SuppressPointerEvents()) {
++				break;
++			}
++#endif
+ 			event.motion.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+-			InputMouseMove(callbacks, SDL_GetTicks(), event.motion.x, event.motion.y);
++			RouteSdlInput(callbacks,
++			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
++			               {event.motion.x, event.motion.y}, {}, KeyModifiers,
++			               SDL_GetTicks()});
++			break;
++
++#ifdef PEONPAD_IOS
++		case SDL_FINGERDOWN:
++			if (&callbacks != &GameCallbacks) {
++				PeonPadCancelTouches(callbacks, SDL_GetTicks());
++				break;
++			}
++			PeonPadRouteTouchIntents(
++				callbacks,
++				PeonPadTouchInput.Begin(event.tfinger.fingerId,
++				                        PeonPadTouchPoint(event.tfinger),
++				                        SDL_GetTicks(), KeyModifiers));
++			break;
++
++		case SDL_FINGERMOTION:
++			if (&callbacks != &GameCallbacks) {
++				PeonPadCancelTouches(callbacks, SDL_GetTicks());
++				break;
++			}
++			PeonPadRouteTouchIntents(
++				callbacks,
++				PeonPadTouchInput.Update(event.tfinger.fingerId,
++				                         PeonPadTouchPoint(event.tfinger),
++				                         SDL_GetTicks(), KeyModifiers));
++			break;
++
++		case SDL_FINGERUP:
++			if (&callbacks != &GameCallbacks) {
++				PeonPadCancelTouches(callbacks, SDL_GetTicks());
++				break;
++			}
++			PeonPadRouteTouchIntents(
++				callbacks,
++				PeonPadTouchInput.End(event.tfinger.fingerId,
++				                      PeonPadTouchPoint(event.tfinger),
++				                      SDL_GetTicks(), KeyModifiers));
++			break;
++
++		case SDL_APP_WILLENTERBACKGROUND:
++		case SDL_APP_DIDENTERBACKGROUND:
++		case SDL_APP_TERMINATING:
++			PeonPadCancelTouches(callbacks, SDL_GetTicks());
+ 			break;
++#endif
+ 
+ 		case SDL_MOUSEWHEEL:
+ 			{   // similar to Squeak, we fabricate Ctrl+Alt+PageUp/Down for wheel events
+@@ -658,7 +791,9 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 					static bool InMainWindow = true;
+ 
+ 					if (InMainWindow && (event.window.event == SDL_WINDOWEVENT_LEAVE)) {
+-						InputMouseExit(callbacks, SDL_GetTicks());
++						RouteSdlInput(callbacks,
++						              {InputIntentKind::PointerExit, InputIntentPhase::Cancel,
++						               {}, {}, KeyModifiers, SDL_GetTicks()});
+ 					}
+ 					InMainWindow = (event.window.event == SDL_WINDOWEVENT_ENTER);
+ 				}
+@@ -671,6 +806,12 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 					static bool DoTogglePause = false;
+ 
+ 					if (IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)) {
++						CancelSdlPointerInput(callbacks, SDL_GetTicks());
++#ifdef PEONPAD_IOS
++						PeonPadRouteTouchIntents(
++							callbacks,
++							PeonPadTouchInput.Cancel(SDL_GetTicks(), KeyModifiers));
++#endif
+ 						IsSDLWindowVisible = false;
+ 						if (!GamePaused) {
+ 							DoTogglePause = !GamePaused;
+@@ -695,7 +836,11 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			if (isTextInput((uint8_t) text[0])) {
+ 				// we only accept US-ascii chars for now
+ 				char lastKey = text[0];
+-				InputKeyButtonPress(callbacks, SDL_GetTicks(), lastKey, lastKey);
++				RouteSdlInput(callbacks,
++				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
++				               KeyModifiers, SDL_GetTicks(),
++				               static_cast<unsigned char>(lastKey),
++				               static_cast<unsigned char>(lastKey)});
+ 				// fabricate a keyup event for later
+ 				SDL_Event event;
+ 				SDL_zero(event);
+@@ -708,17 +853,37 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 
+ 		case SDL_KEYDOWN:
+ 			keysym = event.key.keysym.sym;
++		#ifdef PEONPAD_IOS
++			if (keysym == SDLK_BACKQUOTE) {
++				keysym = SDLK_ESCAPE;
++			}
++			if (PeonPadShouldHandleKeyDirectly(callbacks) || !isTextInput(keysym)) {
++		#else
+ 			if (!isTextInput(keysym)) {
++		#endif
+ 				// only report non-printing keys here, the characters will be reported with the textinput event
+-				InputKeyButtonPress(callbacks, SDL_GetTicks(), keysym, keysym < 128 ? keysym : 0);
++				RouteSdlInput(callbacks,
++				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
++				               KeyModifiers, SDL_GetTicks(), keysym,
++				               keysym < 128 ? keysym : 0});
+ 			}
+ 			break;
+ 
+ 		case SDL_KEYUP:
+ 			keysym = event.key.keysym.sym;
++		#ifdef PEONPAD_IOS
++			if (keysym == SDLK_BACKQUOTE) {
++				keysym = SDLK_ESCAPE;
++			}
++			if (PeonPadShouldHandleKeyDirectly(callbacks) || !isTextInput(keysym)) {
++		#else
+ 			if (!isTextInput(keysym)) {
++		#endif
+ 				// only report non-printing keys here, the characters will be reported with the textinput event
+-				InputKeyButtonRelease(callbacks, SDL_GetTicks(), keysym, keysym < 128 ? keysym : 0);
++				RouteSdlInput(callbacks,
++				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
++				               KeyModifiers, SDL_GetTicks(), keysym,
++				               keysym < 128 ? keysym : 0});
+ 			}
+ 			break;
+ 
+@@ -731,7 +896,11 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				HandleSoundEvent(event);
+ 			} else if (event.type == SDL_CUSTOM_KEY_UP) {
+ 				char key = static_cast<char>(event.user.code);
+-				InputKeyButtonRelease(callbacks, SDL_GetTicks(), key, key);
++				RouteSdlInput(callbacks,
++				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
++				               KeyModifiers, SDL_GetTicks(),
++				               static_cast<unsigned char>(key),
++				               static_cast<unsigned char>(key)});
+ 			}
+ 			break;
+ 	}
+@@ -746,6 +915,11 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ */
+ void SetCallbacks(const EventCallback *callbacks)
+ {
++#ifdef PEONPAD_IOS
++	if (Callbacks && Callbacks != callbacks) {
++		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
++	}
++#endif
+ 	Callbacks = callbacks;
+ }
+ 
+diff --git a/src/include/input_intent.h b/src/include/input_intent.h
+new file mode 100644
+index 0000000..ff0e3fb
+--- /dev/null
++++ b/src/include/input_intent.h
+@@ -0,0 +1,111 @@
++#ifndef INPUT_INTENT_H
++#define INPUT_INTENT_H
++
++#include <cstddef>
++#include <cstdint>
++#include <iterator>
++#include <map>
++#include <set>
++#include <vector>
++
++enum class InputIntentKind {
++	PointerMotion,
++	PointerButton,
++	PointerExit,
++	ViewportPan,
++	Key
++};
++
++enum class InputIntentPhase {
++	Begin,
++	Update,
++	End,
++	Cancel
++};
++
++struct InputPoint {
++	int x = 0;
++	int y = 0;
++};
++
++struct InputDelta {
++	int x = 0;
++	int y = 0;
++};
++
++struct InputIntent {
++	InputIntentKind Kind = InputIntentKind::PointerMotion;
++	InputIntentPhase Phase = InputIntentPhase::Update;
++	InputPoint Position;
++	InputDelta Delta;
++	int Modifiers = 0;
++	std::uint32_t Timestamp = 0;
++	unsigned Code = 0;
++	unsigned Character = 0;
++};
++
++constexpr unsigned InputPrimaryButton = 1;
++constexpr unsigned InputContextButton = 3;
++
++class InputIntentTarget
++{
++public:
++	virtual ~InputIntentTarget() = default;
++	virtual bool Dispatch(const InputIntent &intent) = 0;
++};
++
++class InputIntentRouter
++{
++public:
++	bool Route(const InputIntent &intent, InputIntentTarget &target);
++	void CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
++	                   int modifiers, InputPoint position);
++
++	bool IsPointerButtonActive(unsigned button) const;
++	bool IsViewportPanActive() const { return ViewportPanActive; }
++
++private:
++	std::set<unsigned> ActivePointerButtons;
++	bool ViewportPanActive = false;
++};
++
++struct TouchPoint {
++	float x = 0.0f;
++	float y = 0.0f;
++};
++
++class TouchInputState
++{
++public:
++	std::vector<InputIntent> Begin(std::int64_t contact, TouchPoint position,
++	                               std::uint32_t timestamp, int modifiers);
++	std::vector<InputIntent> Update(std::int64_t contact, TouchPoint position,
++	                                std::uint32_t timestamp, int modifiers);
++	std::vector<InputIntent> End(std::int64_t contact, TouchPoint position,
++	                             std::uint32_t timestamp, int modifiers);
++	std::vector<InputIntent> Cancel(std::uint32_t timestamp, int modifiers);
++
++	bool SuppressPointerEvents() const { return SuppressPointer; }
++	bool HasPendingContextAction() const { return PendingContextAction; }
++	bool IsPanning() const { return Panning; }
++	std::size_t ContactCount() const { return Contacts.size(); }
++
++private:
++	InputPoint ScreenPoint(const TouchPoint &point) const;
++	TouchPoint Center() const;
++	TouchPoint Leftmost() const;
++	InputIntent MakeIntent(InputIntentKind kind, InputIntentPhase phase,
++	                       InputPoint position, InputDelta delta,
++	                       std::uint32_t timestamp, int modifiers,
++	                       unsigned code = 0) const;
++	void Reset();
++
++	std::map<std::int64_t, TouchPoint> Contacts;
++	std::map<std::int64_t, TouchPoint> ContextStart;
++	TouchPoint PanCenter;
++	bool PendingContextAction = false;
++	bool Panning = false;
++	bool SuppressPointer = false;
++};
++
++#endif
+diff --git a/src/ui/input_intent.cpp b/src/ui/input_intent.cpp
+new file mode 100644
+index 0000000..6817774
+--- /dev/null
++++ b/src/ui/input_intent.cpp
+@@ -0,0 +1,236 @@
++#include "input_intent.h"
++
++#include <cmath>
++
++namespace {
++
++constexpr int ContextMovementTolerance = 16;
++constexpr float PanGain = 1.35f;
++
++} // namespace
++
++bool InputIntentRouter::Route(const InputIntent &intent, InputIntentTarget &target)
++{
++	switch (intent.Kind) {
++		case InputIntentKind::PointerMotion:
++			return intent.Phase == InputIntentPhase::Update && target.Dispatch(intent);
++		case InputIntentKind::PointerButton:
++			if (intent.Phase == InputIntentPhase::Begin) {
++				const bool handled = target.Dispatch(intent);
++				if (handled) {
++					ActivePointerButtons.insert(intent.Code);
++				}
++				return handled;
++			}
++			if (intent.Phase == InputIntentPhase::End
++			    || intent.Phase == InputIntentPhase::Cancel) {
++				const bool handled = target.Dispatch(intent);
++				ActivePointerButtons.erase(intent.Code);
++				return handled;
++			}
++			return false;
++		case InputIntentKind::PointerExit:
++			return intent.Phase == InputIntentPhase::Cancel && target.Dispatch(intent);
++		case InputIntentKind::ViewportPan:
++			if (intent.Phase == InputIntentPhase::Begin) {
++				ViewportPanActive = target.Dispatch(intent);
++				return ViewportPanActive;
++			}
++			if (!ViewportPanActive) {
++				return false;
++			}
++			if (intent.Phase == InputIntentPhase::Update) {
++				return target.Dispatch(intent);
++			}
++			if (intent.Phase == InputIntentPhase::End
++			    || intent.Phase == InputIntentPhase::Cancel) {
++				const bool handled = target.Dispatch(intent);
++				ViewportPanActive = false;
++				return handled;
++			}
++			return false;
++		case InputIntentKind::Key:
++			if (intent.Phase == InputIntentPhase::Begin
++			    || intent.Phase == InputIntentPhase::End
++			    || intent.Phase == InputIntentPhase::Cancel) {
++				return target.Dispatch(intent);
++			}
++			return false;
++	}
++	return false;
++}
++
++void InputIntentRouter::CancelPointer(InputIntentTarget &target, std::uint32_t timestamp,
++                                      int modifiers, InputPoint position)
++{
++	if (ViewportPanActive) {
++		Route({InputIntentKind::ViewportPan, InputIntentPhase::Cancel, position, {},
++		       modifiers, timestamp}, target);
++	}
++
++	const std::set<unsigned> buttons = ActivePointerButtons;
++	for (const unsigned button : buttons) {
++		Route({InputIntentKind::PointerButton, InputIntentPhase::Cancel, position, {},
++		       modifiers, timestamp, button}, target);
++	}
++}
++
++bool InputIntentRouter::IsPointerButtonActive(unsigned button) const
++{
++	return ActivePointerButtons.find(button) != ActivePointerButtons.end();
++}
++
++std::vector<InputIntent> TouchInputState::Begin(std::int64_t contact, TouchPoint position,
++                                                std::uint32_t timestamp, int modifiers)
++{
++	Contacts[contact] = position;
++	if (Contacts.size() == 2) {
++		ContextStart = Contacts;
++		PendingContextAction = true;
++		SuppressPointer = true;
++		return {MakeIntent(InputIntentKind::PointerButton, InputIntentPhase::Cancel,
++		                   ScreenPoint(position), {}, timestamp, modifiers,
++		                   InputPrimaryButton)};
++	}
++	if (Contacts.size() == 3) {
++		PendingContextAction = false;
++		Panning = true;
++		PanCenter = Center();
++		return {MakeIntent(InputIntentKind::ViewportPan, InputIntentPhase::Begin,
++		                   ScreenPoint(PanCenter), {}, timestamp, modifiers)};
++	}
++	return {};
++}
++
++std::vector<InputIntent> TouchInputState::Update(std::int64_t contact, TouchPoint position,
++                                                 std::uint32_t timestamp, int modifiers)
++{
++	const auto current = Contacts.find(contact);
++	if (current == Contacts.end()) {
++		return {};
++	}
++	current->second = position;
++
++	if (Panning && Contacts.size() == 3) {
++		const TouchPoint center = Center();
++		const InputDelta delta{
++			static_cast<int>(std::lround((center.x - PanCenter.x) * PanGain)),
++			static_cast<int>(std::lround((center.y - PanCenter.y) * PanGain))
++		};
++		PanCenter = center;
++		return {MakeIntent(InputIntentKind::ViewportPan, InputIntentPhase::Update,
++		                   ScreenPoint(center), delta, timestamp, modifiers)};
++	}
++
++	if (PendingContextAction && Contacts.size() == 2) {
++		for (const auto &[id, start] : ContextStart) {
++			const auto touch = Contacts.find(id);
++			if (touch == Contacts.end()) {
++				continue;
++			}
++			const InputPoint startPoint = ScreenPoint(start);
++			const InputPoint currentPoint = ScreenPoint(touch->second);
++			if (std::abs(currentPoint.x - startPoint.x) > ContextMovementTolerance
++			    || std::abs(currentPoint.y - startPoint.y) > ContextMovementTolerance) {
++				PendingContextAction = false;
++				break;
++			}
++		}
++	}
++	return {};
++}
++
++std::vector<InputIntent> TouchInputState::End(std::int64_t contact, TouchPoint position,
++                                              std::uint32_t timestamp, int modifiers)
++{
++	const auto current = Contacts.find(contact);
++	if (current == Contacts.end()) {
++		return {};
++	}
++	current->second = position;
++
++	std::vector<InputIntent> intents;
++	if (PendingContextAction && Contacts.size() == 2) {
++		const InputPoint target = ScreenPoint(Leftmost());
++		intents.push_back(MakeIntent(InputIntentKind::PointerButton,
++		                             InputIntentPhase::Begin, target, {},
++		                             timestamp, modifiers, InputContextButton));
++		intents.push_back(MakeIntent(InputIntentKind::PointerButton,
++		                             InputIntentPhase::End, target, {},
++		                             timestamp, modifiers, InputContextButton));
++		PendingContextAction = false;
++	}
++	if (Panning && Contacts.size() == 3) {
++		intents.push_back(MakeIntent(InputIntentKind::ViewportPan,
++		                             InputIntentPhase::End, ScreenPoint(Center()), {},
++		                             timestamp, modifiers));
++		Panning = false;
++	}
++
++	Contacts.erase(current);
++	if (Contacts.empty()) {
++		SuppressPointer = false;
++		ContextStart.clear();
++	}
++	return intents;
++}
++
++std::vector<InputIntent> TouchInputState::Cancel(std::uint32_t timestamp, int modifiers)
++{
++	std::vector<InputIntent> intents;
++	if (Panning) {
++		intents.push_back(MakeIntent(InputIntentKind::ViewportPan,
++		                             InputIntentPhase::Cancel, ScreenPoint(PanCenter), {},
++		                             timestamp, modifiers));
++	}
++	Reset();
++	return intents;
++}
++
++InputPoint TouchInputState::ScreenPoint(const TouchPoint &point) const
++{
++	return {static_cast<int>(std::lround(point.x)),
++	        static_cast<int>(std::lround(point.y))};
++}
++
++TouchPoint TouchInputState::Center() const
++{
++	TouchPoint center;
++	for (const auto &[contact, point] : Contacts) {
++		(void)contact;
++		center.x += point.x;
++		center.y += point.y;
++	}
++	center.x /= Contacts.size();
++	center.y /= Contacts.size();
++	return center;
++}
++
++TouchPoint TouchInputState::Leftmost() const
++{
++	auto leftmost = Contacts.begin();
++	for (auto touch = std::next(leftmost); touch != Contacts.end(); ++touch) {
++		if (touch->second.x < leftmost->second.x) {
++			leftmost = touch;
++		}
++	}
++	return leftmost->second;
++}
++
++InputIntent TouchInputState::MakeIntent(InputIntentKind kind, InputIntentPhase phase,
++                                        InputPoint position, InputDelta delta,
++                                        std::uint32_t timestamp, int modifiers,
++                                        unsigned code) const
++{
++	return {kind, phase, position, delta, modifiers, timestamp, code, 0};
++}
++
++void TouchInputState::Reset()
++{
++	Contacts.clear();
++	ContextStart.clear();
++	PanCenter = {};
++	PendingContextAction = false;
++	Panning = false;
++	SuppressPointer = false;
++}

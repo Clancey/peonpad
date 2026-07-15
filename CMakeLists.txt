@@ -23,6 +23,18 @@ target_compile_features(peonpad_toolchain_probe PUBLIC cxx_std_17)
 
 include(CTest)
 if(BUILD_TESTING AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  add_executable(peonpad_input_intent_test
+    tests/input_intent_test.cpp
+    engine/stratagus/src/ui/input_intent.cpp
+  )
+  target_include_directories(peonpad_input_intent_test PRIVATE
+    engine/stratagus/src/include
+  )
+  target_compile_features(peonpad_input_intent_test PRIVATE cxx_std_17)
+  add_test(
+    NAME peonpad_input_intent
+    COMMAND peonpad_input_intent_test
+  )
   add_test(
     NAME peonpad_script_guardrails
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/script-guardrails.sh"

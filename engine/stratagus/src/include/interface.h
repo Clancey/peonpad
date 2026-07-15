@@ -39,6 +39,7 @@
 #include "icons.h"
 #endif
 
+#include "input_intent.h"
 #include "stratagus.h"
 #include "unitsound.h"
 #include "vec2i.h"
@@ -333,6 +334,8 @@ extern void InputKeyButtonPress(const EventCallback &callbacks, unsigned ticks, 
 extern void InputKeyButtonRelease(const EventCallback &callbacks, unsigned ticks, unsigned ikey, unsigned ikeychar);
 /// Called to look for key timeouts
 extern void InputKeyTimeout(const EventCallback &callbacks, unsigned ticks);
+/// Route a platform-neutral input intent to the active engine callbacks
+extern bool DispatchInputIntent(const EventCallback &callbacks, const InputIntent &intent);
 
 /// Get double click delay
 extern int GetDoubleClickDelay();

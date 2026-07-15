@@ -93,6 +93,8 @@ learn, and conflict with camera movement and iPadOS gestures.
 
 Current implementation:
 
+- SDL pointer, keyboard, and direct-touch events cross a platform-neutral
+  intent router before reaching engine callbacks or viewport commands;
 - one finger retains SDL's existing pointer/select behavior, and tapping empty
   terrain clears the current selection;
 - a two-finger chord issues the equivalent of a right click at the leftmost

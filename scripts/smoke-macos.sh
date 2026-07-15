@@ -8,20 +8,32 @@ ROOT_DIR=${SCRIPT_DIR:h}
 BINARY=${PEONPAD_MACOS_BINARY:-$ROOT_DIR/build/macos/stratagus}
 SMOKE_SECONDS=${PEONPAD_SMOKE_SECONDS:-5}
 RUNTIME_ROOT=${PEONPAD_RUNTIME_ROOT:-$ROOT_DIR/runtime/macos-smoke}
+MODE=public
+
+if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != "--maintainer" ]]; }; then
+  print -u2 "Usage: ./scripts/smoke-macos.sh [--maintainer]"
+  exit 2
+fi
+if (( $# == 1 )); then
+  MODE=maintainer
+fi
 
 [[ -x "$BINARY" ]] || {
   print -u2 "PeonPad-built executable is missing: $BINARY"
   exit 1
 }
 
-START_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
-EXPECTED_DIGEST=$(awk -F ' *= *' \
-  '$1 == "tree_sha256" {gsub(/"/, "", $2); print $2; exit}' \
-  "$ROOT_DIR/config/inputs.lock")
-[[ "$START_DIGEST" == "$EXPECTED_DIGEST" ]] || {
-  print -u2 "ref/ does not match config/inputs.lock; refusing smoke test"
-  exit 1
-}
+START_DIGEST=""
+if [[ "$MODE" == maintainer ]]; then
+  START_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
+  EXPECTED_DIGEST=$(awk -F ' *= *' \
+    '$1 == "tree_sha256" {gsub(/"/, "", $2); print $2; exit}' \
+    "$ROOT_DIR/config/inputs.lock")
+  [[ "$START_DIGEST" == "$EXPECTED_DIGEST" ]] || {
+    print -u2 "ref/ does not match config/inputs.lock; refusing smoke test"
+    exit 1
+  }
+fi
 
 smoke_profile() {
   local profile=$1
@@ -77,13 +89,16 @@ smoke_profile() {
   print "      log: $log_path"
 }
 
-smoke_profile wc2 "$ROOT_DIR/ref/data.Wargus"
-smoke_profile aleona "$ROOT_DIR/assets/aleonas-tales/source"
+if [[ "$MODE" == maintainer ]]; then
+  smoke_profile wc2 "$ROOT_DIR/ref/data.Wargus"
+  smoke_profile aleona "$ROOT_DIR/assets/aleonas-tales/source"
 
-END_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
-[[ "$END_DIGEST" == "$START_DIGEST" ]] || {
-  print -u2 "FATAL: ref/ changed during macOS smoke tests"
-  exit 70
-}
-
-print "PASS  ref/ remained byte-for-byte unchanged"
+  END_DIGEST=$($SCRIPT_DIR/reference-digest.sh)
+  [[ "$END_DIGEST" == "$START_DIGEST" ]] || {
+    print -u2 "FATAL: ref/ changed during macOS smoke tests"
+    exit 70
+  }
+  print "PASS  ref/ remained byte-for-byte unchanged"
+else
+  smoke_profile wc2 "${PEONPAD_WC2_DATA_DIR:-$ROOT_DIR/data.Wargus}"
+fi

@@ -31,6 +31,11 @@ evidence = "Info.plist, Mach-O inspection, and ref/wargus-launch.log"
 note = "Runtime revision evidence does not replace a source repository lock."
 
 [reference.wc2_installer]
+edition = "Warcraft II Battle.net Edition 2.02 v5"
+language = "English"
+store_build = "GOG 78104"
+exe_name = "setup_warcraft_ii_2.02_v5_(78104).exe"
+bin_name = "setup_warcraft_ii_2.02_v5_(78104)-1.bin"
 exe_sha256 = "ad8dfae76e79fd07c78d2786b1594ba01d33ed57ca242efa510e2ded6417ed63"
 bin_sha256 = "5b488a84889d7231b32997fadc646768280363f7be7f767ed7cf6ac52b3a0c49"
 

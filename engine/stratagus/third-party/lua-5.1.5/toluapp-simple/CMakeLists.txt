@@ -50,7 +50,7 @@ if(CMAKE_CROSSCOMPILING)
     add_dependencies(toluapp51 lua51_static)
 else()
     add_dependencies(toluapp51_shared lua51 lua51_shared lua51_static)
-    add_dependencies(toluapp51 lua51 lua51_shared lua51_static)
+    add_dependencies(toluapp51 lua51 lua51_shared lua51_static toluapp)
     add_dependencies(toluapp lua51 lua51_shared lua51_static)
 endif()
 

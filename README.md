@@ -251,6 +251,27 @@ extraction when `--installer` is selected.
 </details>
 
 <details>
+  <summary><strong>Designed-for-iPad Vision Pro simulator probe</strong></summary>
+
+This compatibility path builds the existing iPad target with the
+**iPhoneSimulator SDK** and runs it at Xcode's
+`visionOS Simulator` / `Designed for iPad` destination. It is not an xros
+build and does not create a native visionOS target.
+
+After preparing the host tools and staged owned data above, run:
+
+```sh
+./scripts/preflight-vision-compat.sh
+./scripts/build-vision-compat-simulator.sh --launch
+```
+
+Set `PEONPAD_VISION_SIMULATOR_UDID` to select a specific installed Vision Pro
+simulator. Simulator launch proves build and compatibility-runtime startup
+only. Eye/hand targeting, indirect-pointer ergonomics, sustained performance,
+audio, lifecycle, and all gameplay controls still require Vision Pro hardware.
+</details>
+
+<details>
   <summary><strong>Fast macOS development loop</strong></summary>
 
 ```sh

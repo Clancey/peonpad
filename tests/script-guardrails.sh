@@ -34,11 +34,23 @@ if [[ "$MODE" == maintainer ]]; then
 fi
 
 "$ROOT_DIR/scripts/prepare-ipad-build.sh" --help >/dev/null
+"$ROOT_DIR/scripts/preflight-vision-compat.sh" --help >/dev/null
+"$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
   print -u2 "prepare script accepted multiple input modes"
   exit 1
 fi
+if "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" \
+    --unsupported >/dev/null 2>&1; then
+  print -u2 "Vision compatibility build accepted an unsupported option"
+  exit 1
+fi
+
+VISION_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-simulator-arm64.cmake"
+rg -q 'CMAKE_OSX_SYSROOT iphonesimulator' "$VISION_TOOLCHAIN"
+rg -q 'SUPPORTED_PLATFORMS' "$VISION_TOOLCHAIN"
+rg -q 'SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD YES' "$VISION_TOOLCHAIN"
 
 IOS_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in"
 plutil -lint "$IOS_PLIST" >/dev/null

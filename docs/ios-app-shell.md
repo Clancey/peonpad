@@ -97,3 +97,36 @@ still required to install it. Physical M2 iPad testing has since accepted
 launch, menus, Warcraft II campaigns and skirmishes, Metal rendering, audio,
 save/load, and the current touch controls; see `ipad-test-notes.md` for the
 remaining regression matrix.
+
+## Designed-for-iPad Vision Pro compatibility
+
+Xcode 26.6 exposes the existing iPad-only `stratagus` scheme on an Apple Vision
+Pro simulator as:
+
+```text
+platform=visionOS Simulator, variant=Designed for [iPad,iPhone]
+```
+
+The destination still builds PeonPad with `PLATFORM_NAME=iphonesimulator`,
+`EFFECTIVE_PLATFORM_NAME=-iphonesimulator`, and the iPhoneSimulator 26.5 SDK.
+The resulting arm64 executable records `LC_BUILD_VERSION` platform 7 (iOS
+Simulator), minimum iOS 16.0. It is not built with xros or xrsimulator.
+
+The physical-device generator cannot be reused unchanged for this destination:
+its vendored dependencies are intentionally fixed to `iphoneos`, which produces
+a device-versus-simulator linker error. The separate compatibility path keeps
+those dependencies on `iphonesimulator` while explicitly allowing Xcode to
+advertise the Designed-for-iPad destination:
+
+```sh
+./scripts/preflight-vision-compat.sh
+./scripts/build-vision-compat-simulator.sh --launch
+```
+
+On 2026-07-15, the compatibility app built, installed, and remained running on
+the visionOS 26.5 Apple Vision Pro simulator with a generated non-game probe
+payload; no proprietary data was accessed. This proves only build and
+compatibility-runtime startup, not gameplay. Vision Pro hardware is still
+required to accept eye/hand targeting, indirect pointer and keyboard behavior,
+gesture discoverability, audio, lifecycle, comfort, sustained performance, and
+complete gameplay.

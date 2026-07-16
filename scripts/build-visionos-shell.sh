@@ -89,6 +89,17 @@ case "$BUILD_DIR/" in
     ;;
 esac
 
+CMAKE_VERSION=$(cmake --version | awk 'NR == 1 {print $3}')
+CMAKE_MAJOR=${CMAKE_VERSION%%.*}
+CMAKE_REMAINDER=${CMAKE_VERSION#*.}
+CMAKE_MINOR=${CMAKE_REMAINDER%%.*}
+if [[ "$CMAKE_MAJOR" != <-> || "$CMAKE_MINOR" != <-> ]] \
+    || (( CMAKE_MAJOR < 3 || (CMAKE_MAJOR == 3 && CMAKE_MINOR < 28) )); then
+  print -u2 "native visionOS builds require CMake 3.28 or newer"
+  print -u2 "CMAKE_SYSTEM_NAME=visionOS is unavailable in CMake ${CMAKE_VERSION:-unknown}"
+  exit 1
+fi
+
 "$SCRIPT_DIR/verify-sdl3-sources.sh"
 xcrun --sdk "$TARGET" --show-sdk-path >/dev/null || {
   print -u2 "$TARGET SDK is unavailable"

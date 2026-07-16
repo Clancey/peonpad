@@ -17,7 +17,10 @@ The device and Simulator slices are deliberately separate:
 Both use a visionOS 2.0 deployment target and static-library try-compiles.
 SDL 3.4.12, SDL_image 3.4.4, and SDL_mixer 3.2.4 still come from the exact
 committed archives in `third_party/sdl3/sources`; configure and build require no
-network access after those sources are present.
+network access after those sources are present. Native visionOS configuration
+requires CMake 3.28 or newer because that release introduced
+`CMAKE_SYSTEM_NAME=visionOS`; macOS, iOS, and Designed-for-iPad lanes retain the
+repository-wide CMake 3.27 minimum.
 
 Run clean Release all-target builds with:
 
@@ -56,16 +59,19 @@ The toolchain probe requires `TARGET_OS_VISION=1`, `TARGET_OS_IOS=0`, and
 
 ## Rendering and input transform
 
-`PeonPadViewportGeometry` is the single shell transform. It computes the largest
-exact-aspect 4:3 pixel rectangle inside the current drawable and centers it,
-producing letterbox or pillarbox bars rather than stretching. The shell renders
-its 640×480 public test card into that rectangle after every pixel-size change.
+`PeonPadViewportGeometry` is the single shell transform. The shell reads
+`SDL_GetWindowSafeArea`, converts that SDL point-space rectangle into inward-
+rounded drawable-pixel insets using the current point/pixel dimensions, then
+computes the largest exact-aspect 4:3 rectangle inside it. This produces
+letterbox or pillarbox bars rather than stretching. The 640×480 public test card
+is recomputed after window, drawable-pixel, display-scale, and safe-area changes.
 
 The inverse transform rejects points in the bars and maps drawable pixels back
 to logical coordinates. `PeonPadSDL3MapWindowPointToLogical` first converts
 UIKit/SDL window points to Retina drawable pixels, then calls that same inverse.
 The Release test runs with `-DNDEBUG` and uses explicit checks for default, wide,
-tall, Retina, repeated-resize, and bar-input cases:
+tall, Retina/fractional display scale, asymmetric non-zero safe areas,
+safe-area invalidation, repeated-resize, and bar-input cases:
 
 ```sh
 ./scripts/test-ios-viewport.sh

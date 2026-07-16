@@ -99,13 +99,23 @@ bool DrawVisionShellCanvas(SmokeState &state)
 
 bool RenderVisionShell(SmokeState &state)
 {
+	int pointWidth = 0;
+	int pointHeight = 0;
 	int outputWidth = 0;
 	int outputHeight = 0;
-	if (!SDL_GetWindowSizeInPixels(
+	SDL_Rect safeArea{};
+	PeonPadPixelInsets pixelInsets{};
+	if (!SDL_GetWindowSize(state.Window, &pointWidth, &pointHeight)
+	    || !SDL_GetWindowSizeInPixels(
 		    state.Window, &outputWidth, &outputHeight)
+	    || !SDL_GetWindowSafeArea(state.Window, &safeArea)
+	    || !PeonPadCalculatePixelInsets(
+		    pointWidth, pointHeight, outputWidth, outputHeight,
+		    {safeArea.x, safeArea.y, safeArea.w, safeArea.h},
+		    pixelInsets)
 	    || !PeonPadCalculateViewport(
 		    outputWidth, outputHeight, 640, 480,
-		    {0, 0, 0, 0}, state.Viewport)) {
+		    pixelInsets, state.Viewport)) {
 		return false;
 	}
 
@@ -319,6 +329,8 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 #ifdef PEONPAD_VISIONOS
 		case SDL_EVENT_WINDOW_RESIZED:
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+		case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
 			if (state) {
 				state->ViewportDirty = true;
 			}

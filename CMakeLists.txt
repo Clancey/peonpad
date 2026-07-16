@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.27)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS" AND
+    CMAKE_VERSION VERSION_LESS "3.28")
+  message(FATAL_ERROR
+    "Native visionOS configuration requires CMake 3.28 or newer because "
+    "CMAKE_SYSTEM_NAME=visionOS was added in CMake 3.28. PeonPad's non-visionOS "
+    "configurations remain compatible with CMake 3.27."
+  )
+endif()
+
 project(PeonPad
   VERSION 0.0.0
   DESCRIPTION "Apple-platform Stratagus/Wargus port"

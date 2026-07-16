@@ -129,7 +129,8 @@ Shift/Control/Alt modifier dock is designed but not yet implemented.
 ### What you need
 
 - An Apple Silicon Mac with full Xcode installed and first-launch setup complete
-- Homebrew, CMake 3.27 or newer, Git and `pkg-config`
+- Homebrew, Git, `pkg-config`, and CMake 3.27 or newer for existing macOS/iPad
+  lanes; native visionOS builds require CMake 3.28 or newer
 - An iPad running iPadOS 16 or newer, a USB cable and Developer Mode
 - An Apple ID available to Xcode for a Personal Team development signature
 - A legally owned Warcraft II installation or an extracted `data.Wargus`

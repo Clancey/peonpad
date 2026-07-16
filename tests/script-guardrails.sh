@@ -71,10 +71,15 @@ XROS_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-simulator-arm64.cmake"
 rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_TOOLCHAIN"
 rg -q 'CMAKE_OSX_SYSROOT xrsimulator' "$XROS_TOOLCHAIN"
 rg -q 'PEONPAD_VISIONOS_SIMULATOR_BUILD TRUE' "$XROS_TOOLCHAIN"
+rg -q 'CMAKE_VERSION VERSION_LESS "3\.28"' "$XROS_TOOLCHAIN"
 XROS_DEVICE_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-arm64.cmake"
 rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_DEVICE_TOOLCHAIN"
 rg -q 'CMAKE_OSX_SYSROOT xros' "$XROS_DEVICE_TOOLCHAIN"
 rg -q 'PEONPAD_VISIONOS_DEVICE_BUILD TRUE' "$XROS_DEVICE_TOOLCHAIN"
+rg -q 'CMAKE_VERSION VERSION_LESS "3\.28"' "$XROS_DEVICE_TOOLCHAIN"
+rg -q '^cmake_minimum_required\(VERSION 3\.27\)' "$ROOT_DIR/CMakeLists.txt"
+rg -q 'CMAKE_SYSTEM_NAME STREQUAL "visionOS".*' "$ROOT_DIR/CMakeLists.txt"
+rg -q 'CMAKE_VERSION VERSION_LESS "3\.28"' "$ROOT_DIR/CMakeLists.txt"
 rg -q 'PEONPAD_EXPECT_VISIONOS=1' "$ROOT_DIR/CMakeLists.txt"
 rg -q 'PEONPAD_VISIONOS.*TARGET_OS_VISION.*TARGET_OS_IOS.*TARGET_OS_OSX' \
   "$ROOT_DIR/tests/toolchain_probe.cpp"
@@ -96,8 +101,26 @@ rg -q 'simctl bootstatus' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'simctl install' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'simctl launch --terminate-running-process' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'launchctl procinfo' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'native visionOS builds require CMake 3\.28' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'PEONPAD_VISIONOS_DEVICE_INSTALL' \
   "$ROOT_DIR/scripts/install-visionos-device.sh"
+rg -q 'native visionOS configuration \(3\.28\+\)' \
+  "$ROOT_DIR/scripts/preflight.sh"
+
+CMAKE_GUARD_ROOT="$TEST_RUNTIME/cmake-version"
+CMAKE_GUARD_BIN="$CMAKE_GUARD_ROOT/bin"
+cmake -E remove_directory "$CMAKE_GUARD_ROOT"
+cmake -E make_directory "$CMAKE_GUARD_BIN"
+cp "$ROOT_DIR/tests/fixtures/fake-cmake-3.27.sh" \
+  "$CMAKE_GUARD_BIN/cmake"
+chmod +x "$CMAKE_GUARD_BIN/cmake"
+if PATH="$CMAKE_GUARD_BIN:$PATH" \
+    "$ROOT_DIR/scripts/build-visionos-shell.sh" xrsimulator \
+      >/dev/null 2>&1; then
+  print -u2 "native visionOS build accepted CMake 3.27"
+  exit 1
+fi
+cmake -E remove_directory "$CMAKE_GUARD_ROOT"
 
 rg -q 'option\(PEONPAD_ENABLE_SDL3' "$ROOT_DIR/CMakeLists.txt"
 rg -q 'SDL-release-3\.4\.12\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
@@ -149,6 +172,11 @@ if rg -q '\bassert\(' "$ROOT_DIR/tests/viewport_geometry_test.cpp"; then
   print -u2 "Release viewport/input checks rely on assert"
   exit 1
 fi
+rg -q 'SDL_GetWindowSafeArea' "$ROOT_DIR/tests/sdl3_foundation_smoke.cpp"
+rg -q 'SDL_EVENT_WINDOW_SAFE_AREA_CHANGED' \
+  "$ROOT_DIR/tests/sdl3_foundation_smoke.cpp"
+rg -q 'SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED' \
+  "$ROOT_DIR/tests/sdl3_foundation_smoke.cpp"
 
 SIMCTL_TEST_ROOT="$TEST_RUNTIME/simctl"
 SIMCTL_TEST_BIN="$SIMCTL_TEST_ROOT/bin"

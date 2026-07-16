@@ -188,7 +188,18 @@ fi
 
 printf '\nHost toolchain\n'
 if command -v cmake >/dev/null 2>&1; then
-  pass "CMake available: $(cmake --version | sed -n '1p')"
+  CMAKE_VERSION_LINE=$(cmake --version | sed -n '1p')
+  CMAKE_VERSION=$(printf '%s\n' "$CMAKE_VERSION_LINE" | awk '{print $3}')
+  pass "CMake available: $CMAKE_VERSION_LINE"
+  if awk -v version="$CMAKE_VERSION" 'BEGIN {
+      split(version, parts, ".")
+      exit !((parts[1] + 0) > 3 ||
+             ((parts[1] + 0) == 3 && (parts[2] + 0) >= 28))
+    }'; then
+    pass "CMake supports native visionOS configuration (3.28+)"
+  else
+    note "CMake 3.28+ is required only for native visionOS; non-visionOS remains 3.27+"
+  fi
 else
   fail "CMake is missing"
 fi

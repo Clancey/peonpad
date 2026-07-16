@@ -3,6 +3,13 @@
 # This configuration always selects xrsimulator/arm64. Device builds use the
 # separate xros-arm64.cmake toolchain so the two slices cannot be mixed.
 
+if(CMAKE_VERSION VERSION_LESS "3.28")
+  message(FATAL_ERROR
+    "The PeonPad xrsimulator toolchain requires CMake 3.28 or newer because "
+    "CMAKE_SYSTEM_NAME=visionOS is unavailable in CMake 3.27. Non-visionOS "
+    "PeonPad configurations continue to support CMake 3.27.")
+endif()
+
 set(CMAKE_SYSTEM_NAME visionOS)
 set(CMAKE_SYSTEM_PROCESSOR arm64)
 

@@ -14,9 +14,10 @@ ordered Stratagus patch series.
 
 `scripts/test-ios-viewport.sh` compiles the pure C++ Apple viewport geometry on
 the host in Release mode with `-DNDEBUG`. Explicit checks cover default, wide,
-tall, Retina, repeated resize, asymmetric insets, invalid geometry, inverse
-input mapping, and points in letterbox/pillarbox bars. Device acceptance remains
-necessary to verify the live UIKit insets and rendered result on the target.
+tall, Retina and fractional display scales, asymmetric SDL point-space safe
+areas, safe-area invalidation, repeated resize, invalid geometry, inverse input
+mapping, and points in letterbox/pillarbox bars. Device acceptance remains
+necessary to verify the live platform insets and rendered result on the target.
 
 The default CTest configuration also builds `peonpad_input_intent_test`. It
 checks platform-neutral pointer, key, context-action, viewport-pan, and game

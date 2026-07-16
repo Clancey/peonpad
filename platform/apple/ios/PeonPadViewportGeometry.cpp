@@ -1,7 +1,63 @@
 #include "PeonPadViewportGeometry.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <numeric>
+
+namespace {
+
+int ClampCoordinate(const std::int64_t value, const int extent)
+{
+	return static_cast<int>(
+		std::max<std::int64_t>(0, std::min<std::int64_t>(value, extent)));
+}
+
+int ScaleInsetInward(const int inset,
+                     const int pointExtent,
+                     const int pixelExtent)
+{
+	const std::int64_t product =
+		static_cast<std::int64_t>(inset) * pixelExtent;
+	return static_cast<int>((product + pointExtent - 1) / pointExtent);
+}
+
+} // namespace
+
+bool PeonPadCalculatePixelInsets(const int pointWidth,
+                                const int pointHeight,
+                                const int pixelWidth,
+                                const int pixelHeight,
+                                const PeonPadPointRect safeArea,
+                                PeonPadPixelInsets &pixelInsets)
+{
+	pixelInsets = {};
+	if (pointWidth <= 0 || pointHeight <= 0
+	    || pixelWidth <= 0 || pixelHeight <= 0
+	    || safeArea.width <= 0 || safeArea.height <= 0) {
+		return false;
+	}
+
+	const int safeLeft = ClampCoordinate(safeArea.x, pointWidth);
+	const int safeTop = ClampCoordinate(safeArea.y, pointHeight);
+	const int safeRight = ClampCoordinate(
+		static_cast<std::int64_t>(safeArea.x) + safeArea.width, pointWidth);
+	const int safeBottom = ClampCoordinate(
+		static_cast<std::int64_t>(safeArea.y) + safeArea.height, pointHeight);
+	if (safeRight <= safeLeft || safeBottom <= safeTop) {
+		return false;
+	}
+
+	pixelInsets.left =
+		ScaleInsetInward(safeLeft, pointWidth, pixelWidth);
+	pixelInsets.top =
+		ScaleInsetInward(safeTop, pointHeight, pixelHeight);
+	pixelInsets.right = ScaleInsetInward(
+		pointWidth - safeRight, pointWidth, pixelWidth);
+	pixelInsets.bottom = ScaleInsetInward(
+		pointHeight - safeBottom, pointHeight, pixelHeight);
+	return pixelInsets.left + pixelInsets.right < pixelWidth
+	    && pixelInsets.top + pixelInsets.bottom < pixelHeight;
+}
 
 bool PeonPadCalculateViewport(const int outputWidth,
                              const int outputHeight,

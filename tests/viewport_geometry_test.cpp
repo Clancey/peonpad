@@ -98,6 +98,58 @@ int main()
 	CheckPoint(viewport, 800.0f, 600.0f, true, 320.0f, 240.0f,
 	           "Retina center inverse");
 
+	PeonPadPixelInsets pixelInsets{};
+	Check(PeonPadCalculatePixelInsets(
+		      1200, 800, 2400, 1600,
+		      {50, 20, 1130, 750}, pixelInsets),
+	      "asymmetric safe area converts to pixels");
+	Check(pixelInsets.left == 100 && pixelInsets.top == 40
+	      && pixelInsets.right == 40 && pixelInsets.bottom == 60,
+	      "asymmetric safe-area pixel insets");
+	Check(PeonPadCalculateViewport(
+		      2400, 1600, 640, 480, pixelInsets, viewport),
+	      "asymmetric safe-area viewport");
+	Check(viewport.x == 230 && viewport.y == 40
+	      && viewport.width == 2000 && viewport.height == 1500,
+	      "safe-area viewport remains exact 4:3");
+	CheckPoint(viewport, 229.0f, 790.0f, false, 0.0f, 0.0f,
+	           "safe-area pillarbox rejected");
+	CheckPoint(viewport, 2230.0f, 790.0f, false, 0.0f, 0.0f,
+	           "opposite safe-area pillarbox rejected");
+	CheckPoint(viewport, 1230.0f, 790.0f, true, 320.0f, 240.0f,
+	           "safe-area center inverse");
+
+	// Fractional and asymmetric display scales round every edge inward.
+	Check(PeonPadCalculatePixelInsets(
+		      1000, 600, 1501, 901,
+		      {1, 2, 997, 596}, pixelInsets),
+	      "fractional display scale converts safe area");
+	Check(pixelInsets.left == 2 && pixelInsets.top == 4
+	      && pixelInsets.right == 4 && pixelInsets.bottom == 4,
+	      "fractional display scale rounds inward");
+
+	// A safe-area change must replace the previous transform rather than leave
+	// stale bars or input bounds.
+	Check(PeonPadCalculatePixelInsets(
+		      1200, 800, 2400, 1600,
+		      {0, 0, 1200, 800}, pixelInsets),
+	      "initial full safe area");
+	Check(PeonPadCalculateViewport(
+		      2400, 1600, 640, 480, pixelInsets, viewport),
+	      "initial full-safe-area viewport");
+	const PeonPadViewportGeometry fullSafeViewport = viewport;
+	Check(PeonPadCalculatePixelInsets(
+		      1200, 800, 2400, 1600,
+		      {50, 20, 1130, 750}, pixelInsets),
+	      "changed safe area");
+	Check(PeonPadCalculateViewport(
+		      2400, 1600, 640, 480, pixelInsets, viewport),
+	      "safe-area-change viewport invalidation");
+	Check(viewport.x != fullSafeViewport.x
+	      && viewport.width != fullSafeViewport.width
+	      && viewport.x == 230 && viewport.width == 2000,
+	      "safe-area change replaces viewport state");
+
 	// Repeated resizes overwrite all prior transform state.
 	Check(PeonPadCalculateViewport(1200, 900, 640, 480,
 	                               {100, 20, 0, 40}, viewport),
@@ -124,6 +176,10 @@ int main()
 	Check(!PeonPadCalculateViewport(1200, 900, 640, 480,
 	                                {600, 0, 600, 0}, viewport),
 	      "exhausted insets rejected");
+	Check(!PeonPadCalculatePixelInsets(
+		      1200, 800, 2400, 1600,
+		      {1200, 0, 1, 800}, pixelInsets),
+	      "empty clamped safe area rejected");
 
 	if (Failures != 0) {
 		std::fprintf(stderr, "%d viewport check(s) failed\n", Failures);

@@ -4,6 +4,13 @@
 # for reproducible command-line dependency builds and must be explicitly enabled
 # in an Xcode build with a local development team.
 
+if(CMAKE_VERSION VERSION_LESS "3.28")
+  message(FATAL_ERROR
+    "The PeonPad xros toolchain requires CMake 3.28 or newer because "
+    "CMAKE_SYSTEM_NAME=visionOS is unavailable in CMake 3.27. Non-visionOS "
+    "PeonPad configurations continue to support CMake 3.27.")
+endif()
+
 set(CMAKE_SYSTEM_NAME visionOS)
 set(CMAKE_SYSTEM_PROCESSOR arm64)
 

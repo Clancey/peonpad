@@ -16,5 +16,7 @@ complete.
 `toolchains/xros-arm64.cmake` and `toolchains/xros-simulator-arm64.cmake` are
 separate native visionOS 2.0+ device and Simulator configurations. Both set the
 distinct `PEONPAD_VISIONOS` boundary; the former uses `xros`, while the latter
-uses `xrsimulator`. See `docs/visionos-shell.md` for the native SDL3 smoke-shell
-build, launch, inspection, and manual device-signing gates.
+uses `xrsimulator`. Native visionOS requires CMake 3.28 because that release
+introduced `CMAKE_SYSTEM_NAME=visionOS`; the project minimum remains 3.27 for
+non-visionOS configurations. See `docs/visionos-shell.md` for the native SDL3
+smoke-shell build, launch, inspection, and manual device-signing gates.

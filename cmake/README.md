@@ -13,6 +13,8 @@ defines the direct foundation smoke and input-adapter targets. The lane is
 isolated from `PEONPAD_ENABLE_ENGINE` until the staged Stratagus port is
 complete.
 
-`toolchains/xros-simulator-arm64.cmake` targets the native visionOS Simulator
-SDK for SDL3-family configure/link evidence. It does not define a PeonPad
-visionOS scene or application shell.
+`toolchains/xros-arm64.cmake` and `toolchains/xros-simulator-arm64.cmake` are
+separate native visionOS 2.0+ device and Simulator configurations. Both set the
+distinct `PEONPAD_VISIONOS` boundary; the former uses `xros`, while the latter
+uses `xrsimulator`. See `docs/visionos-shell.md` for the native SDL3 smoke-shell
+build, launch, inspection, and manual device-signing gates.

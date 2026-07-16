@@ -59,6 +59,17 @@ iOS Simulator and native xrsimulator. This is dependency/API evidence, not a
 ported gameplay build or native visionOS shell. See
 [sdl3-foundation.md](sdl3-foundation.md).
 
+The SDL3 foundation now owns a native visionOS 2.0+ smoke-shell application
+layer. Separate arm64 xros and xrsimulator configurations produce platform-11
+and platform-12 bundles with a UIKit window scene, Metal renderer, freeform
+resizing, layered PeonPad icon, and one exact 4:3 geometry/input transform. On
+July 15, 2026, the clean Simulator app installed, launched, remained resident,
+and rendered its public “SMOKE SHELL — NO GAMEPLAY” card on Apple Vision Pro /
+visionOS 26.5. The complete unsigned device build also passed bundle inspection;
+the visible physical Vision Pro was unavailable, so Xcode team signing and
+hardware install remain external gates. This does not enable or claim gameplay.
+See [visionos-shell.md](visionos-shell.md).
+
 The existing iPad target now has a separate Designed-for-iPad Vision Pro
 simulator path. Xcode 26.6 advertises the scheme at a `visionOS Simulator`
 destination with the `Designed for [iPad,iPhone]` variant, while actually

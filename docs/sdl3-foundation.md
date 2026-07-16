@@ -65,6 +65,8 @@ Build each lane without proprietary data:
 ./scripts/build-sdl3-foundation.sh macos
 ./scripts/build-sdl3-foundation.sh ios-simulator
 ./scripts/build-sdl3-foundation.sh xrsimulator
+./scripts/build-visionos-shell.sh xrsimulator --launch
+./scripts/build-visionos-shell.sh xros
 ```
 
 Evidence captured July 15, 2026:
@@ -73,17 +75,17 @@ Evidence captured July 15, 2026:
 | --- | --- |
 | macOS 13 arm64 | All foundation targets built, and the callback payload ran with both software and Metal renderers and reported exact core `3.4.12`, image `3.4.4`, and mixer `3.2.4` runtime versions. |
 | iOS Simulator 16 arm64 | All foundation targets, including the toolchain probe and input adapter, compiled; the SDL3-family payload and Apple bridge linked as Mach-O platform 7 with SDK 26.5. |
-| visionOS Simulator 2 arm64 | All foundation targets, including the visionOS toolchain probe and input adapter, compiled; the SDL3-family payload and Apple bridge linked natively as Mach-O platform 12 with SDK 26.5. It was not launched. |
+| visionOS Simulator 2 arm64 | All foundation and native shell targets compiled as Mach-O platform 12 with SDK 26.5. The app installed, launched, remained resident, and rendered its public smoke card on Apple Vision Pro / visionOS 26.5. |
+| visionOS device 2 arm64 | The complete unsigned xros configuration built as Mach-O platform 11 with SDK 26.5. Xcode team signing and available paired hardware remain manual gates. |
 | Default SDL2 | The full macOS Stratagus/Wargus app and tools built, and the default input/guardrail CTests passed. |
 
 The native xrsimulator build currently emits upstream SDL/SDL_image warnings
 for deprecated Uniform Type APIs and conditionally unused UIKit/Metal symbols.
 They remain visible and are not suppressed.
 
-The xrsimulator result is configure/link evidence for the public SDL3-family
-stack only. It is not a native visionOS application shell or runtime
-acceptance. A later stacked PR must port the remaining engine renderer,
-surface/pixel, SDL_image I/O, SDL_mixer playback, event loop, and tool call
-sites before enabling `PEONPAD_ENABLE_ENGINE` in this lane. Native visionOS
-then still needs scene ownership, bundle metadata, lifecycle/runtime testing,
-audio-session acceptance, and Vision Pro controller/input acceptance.
+The xrsimulator lane now has native scene ownership, bundle metadata, a
+resizable UIKit/Metal window, and runtime shell acceptance. It remains only the
+public SDL3 smoke payload. A later stacked PR must port the remaining engine
+renderer, surface/pixel, SDL_image I/O, SDL_mixer playback, event loop, and tool
+call sites before enabling `PEONPAD_ENABLE_ENGINE`. Audio-session, Vision Pro
+controller/input, comfort, and gameplay acceptance remain unclaimed.

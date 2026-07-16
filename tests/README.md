@@ -12,10 +12,11 @@ not substitute for either Goal 1 gameplay run. It also validates the iOS
 launch/icon declarations, exact opaque PNG dimensions, and the complete
 ordered Stratagus patch series.
 
-`scripts/test-ios-viewport.sh` compiles the pure C++ iOS viewport geometry on
-the host and checks full-screen 4:3, asymmetric safe insets, aspect fitting,
-and invalid geometry. Device acceptance remains necessary to verify the live
-UIKit insets and rendered result on the target iPad.
+`scripts/test-ios-viewport.sh` compiles the pure C++ Apple viewport geometry on
+the host in Release mode with `-DNDEBUG`. Explicit checks cover default, wide,
+tall, Retina, repeated resize, asymmetric insets, invalid geometry, inverse
+input mapping, and points in letterbox/pillarbox bars. Device acceptance remains
+necessary to verify the live UIKit insets and rendered result on the target.
 
 The default CTest configuration also builds `peonpad_input_intent_test`. It
 checks platform-neutral pointer, key, context-action, viewport-pan, and game
@@ -40,3 +41,9 @@ existing controller/touch intent state and run a headless SDL3 core,
 SDL3_image, SDL3_mixer, filesystem, renderer, texture, and gamepad smoke
 payload. `scripts/build-sdl3-foundation.sh macos` additionally runs the native
 Metal/window-properties path; simulator targets are compile/link evidence.
+
+`scripts/build-visionos-shell.sh` separately builds and inspects the complete
+native xros/xrsimulator shell configuration. Its launch route verifies an Apple
+Vision Pro under a visionOS runtime, install, launch PID residency, and optional
+local screenshot evidence. Guardrails also compile the layered visionOS icon
+catalog and exercise wrong-runtime simulator override rejection.

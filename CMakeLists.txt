@@ -22,6 +22,11 @@ option(PEONPAD_ENABLE_SDL3
   OFF
 )
 
+set(PEONPAD_VISIONOS OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  set(PEONPAD_VISIONOS ON)
+endif()
+
 add_library(peonpad_toolchain_probe STATIC tests/toolchain_probe.cpp)
 target_compile_features(peonpad_toolchain_probe PUBLIC cxx_std_17)
 
@@ -32,7 +37,21 @@ endif()
 
 if(BUILD_TESTING AND
     NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
-    NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    NOT PEONPAD_VISIONOS)
+  add_executable(peonpad_viewport_geometry_test
+    tests/viewport_geometry_test.cpp
+    platform/apple/ios/PeonPadViewportGeometry.cpp
+  )
+  target_include_directories(peonpad_viewport_geometry_test PRIVATE
+    platform/apple/ios
+  )
+  target_compile_features(peonpad_viewport_geometry_test PRIVATE cxx_std_17)
+  target_compile_definitions(peonpad_viewport_geometry_test PRIVATE NDEBUG)
+  add_test(
+    NAME peonpad_viewport_geometry_release
+    COMMAND peonpad_viewport_geometry_test
+  )
+
   add_executable(peonpad_input_intent_test
     tests/input_intent_test.cpp
     engine/stratagus/src/ui/controller_input.cpp
@@ -66,9 +85,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   target_compile_definitions(peonpad_toolchain_probe PRIVATE
     PEONPAD_EXPECT_IOS=1
   )
-elseif(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+elseif(PEONPAD_VISIONOS)
   target_compile_definitions(peonpad_toolchain_probe PRIVATE
     PEONPAD_EXPECT_VISIONOS=1
+    PEONPAD_VISIONOS=1
   )
 else()
   target_compile_definitions(peonpad_toolchain_probe PRIVATE
@@ -90,7 +110,13 @@ if(PEONPAD_ENABLE_ENGINE)
     )
   endif()
 
-  if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  if(PEONPAD_VISIONOS)
+    message(FATAL_ERROR
+      "PEONPAD_ENABLE_ENGINE is not available for visionOS. Build only the "
+      "guarded PEONPAD_ENABLE_SDL3 smoke shell until the full gameplay engine "
+      "has completed its direct SDL3 port."
+    )
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     message(FATAL_ERROR
       "PEONPAD_ENABLE_ENGINE currently selects the proven macOS superbuild. "
       "Use the iOS library target added in the next phase for iPadOS."

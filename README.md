@@ -251,6 +251,25 @@ extraction when `--installer` is selected.
 </details>
 
 <details>
+  <summary><strong>Native visionOS SDL3 smoke shell</strong></summary>
+
+This separate target is a native `xros`/`xrsimulator` visionOS 2.0+ window
+shell, not the Designed-for-iPad app and not playable gameplay. It launches
+only a public SDL3/Metal smoke card:
+
+```sh
+./scripts/build-visionos-shell.sh xrsimulator --launch
+./scripts/build-visionos-shell.sh xros
+```
+
+The first command discovers only an Apple Vision Pro on a visionOS runtime,
+then installs, launches, and checks process residency. The second creates the
+unsigned physical-device slice; Xcode team signing remains manual. Native shell
+metadata, bundle inspection, signing gates, and explicit non-goals are in
+[`docs/visionos-shell.md`](docs/visionos-shell.md).
+</details>
+
+<details>
   <summary><strong>Designed-for-iPad Vision Pro simulator probe</strong></summary>
 
 This compatibility path builds the existing iPad target with the

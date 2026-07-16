@@ -37,6 +37,9 @@ fi
 "$ROOT_DIR/scripts/preflight-vision-compat.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-sdl3-foundation.sh" --help >/dev/null
+"$ROOT_DIR/scripts/build-visionos-shell.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
@@ -53,6 +56,11 @@ if "$ROOT_DIR/scripts/build-sdl3-foundation.sh" \
   print -u2 "SDL3 foundation build accepted an unsupported target"
   exit 1
 fi
+if "$ROOT_DIR/scripts/build-visionos-shell.sh" \
+    unsupported >/dev/null 2>&1; then
+  print -u2 "visionOS shell build accepted an unsupported target"
+  exit 1
+fi
 
 VISION_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-simulator-arm64.cmake"
 rg -q 'CMAKE_OSX_SYSROOT iphonesimulator' "$VISION_TOOLCHAIN"
@@ -62,8 +70,13 @@ rg -q 'SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD YES' "$VISION_TOOLCHAIN"
 XROS_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-simulator-arm64.cmake"
 rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_TOOLCHAIN"
 rg -q 'CMAKE_OSX_SYSROOT xrsimulator' "$XROS_TOOLCHAIN"
+rg -q 'PEONPAD_VISIONOS_SIMULATOR_BUILD TRUE' "$XROS_TOOLCHAIN"
+XROS_DEVICE_TOOLCHAIN="$ROOT_DIR/cmake/toolchains/xros-arm64.cmake"
+rg -q 'CMAKE_SYSTEM_NAME visionOS' "$XROS_DEVICE_TOOLCHAIN"
+rg -q 'CMAKE_OSX_SYSROOT xros' "$XROS_DEVICE_TOOLCHAIN"
+rg -q 'PEONPAD_VISIONOS_DEVICE_BUILD TRUE' "$XROS_DEVICE_TOOLCHAIN"
 rg -q 'PEONPAD_EXPECT_VISIONOS=1' "$ROOT_DIR/CMakeLists.txt"
-rg -q 'defined\(PEONPAD_EXPECT_VISIONOS\).*TARGET_OS_VISION' \
+rg -q 'PEONPAD_VISIONOS.*TARGET_OS_VISION.*TARGET_OS_IOS.*TARGET_OS_OSX' \
   "$ROOT_DIR/tests/toolchain_probe.cpp"
 
 SDL3_BUILD_SCRIPT="$ROOT_DIR/scripts/build-sdl3-foundation.sh"
@@ -72,6 +85,19 @@ if rg -q -- '--target peonpad_sdl3_smoke' "$SDL3_BUILD_SCRIPT"; then
   print -u2 "SDL3 foundation validation builds only the smoke target"
   exit 1
 fi
+VISIONOS_BUILD_SCRIPT="$ROOT_DIR/scripts/build-visionos-shell.sh"
+rg -q 'cmake --build "\$BUILD_DIR" --parallel' "$VISIONOS_BUILD_SCRIPT"
+if rg -q -- '--target peonpad_sdl3_smoke' "$VISIONOS_BUILD_SCRIPT"; then
+  print -u2 "visionOS shell validation builds only the smoke target"
+  exit 1
+fi
+rg -q 'find-vision-pro-simulator\.sh' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'simctl bootstatus' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'simctl install' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'simctl launch --terminate-running-process' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'launchctl procinfo' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'PEONPAD_VISIONOS_DEVICE_INSTALL' \
+  "$ROOT_DIR/scripts/install-visionos-device.sh"
 
 rg -q 'option\(PEONPAD_ENABLE_SDL3' "$ROOT_DIR/CMakeLists.txt"
 rg -q 'SDL-release-3\.4\.12\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
@@ -80,6 +106,47 @@ rg -q 'SDL_mixer-release-3\.2\.4\.tar\.gz' "$ROOT_DIR/config/inputs.lock"
 if find "$ROOT_DIR/third_party/sdl3" -iname '*sdl2-compat*' -print -quit \
     | grep -q .; then
   print -u2 "sdl2-compat entered the direct SDL3 dependency tree"
+  exit 1
+fi
+if rg -q 'SDL_syswm' "$ROOT_DIR/platform/apple/visionos"; then
+  print -u2 "legacy SDL_syswm entered the native visionOS shell"
+  exit 1
+fi
+
+VISION_PLIST="$ROOT_DIR/platform/apple/visionos/Info.plist.in"
+plutil -lint "$VISION_PLIST" >/dev/null
+[[ "$(plutil -extract UIDeviceFamily.0 raw "$VISION_PLIST")" == "7" ]]
+[[ "$(plutil -extract \
+  UIApplicationSceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleApplication.0.UISceneDelegateClassName \
+  raw "$VISION_PLIST")" == "SDLUIKitSceneDelegate" ]]
+for forbidden_key in \
+  'CFBundleIcons~ipad' \
+  UIRequiresFullScreen \
+  'UISupportedInterfaceOrientations~ipad'; do
+  if plutil -extract "$forbidden_key" raw "$VISION_PLIST" \
+      >/dev/null 2>&1; then
+    print -u2 "iPad-only key entered visionOS metadata: $forbidden_key"
+    exit 1
+  fi
+done
+rg -q 'MACOSX_PACKAGE_LOCATION Resources' \
+  "$ROOT_DIR/cmake/PeonPadSDL3.cmake"
+VISION_ASSET_ROOT="$TEST_RUNTIME/visionos-assets"
+VISION_ASSET_APP="$VISION_ASSET_ROOT/PeonPadVisionShell.app"
+cmake -E remove_directory "$VISION_ASSET_ROOT"
+cmake -E make_directory "$VISION_ASSET_APP"
+"$ROOT_DIR/platform/apple/visionos/compile-bundle-assets.sh" \
+  xrsimulator "$(command -v cmake)" "$VISION_ASSET_APP" \
+  "$ROOT_DIR/platform/apple/visionos/PeonPadAssets.xcassets" \
+  "$ROOT_DIR/platform/apple/ios/PeonPadAssets.xcassets/AppIcon.appiconset/PeonPadIcon.png" \
+  "$VISION_ASSET_ROOT/work" >/dev/null
+[[ -f "$VISION_ASSET_APP/Assets.car" ]]
+[[ "$(plutil -extract CFBundleIcons.CFBundlePrimaryIcon raw \
+  "$VISION_ASSET_ROOT/work/asset-info.plist")" == "AppIcon" ]]
+cmake -E remove_directory "$VISION_ASSET_ROOT"
+rg -q -- '-DNDEBUG' "$ROOT_DIR/scripts/test-ios-viewport.sh"
+if rg -q '\bassert\(' "$ROOT_DIR/tests/viewport_geometry_test.cpp"; then
+  print -u2 "Release viewport/input checks rely on assert"
   exit 1
 fi
 

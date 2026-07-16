@@ -10,8 +10,9 @@
 #error "The iOS preflight probe is not using an iOS target"
 #endif
 
-#if defined(PEONPAD_EXPECT_VISIONOS) && !TARGET_OS_VISION
-#error "The visionOS preflight probe is not using a visionOS target"
+#if defined(PEONPAD_EXPECT_VISIONOS) && \
+    (!defined(PEONPAD_VISIONOS) || !TARGET_OS_VISION || TARGET_OS_IOS || TARGET_OS_OSX)
+#error "The visionOS probe crossed the distinct PEONPAD_VISIONOS target boundary"
 #endif
 
 #if defined(PEONPAD_EXPECT_MACOS) && !TARGET_OS_OSX

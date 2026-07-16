@@ -1,5 +1,7 @@
-# Direct visionOS Simulator toolchain for SDL3 configure/link evidence.
-# This does not define a PeonPad visionOS application shell.
+# Native PeonPad visionOS Simulator toolchain.
+#
+# This configuration always selects xrsimulator/arm64. Device builds use the
+# separate xros-arm64.cmake toolchain so the two slices cannot be mixed.
 
 set(CMAKE_SYSTEM_NAME visionOS)
 set(CMAKE_SYSTEM_PROCESSOR arm64)
@@ -17,3 +19,8 @@ set(CMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH YES)
 set(CMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS "xrsimulator")
 set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED NO)
 set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED NO)
+
+set(PEONPAD_VISIONOS TRUE CACHE BOOL
+  "PeonPad native visionOS platform boundary" FORCE)
+set(PEONPAD_VISIONOS_SIMULATOR_BUILD TRUE CACHE BOOL
+  "PeonPad native visionOS Simulator build" FORCE)

@@ -4,6 +4,12 @@ Shared macOS and iPadOS platform integration belongs here. Platform-specific
 filesystem, lifecycle, rendering, and input behavior must sit behind explicit
 Apple target boundaries rather than being patched into reference material.
 
+The native visionOS 2.0+ SDL3 smoke shell lives under `visionos/`. Its scene
+manifest delegates app/window ownership to SDL3's supported UIKit scene
+delegate, while the Objective-C++ slice verifies the public UIKit/Metal window
+properties and requests freeform resizing. It is a non-game smoke shell; the
+guarded full SDL3 Stratagus engine remains disabled.
+
 The iPad application Info.plist template lives in `ios/Info.plist.in`. Build
 the unsigned physical-device bundle with `scripts/build-ios-app.sh`; the
 generated bundle remains under `build/` and is never a reference input.
@@ -23,8 +29,9 @@ exercises that exact resource-copy route without requiring signing or a device.
 
 The iOS viewport layer is split deliberately:
 
-- `PeonPadViewportGeometry.*` calculates an aspect-preserving game viewport
-  inside pixel safe-area insets and is testable on macOS.
+- `PeonPadViewportGeometry.*` calculates one exact-aspect viewport inside pixel
+  safe-area insets, provides inverse bar-aware input mapping, and is testable on
+  macOS under `-DNDEBUG`.
 - `PeonPadIOSViewport.mm` obtains UIKit safe-area insets from SDL's `UIWindow`,
   converts them from points to Retina drawable pixels, and applies one SDL
   viewport/scale transform for both rendering and SDL event conversion.

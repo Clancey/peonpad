@@ -1,5 +1,8 @@
 include(FetchContent)
 
+set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE NEVER)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+
 if(PEONPAD_ENABLE_ENGINE)
   message(FATAL_ERROR
     "PEONPAD_ENABLE_SDL3 is an isolated foundation lane. The accepted "
@@ -85,15 +88,74 @@ set(_peonpad_sdl3_smoke_sources tests/sdl3_foundation_smoke.cpp)
 if(APPLE)
   list(APPEND _peonpad_sdl3_smoke_sources
     platform/apple/PeonPadSDL3Window.mm
+    platform/apple/ios/PeonPadViewportGeometry.cpp
+  )
+endif()
+if(PEONPAD_VISIONOS)
+  list(APPEND _peonpad_sdl3_smoke_sources
+    platform/apple/visionos/PeonPadVisionOSShell.mm
+    "${peonpad_sdl3_SOURCE_DIR}/test/icon.png"
+    "${peonpad_sdl3_mixer_SOURCE_DIR}/examples/spring.wav"
+  )
+  set_source_files_properties(
+    "${peonpad_sdl3_SOURCE_DIR}/test/icon.png"
+    "${peonpad_sdl3_mixer_SOURCE_DIR}/examples/spring.wav"
+    PROPERTIES MACOSX_PACKAGE_LOCATION Resources
   )
 endif()
 
 add_executable(peonpad_sdl3_smoke ${_peonpad_sdl3_smoke_sources})
-target_include_directories(peonpad_sdl3_smoke PRIVATE platform/apple)
-target_compile_definitions(peonpad_sdl3_smoke PRIVATE
-  PEONPAD_SDL3_IMAGE_FIXTURE="${peonpad_sdl3_SOURCE_DIR}/test/icon.png"
-  PEONPAD_SDL3_AUDIO_FIXTURE="${peonpad_sdl3_mixer_SOURCE_DIR}/examples/spring.wav"
+target_include_directories(peonpad_sdl3_smoke PRIVATE
+  platform/apple
+  platform/apple/ios
+  platform/apple/visionos
 )
+if(PEONPAD_VISIONOS)
+  set(PEONPAD_VISIONOS_BUNDLE_IDENTIFIER "org.peonpad.visionos"
+    CACHE STRING "Bundle identifier for the native visionOS smoke shell")
+  if(PEONPAD_VISIONOS_SIMULATOR_BUILD)
+    set(PEONPAD_VISIONOS_SUPPORTED_PLATFORM XRSimulator)
+  else()
+    set(PEONPAD_VISIONOS_SUPPORTED_PLATFORM XROS)
+  endif()
+  target_compile_definitions(peonpad_sdl3_smoke PRIVATE
+    PEONPAD_SDL3_AUDIO_FIXTURE="spring.wav"
+    PEONPAD_SDL3_BUNDLED_FIXTURES=1
+    PEONPAD_SDL3_IMAGE_FIXTURE="icon.png"
+    PEONPAD_VISIONOS=1
+    PEONPAD_VISIONOS_BUNDLE_IDENTIFIER="${PEONPAD_VISIONOS_BUNDLE_IDENTIFIER}"
+  )
+  set_target_properties(peonpad_sdl3_smoke PROPERTIES
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_INFO_PLIST
+      "${CMAKE_CURRENT_LIST_DIR}/../platform/apple/visionos/Info.plist.in"
+    OUTPUT_NAME PeonPadVisionShell
+    XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER
+      "${PEONPAD_VISIONOS_BUNDLE_IDENTIFIER}"
+    XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY 7
+  )
+  if(PEONPAD_VISIONOS_ENABLE_SIGNING)
+    set_target_properties(peonpad_sdl3_smoke PROPERTIES
+      XCODE_ATTRIBUTE_CODE_SIGN_STYLE Automatic
+    )
+  endif()
+  add_custom_command(TARGET peonpad_sdl3_smoke POST_BUILD
+    COMMAND
+      "${CMAKE_CURRENT_LIST_DIR}/../platform/apple/visionos/compile-bundle-assets.sh"
+      "${CMAKE_OSX_SYSROOT}"
+      "${CMAKE_COMMAND}"
+      "$<TARGET_BUNDLE_DIR:peonpad_sdl3_smoke>"
+      "${CMAKE_CURRENT_LIST_DIR}/../platform/apple/visionos/PeonPadAssets.xcassets"
+      "${CMAKE_CURRENT_LIST_DIR}/../platform/apple/ios/PeonPadAssets.xcassets/AppIcon.appiconset/PeonPadIcon.png"
+      "${CMAKE_CURRENT_BINARY_DIR}/visionos-assets"
+    VERBATIM
+  )
+else()
+  target_compile_definitions(peonpad_sdl3_smoke PRIVATE
+    PEONPAD_SDL3_AUDIO_FIXTURE="${peonpad_sdl3_mixer_SOURCE_DIR}/examples/spring.wav"
+    PEONPAD_SDL3_IMAGE_FIXTURE="${peonpad_sdl3_SOURCE_DIR}/test/icon.png"
+  )
+endif()
 target_compile_features(peonpad_sdl3_smoke PRIVATE cxx_std_17)
 target_link_libraries(peonpad_sdl3_smoke PRIVATE
   SDL3::SDL3
@@ -103,7 +165,7 @@ target_link_libraries(peonpad_sdl3_smoke PRIVATE
 
 if(BUILD_TESTING AND
     NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
-    NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    NOT PEONPAD_VISIONOS)
   add_executable(peonpad_sdl3_input_adapter_test
     tests/sdl3_input_adapter_test.cpp
     engine/stratagus/src/ui/controller_input.cpp

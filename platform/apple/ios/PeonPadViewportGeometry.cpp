@@ -1,7 +1,7 @@
 #include "PeonPadViewportGeometry.h"
 
 #include <algorithm>
-#include <cmath>
+#include <numeric>
 
 bool PeonPadCalculateViewport(const int outputWidth,
                              const int outputHeight,
@@ -10,6 +10,7 @@ bool PeonPadCalculateViewport(const int outputWidth,
                              PeonPadPixelInsets insets,
                              PeonPadViewportGeometry &viewport)
 {
+	viewport = {};
 	if (outputWidth <= 0 || outputHeight <= 0
 	    || logicalWidth <= 0 || logicalHeight <= 0) {
 		return false;
@@ -26,15 +27,46 @@ bool PeonPadCalculateViewport(const int outputWidth,
 		return false;
 	}
 
-	const float scale = std::min(static_cast<float>(safeWidth) / logicalWidth,
-	                             static_cast<float>(safeHeight) / logicalHeight);
-	const int width = std::max(1, static_cast<int>(std::floor(logicalWidth * scale)));
-	const int height = std::max(1, static_cast<int>(std::floor(logicalHeight * scale)));
+	const int divisor = std::gcd(logicalWidth, logicalHeight);
+	const int aspectWidth = logicalWidth / divisor;
+	const int aspectHeight = logicalHeight / divisor;
+	const int aspectScale = std::min(safeWidth / aspectWidth,
+	                                 safeHeight / aspectHeight);
+	if (aspectScale <= 0) {
+		return false;
+	}
+
+	const int width = aspectWidth * aspectScale;
+	const int height = aspectHeight * aspectScale;
 
 	viewport.x = insets.left + (safeWidth - width) / 2;
 	viewport.y = insets.top + (safeHeight - height) / 2;
 	viewport.width = width;
 	viewport.height = height;
-	viewport.scale = scale;
+	viewport.logicalWidth = logicalWidth;
+	viewport.logicalHeight = logicalHeight;
+	viewport.scale = static_cast<float>(width) / logicalWidth;
 	return true;
+}
+
+bool PeonPadMapViewportPoint(const PeonPadViewportGeometry &viewport,
+                            const float outputX,
+                            const float outputY,
+                            PeonPadViewportPoint &logicalPoint)
+{
+	logicalPoint = {};
+	if (viewport.width <= 0 || viewport.height <= 0
+	    || viewport.logicalWidth <= 0 || viewport.logicalHeight <= 0
+	    || viewport.scale <= 0.0f
+	    || outputX < viewport.x || outputY < viewport.y
+	    || outputX >= viewport.x + viewport.width
+	    || outputY >= viewport.y + viewport.height) {
+		return false;
+	}
+
+	logicalPoint.x = (outputX - viewport.x) / viewport.scale;
+	logicalPoint.y = (outputY - viewport.y) / viewport.scale;
+	return logicalPoint.x >= 0.0f && logicalPoint.y >= 0.0f
+	    && logicalPoint.x < viewport.logicalWidth
+	    && logicalPoint.y < viewport.logicalHeight;
 }

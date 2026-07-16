@@ -61,11 +61,15 @@ cmake --fresh -S "$ROOT_DIR" -B "$BUILD_DIR" -G "Unix Makefiles" \
   "${CMAKE_ARGS[@]}"
 cmake --build "$BUILD_DIR" --parallel
 
-if [[ "$TARGET" == macos ]]; then
-  BINARY="$BUILD_DIR/peonpad_sdl3_smoke"
-else
-  BINARY="$BUILD_DIR/peonpad_sdl3_smoke.app/peonpad_sdl3_smoke"
-fi
+case "$TARGET" in
+  macos) BINARY="$BUILD_DIR/peonpad_sdl3_smoke" ;;
+  ios-simulator)
+    BINARY="$BUILD_DIR/peonpad_sdl3_smoke.app/peonpad_sdl3_smoke"
+    ;;
+  xrsimulator)
+    BINARY="$BUILD_DIR/PeonPadVisionShell.app/PeonPadVisionShell"
+    ;;
+esac
 [[ -x "$BINARY" ]] || {
   print -u2 "missing SDL3 foundation executable: $BINARY"
   exit 1
@@ -88,6 +92,8 @@ case "$TARGET" in
       $1 == "platform" {count++; if ($2 != 12) bad = 1}
       END {exit count == 0 || bad}
     '
+    "$SCRIPT_DIR/verify-visionos-bundle.sh" xrsimulator \
+      "$BUILD_DIR/PeonPadVisionShell.app"
     ;;
 esac
 

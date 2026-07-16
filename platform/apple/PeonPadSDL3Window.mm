@@ -46,7 +46,7 @@ void *PeonPadSDL3GetNativeMetalView(SDL_Window *window)
 
 bool PeonPadSDL3MapWindowPointToLogical(
 	SDL_Window *window,
-	const PeonPadViewportGeometry &viewport,
+	const PeonPadViewportState &viewport,
 	const float windowX,
 	const float windowY,
 	PeonPadViewportPoint &logicalPoint)
@@ -66,6 +66,6 @@ bool PeonPadSDL3MapWindowPointToLogical(
 
 	const float pixelX = windowX * pixelWidth / pointWidth;
 	const float pixelY = windowY * pixelHeight / pointHeight;
-	return PeonPadMapViewportPoint(
+	return PeonPadMapViewportStatePoint(
 		viewport, pixelX, pixelY, logicalPoint);
 }

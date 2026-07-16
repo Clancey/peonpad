@@ -59,6 +59,48 @@ bool PeonPadCalculatePixelInsets(const int pointWidth,
 	    && pixelInsets.top + pixelInsets.bottom < pixelHeight;
 }
 
+void PeonPadInvalidateViewport(PeonPadViewportState &state)
+{
+	state.geometryDirty = true;
+	state.renderDirty = true;
+	state.valid = false;
+}
+
+bool PeonPadRefreshViewportState(const int pointWidth,
+                                const int pointHeight,
+                                const int pixelWidth,
+                                const int pixelHeight,
+                                const PeonPadPointRect safeArea,
+                                const int logicalWidth,
+                                const int logicalHeight,
+                                PeonPadViewportState &state)
+{
+	PeonPadPixelInsets pixelInsets{};
+	PeonPadViewportGeometry viewport{};
+	if (!PeonPadCalculatePixelInsets(
+		    pointWidth, pointHeight, pixelWidth, pixelHeight,
+		    safeArea, pixelInsets)
+	    || !PeonPadCalculateViewport(
+		    pixelWidth, pixelHeight, logicalWidth, logicalHeight,
+		    pixelInsets, viewport)) {
+		PeonPadInvalidateViewport(state);
+		return false;
+	}
+
+	state.viewport = viewport;
+	state.geometryDirty = false;
+	state.renderDirty = true;
+	state.valid = true;
+	return true;
+}
+
+void PeonPadMarkViewportRendered(PeonPadViewportState &state)
+{
+	if (state.valid && !state.geometryDirty) {
+		state.renderDirty = false;
+	}
+}
+
 bool PeonPadCalculateViewport(const int outputWidth,
                              const int outputHeight,
                              const int logicalWidth,
@@ -125,4 +167,17 @@ bool PeonPadMapViewportPoint(const PeonPadViewportGeometry &viewport,
 	return logicalPoint.x >= 0.0f && logicalPoint.y >= 0.0f
 	    && logicalPoint.x < viewport.logicalWidth
 	    && logicalPoint.y < viewport.logicalHeight;
+}
+
+bool PeonPadMapViewportStatePoint(const PeonPadViewportState &state,
+                                 const float outputX,
+                                 const float outputY,
+                                 PeonPadViewportPoint &logicalPoint)
+{
+	if (!state.valid || state.geometryDirty) {
+		logicalPoint = {};
+		return false;
+	}
+	return PeonPadMapViewportPoint(
+		state.viewport, outputX, outputY, logicalPoint);
 }

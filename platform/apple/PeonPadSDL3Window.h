@@ -12,7 +12,7 @@ void *PeonPadSDL3GetNativeMetalView(SDL_Window *window);
 // aspect-fit viewport. Bar input is rejected.
 bool PeonPadSDL3MapWindowPointToLogical(
 	SDL_Window *window,
-	const PeonPadViewportGeometry &viewport,
+	const PeonPadViewportState &viewport,
 	float windowX,
 	float windowY,
 	PeonPadViewportPoint &logicalPoint);

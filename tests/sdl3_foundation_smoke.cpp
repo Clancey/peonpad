@@ -28,9 +28,8 @@ struct SmokeState
 	MIX_Mixer *Mixer = nullptr;
 	MIX_Audio *Audio = nullptr;
 	MIX_Track *Track = nullptr;
-	PeonPadViewportGeometry Viewport{};
+	PeonPadViewportState Viewport{};
 	bool Headless = false;
-	bool ViewportDirty = true;
 };
 
 SDL_AppResult Fail(const char *operation)
@@ -97,33 +96,44 @@ bool DrawVisionShellCanvas(SmokeState &state)
 	return result && reset;
 }
 
-bool RenderVisionShell(SmokeState &state)
+bool RefreshVisionViewport(SmokeState &state)
 {
 	int pointWidth = 0;
 	int pointHeight = 0;
 	int outputWidth = 0;
 	int outputHeight = 0;
 	SDL_Rect safeArea{};
-	PeonPadPixelInsets pixelInsets{};
 	if (!SDL_GetWindowSize(state.Window, &pointWidth, &pointHeight)
 	    || !SDL_GetWindowSizeInPixels(
 		    state.Window, &outputWidth, &outputHeight)
 	    || !SDL_GetWindowSafeArea(state.Window, &safeArea)
-	    || !PeonPadCalculatePixelInsets(
+	    || !PeonPadRefreshViewportState(
 		    pointWidth, pointHeight, outputWidth, outputHeight,
 		    {safeArea.x, safeArea.y, safeArea.w, safeArea.h},
-		    pixelInsets)
-	    || !PeonPadCalculateViewport(
-		    outputWidth, outputHeight, 640, 480,
-		    pixelInsets, state.Viewport)) {
+		    640, 480, state.Viewport)) {
+		return false;
+	}
+	return true;
+}
+
+bool EnsureVisionViewportCurrent(SmokeState &state)
+{
+	return !state.Viewport.geometryDirty
+	    ? state.Viewport.valid
+	    : RefreshVisionViewport(state);
+}
+
+bool RenderVisionShell(SmokeState &state)
+{
+	if (!EnsureVisionViewportCurrent(state)) {
 		return false;
 	}
 
 	const SDL_FRect destination{
-		static_cast<float>(state.Viewport.x),
-		static_cast<float>(state.Viewport.y),
-		static_cast<float>(state.Viewport.width),
-		static_cast<float>(state.Viewport.height),
+		static_cast<float>(state.Viewport.viewport.x),
+		static_cast<float>(state.Viewport.viewport.y),
+		static_cast<float>(state.Viewport.viewport.width),
+		static_cast<float>(state.Viewport.viewport.height),
 	};
 	if (!SDL_SetRenderDrawColor(state.Renderer, 0, 0, 0, 255)
 	    || !SDL_RenderClear(state.Renderer)
@@ -132,7 +142,7 @@ bool RenderVisionShell(SmokeState &state)
 	    || !SDL_RenderPresent(state.Renderer)) {
 		return false;
 	}
-	state.ViewportDirty = false;
+	PeonPadMarkViewportRendered(state.Viewport);
 	return true;
 }
 #endif
@@ -332,13 +342,16 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
 		case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
 			if (state) {
-				state->ViewportDirty = true;
+				PeonPadInvalidateViewport(state->Viewport);
 			}
 			return SDL_APP_CONTINUE;
 		case SDL_EVENT_MOUSE_MOTION:
 		case SDL_EVENT_MOUSE_BUTTON_DOWN:
 		case SDL_EVENT_MOUSE_BUTTON_UP:
 			if (state && state->Window) {
+				if (!EnsureVisionViewportCurrent(*state)) {
+					return SDL_APP_CONTINUE;
+				}
 				const float x = event->type == SDL_EVENT_MOUSE_MOTION
 					? event->motion.x : event->button.x;
 				const float y = event->type == SDL_EVENT_MOUSE_MOTION
@@ -353,9 +366,15 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
 		case SDL_EVENT_FINGER_UP:
 		case SDL_EVENT_FINGER_CANCELED:
 			if (state && state->Window) {
+				if (!EnsureVisionViewportCurrent(*state)) {
+					return SDL_APP_CONTINUE;
+				}
 				int width = 0;
 				int height = 0;
-				SDL_GetWindowSize(state->Window, &width, &height);
+				if (!SDL_GetWindowSize(state->Window, &width, &height)
+				    || width <= 0 || height <= 0) {
+					return SDL_APP_CONTINUE;
+				}
 				PeonPadViewportPoint logicalPoint;
 				PeonPadSDL3MapWindowPointToLogical(
 					state->Window, state->Viewport,
@@ -373,7 +392,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 {
 #ifdef PEONPAD_VISIONOS
 	auto *state = static_cast<SmokeState *>(appstate);
-	if (state && state->ViewportDirty && !RenderVisionShell(*state)) {
+	if (state && state->Viewport.renderDirty && !RenderVisionShell(*state)) {
 		return Fail("visionOS resize rendering");
 	}
 	return SDL_APP_CONTINUE;

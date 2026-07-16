@@ -150,6 +150,57 @@ int main()
 	      && viewport.x == 230 && viewport.width == 2000,
 	      "safe-area change replaces viewport state");
 
+	// SDL drains geometry and pointer events before the next iterate callback.
+	// A pointer arriving in that batch must synchronously refresh and use the
+	// new viewport, while rendering remains pending for the next iterate.
+	PeonPadViewportState viewportState{};
+	Check(PeonPadRefreshViewportState(
+		      1200, 800, 2400, 1600, {0, 0, 1200, 800},
+		      640, 480, viewportState),
+	      "initial ordered-event viewport refresh");
+	PeonPadMarkViewportRendered(viewportState);
+	Check(!viewportState.geometryDirty && !viewportState.renderDirty
+	      && viewportState.valid,
+	      "initial ordered-event viewport rendered");
+	PeonPadViewportPoint orderedPoint{};
+	Check(PeonPadMapViewportStatePoint(
+		      viewportState, 150.0f, 800.0f, orderedPoint),
+	      "point is inside the old viewport");
+
+	PeonPadInvalidateViewport(viewportState);
+	Check(viewportState.geometryDirty && viewportState.renderDirty
+	      && !viewportState.valid,
+	      "geometry event invalidates mapping before iterate");
+	Check(!PeonPadMapViewportStatePoint(
+		      viewportState, 150.0f, 800.0f, orderedPoint),
+	      "dirty viewport rejects stale pointer mapping");
+
+	// This refresh is the pointer-event path, before iterate/render.
+	Check(PeonPadRefreshViewportState(
+		      1200, 800, 2400, 1600, {50, 20, 1130, 750},
+		      640, 480, viewportState),
+	      "pointer event synchronously refreshes dirty viewport");
+	Check(!viewportState.geometryDirty && viewportState.renderDirty
+	      && viewportState.valid,
+	      "pointer refresh keeps rendering pending");
+	Check(!PeonPadMapViewportStatePoint(
+		      viewportState, 150.0f, 800.0f, orderedPoint),
+	      "pointer uses refreshed geometry and rejects its new bar");
+	Check(PeonPadMapViewportStatePoint(
+		      viewportState, 1230.0f, 790.0f, orderedPoint)
+	      && NearlyEqual(orderedPoint.x, 320.0f)
+	      && NearlyEqual(orderedPoint.y, 240.0f),
+	      "pointer uses refreshed geometry before render");
+
+	PeonPadInvalidateViewport(viewportState);
+	Check(!PeonPadRefreshViewportState(
+		      0, 800, 2400, 1600, {0, 0, 1200, 800},
+		      640, 480, viewportState),
+	      "unavailable current geometry fails refresh");
+	Check(!PeonPadMapViewportStatePoint(
+		      viewportState, 1230.0f, 790.0f, orderedPoint),
+	      "failed refresh rejects input instead of using stale geometry");
+
 	// Repeated resizes overwrite all prior transform state.
 	Check(PeonPadCalculateViewport(1200, 900, 640, 480,
 	                               {100, 20, 0, 40}, viewport),

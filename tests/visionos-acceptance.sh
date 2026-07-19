@@ -10,13 +10,16 @@ SELECTOR="$ROOT_DIR/scripts/find-vision-pro-simulator.sh"
 VERIFIER="$ROOT_DIR/scripts/verify-visionos-bundle.sh"
 FIXTURES="$SCRIPT_DIR/fixtures"
 REAL_CMAKE=$(command -v cmake)
+REAL_GIT=$(command -v git)
 ORIGINAL_PATH=$PATH
 TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/peonpad-visionos-tests.XXXXXX")
 FAKE_BIN="$TEMP_ROOT/fake tools"
 BINARY_BIN="$TEMP_ROOT/binary tools"
-mkdir -p "$FAKE_BIN" "$BINARY_BIN"
+HOST_BIN="$TEMP_ROOT/host tools"
+mkdir -p "$FAKE_BIN" "$BINARY_BIN" "$HOST_BIN"
 
 cleanup() {
+  chmod -R u+w "$TEMP_ROOT" >/dev/null 2>&1 || :
   "$REAL_CMAKE" -E remove_directory "$TEMP_ROOT"
   "$REAL_CMAKE" -E remove_directory \
     "$ROOT_DIR/build/visionos-acceptance-regression"
@@ -26,10 +29,13 @@ trap cleanup EXIT
 cp "$FIXTURES/fake-visionos-acceptance-xcrun.sh" "$FAKE_BIN/xcrun"
 cp "$FIXTURES/fake-visionos-acceptance-cmake.sh" "$FAKE_BIN/cmake"
 cp "$FIXTURES/fake-visionos-acceptance-xcodebuild.sh" "$FAKE_BIN/xcodebuild"
-for tool in lipo otool codesign; do
+for tool in lipo otool codesign find xcrun; do
   cp "$FIXTURES/fake-visionos-binary-tool.sh" "$BINARY_BIN/$tool"
 done
-chmod +x "$FAKE_BIN"/* "$BINARY_BIN"/*
+for tool in git plutil mv; do
+  cp "$FIXTURES/fake-visionos-acceptance-host-tool.sh" "$HOST_BIN/$tool"
+done
+chmod +x "$FAKE_BIN"/* "$BINARY_BIN"/* "$HOST_BIN"/*
 
 VISION_25=11111111-1111-1111-1111-111111111111
 VISION_264=22222222-2222-2222-2222-222222222222
@@ -111,6 +117,45 @@ PATH="$BINARY_BIN:$ORIGINAL_PATH" \
 [[ "$(plutil -extract framework_count raw \
   "$VERIFY_ROOT/simulator metadata.json")" == 1 ]]
 
+plutil -replace CFBundleIcons.CFBundlePrimaryIcon -string MissingIcon \
+  "$SIM_APP/Info.plist"
+if PATH="$BINARY_BIN:$ORIGINAL_PATH" \
+    PEONPAD_TEST_MACHO_PLATFORM=12 \
+    PEONPAD_TEST_CODESIGN_MODE=adhoc \
+    "$VERIFIER" xrsimulator "$SIM_APP" >/dev/null 2>&1; then
+  print -u2 "bundle verifier accepted a nonexistent declared primary icon"
+  exit 1
+fi
+plutil -replace CFBundleIcons.CFBundlePrimaryIcon -string AppIcon \
+  "$SIM_APP/Info.plist"
+
+if PATH="$BINARY_BIN:$ORIGINAL_PATH" \
+    PEONPAD_TEST_MACHO_PLATFORM=12 \
+    PEONPAD_TEST_CODESIGN_MODE=adhoc \
+    PEONPAD_TEST_COMPILED_ICON=MissingIcon \
+    "$VERIFIER" xrsimulator "$SIM_APP" >/dev/null 2>&1; then
+  print -u2 "bundle verifier accepted a catalog without compiled AppIcon"
+  exit 1
+fi
+
+if PATH="$BINARY_BIN:$ORIGINAL_PATH" \
+    PEONPAD_TEST_MACHO_PLATFORM=12 \
+    PEONPAD_TEST_CODESIGN_MODE=adhoc \
+    PEONPAD_TEST_FIND_FRAMEWORKS_FAIL=1 \
+    "$VERIFIER" xrsimulator "$SIM_APP" >/dev/null 2>&1; then
+  print -u2 "bundle verifier ignored framework enumeration failure"
+  exit 1
+fi
+
+if PATH="$BINARY_BIN:$ORIGINAL_PATH" \
+    PEONPAD_TEST_MACHO_PLATFORM=12 \
+    PEONPAD_TEST_CODESIGN_MODE=adhoc \
+    PEONPAD_TEST_OTOOL_L_FAIL=1 \
+    "$VERIFIER" xrsimulator "$SIM_APP" >/dev/null 2>&1; then
+  print -u2 "bundle verifier ignored dependency inspection failure"
+  exit 1
+fi
+
 mv "$SIM_APP/Frameworks/Fake.framework" \
   "$VERIFY_ROOT/Missing Fake.framework"
 if PATH="$BINARY_BIN:$ORIGINAL_PATH" \
@@ -170,11 +215,14 @@ run_acceptance() {
   local mode=$1
   shift
   env \
-    PATH="$FAKE_BIN:$ORIGINAL_PATH" \
+    PATH="$HOST_BIN:$FAKE_BIN:$ORIGINAL_PATH" \
     PEONPAD_TEST_REAL_CMAKE="$REAL_CMAKE" \
+    PEONPAD_TEST_REAL_GIT="$REAL_GIT" \
     PEONPAD_TEST_ACCEPTANCE_STATE_DIR="$ACCEPTANCE_STATE" \
     PEONPAD_TEST_SIMCTL_DEVICES_FILE="$ACCEPTANCE_STATE/devices.txt" \
     PEONPAD_TEST_ACCEPTANCE_MODE="$mode" \
+    PEONPAD_TEST_GIT_DIRTY_MODE="${PEONPAD_TEST_GIT_DIRTY_MODE:-}" \
+    PEONPAD_TEST_RESULT_FAILURE="${PEONPAD_TEST_RESULT_FAILURE:-}" \
     PEONPAD_VISIONOS_ACCEPTANCE_TESTING=1 \
     PEONPAD_VISIONOS_BUILD_SCRIPT="$FIXTURES/fake-visionos-acceptance-build.sh" \
     PEONPAD_VISIONOS_VERIFY_SCRIPT="$FIXTURES/fake-visionos-acceptance-verify.sh" \
@@ -204,6 +252,36 @@ run_acceptance healthy xrsimulator \
   "$HAPPY_RESULT")" == 4102 ]]
 [[ "$(plutil -extract lanes.xrsimulator.residency_checks raw \
   "$HAPPY_RESULT")" == 6 ]]
+[[ "$(plutil -extract source_state raw "$HAPPY_RESULT")" == clean ]]
+
+prepare_acceptance_state startup-ready
+STARTUP_READY_RESULT="$TEMP_ROOT/startup readiness result.json"
+run_acceptance startup-ready-only xrsimulator \
+  --evidence-dir "$TEMP_ROOT/startup readiness evidence" \
+  --result "$STARTUP_READY_RESULT" >/dev/null
+[[ "$(plutil -extract status raw "$STARTUP_READY_RESULT")" == pass ]]
+
+prepare_acceptance_state startup-fatal
+STARTUP_FATAL_RESULT="$TEMP_ROOT/startup fatal result.json"
+if run_acceptance startup-bracketed-fatal xrsimulator \
+    --evidence-dir "$TEMP_ROOT/startup fatal evidence" \
+    --result "$STARTUP_FATAL_RESULT" >/dev/null 2>&1; then
+  print -u2 "acceptance ignored a bracketed startup-only renderer failure"
+  exit 1
+fi
+[[ "$(plutil -extract failure raw "$STARTUP_FATAL_RESULT")" == \
+  "first logs contain a first-party fatal, SDL, Metal, viewport, safe-area, or rendering error" ]]
+
+prepare_acceptance_state negative-ready
+NEGATIVE_READY_RESULT="$TEMP_ROOT/negative readiness result.json"
+if run_acceptance negative-readiness xrsimulator \
+    --evidence-dir "$TEMP_ROOT/negative readiness evidence" \
+    --result "$NEGATIVE_READY_RESULT" >/dev/null 2>&1; then
+  print -u2 "acceptance treated negative readiness text as ready"
+  exit 1
+fi
+[[ "$(plutil -extract failure raw "$NEGATIVE_READY_RESULT")" == \
+  "first application readiness marker was not observed" ]]
 
 prepare_acceptance_state cleanup
 CLEAN_EVIDENCE="$TEMP_ROOT/disposable evidence"
@@ -248,6 +326,50 @@ if run_acceptance runtime-fatal xrsimulator \
   exit 1
 fi
 [[ "$(plutil -extract status raw "$FATAL_RESULT")" == fail ]]
+
+for dirty_mode in unstaged staged untracked; do
+  prepare_acceptance_state "dirty-$dirty_mode"
+  DIRTY_RESULT="$TEMP_ROOT/$dirty_mode source result.json"
+  if PEONPAD_TEST_GIT_DIRTY_MODE="$dirty_mode" \
+      run_acceptance healthy xros \
+        --evidence-dir "$TEMP_ROOT/$dirty_mode source evidence" \
+        --result "$DIRTY_RESULT" >/dev/null 2>&1; then
+    print -u2 "acceptance allowed $dirty_mode source input"
+    exit 1
+  fi
+  [[ "$(plutil -extract failure raw "$DIRTY_RESULT")" == \
+    "repository source inputs are not clean" ]]
+  [[ "$(plutil -extract source_state raw "$DIRTY_RESULT")" == dirty ]]
+  [[ ! -e "$ACCEPTANCE_STATE/builds.log" ]]
+done
+
+for result_failure in conversion invalid-conversion move invalid-move; do
+  prepare_acceptance_state "result-$result_failure"
+  FAILED_RESULT="$TEMP_ROOT/$result_failure result.json"
+  if PEONPAD_TEST_RESULT_FAILURE="$result_failure" \
+      run_acceptance healthy xros \
+        --evidence-dir "$TEMP_ROOT/$result_failure evidence" \
+        --result "$FAILED_RESULT" >/dev/null 2>&1; then
+    print -u2 "acceptance masked $result_failure result emission"
+    exit 1
+  fi
+  [[ ! -e "$FAILED_RESULT" ]]
+done
+
+prepare_acceptance_state unwritable
+UNWRITABLE_DIR="$TEMP_ROOT/unwritable result directory"
+UNWRITABLE_RESULT="$UNWRITABLE_DIR/result.json"
+mkdir -p "$UNWRITABLE_DIR"
+chmod 500 "$UNWRITABLE_DIR"
+if run_acceptance healthy xros \
+    --evidence-dir "$TEMP_ROOT/unwritable result evidence" \
+    --result "$UNWRITABLE_RESULT" >/dev/null 2>&1; then
+  chmod 700 "$UNWRITABLE_DIR"
+  print -u2 "acceptance passed without writing to an unwritable result path"
+  exit 1
+fi
+chmod 700 "$UNWRITABLE_DIR"
+[[ ! -e "$UNWRITABLE_RESULT" ]]
 
 prepare_acceptance_state device
 DEVICE_RESULT="$TEMP_ROOT/device result.json"

@@ -51,9 +51,11 @@ lane selects only an available Apple Vision Pro on a visionOS runtime, preferrin
 the newest booted match deterministically. It boots when necessary, installs the
 freshly compared bundle, launches with the previous process terminated, requires
 three parsed residency checks, captures process-scoped logs and a fresh
-screenshot, requires an explicit `PeonPad ... ready` marker, scans first-party
-output for fatal/SDL/Metal/render/viewport/safe-area failures, then terminates,
-relaunches with a different PID, and repeats the lifecycle checks.
+screenshot, requires the exact stable `PEONPAD_VISIONOS_READY=1` token, scans
+first-party output for fatal/SDL/Metal/render/viewport/safe-area failures, then
+terminates, relaunches with a different PID, and repeats the lifecycle checks.
+Each log window starts immediately before its launch, remains PID-scoped, and
+excludes only explicitly identified unrelated simulator messages.
 
 The xros lane builds without signing and requires platform 11, arm64, visionOS
 2.0 or newer, the selected SDK, valid scene/icon/resource/linkage/rpath
@@ -63,14 +65,19 @@ signature verification. It does not sign, install, or launch on hardware.
 `all` additionally performs a fresh Release SDL3 host configuration and complete
 default build, runs every configured CTest (currently 7/7), the direct
 `-DNDEBUG` viewport/input checks, public preflight, and Designed-for-iPad
-compatibility preflight. Any failed build, test, lifecycle check, log scan, or
-cleanup fails the command immediately.
+compatibility preflight. Before any configure or build, acceptance rejects
+staged, unstaged, or untracked source changes. Ignored generated build paths
+remain allowed, and explicit evidence paths must remain outside the repository.
+Any failed build, test, lifecycle check, log scan, cleanup, or result write
+fails the command immediately.
 
-The command writes an atomic JSON result outside the repository. It records the
-commit, Xcode/CMake/SDK versions, Release/all-target scope, lane and bundle
-metadata, selected simulator model/runtime/UDID, both fresh PIDs, residency and
-test counts, evidence paths, warnings, and pass/fail. Evidence uses a fresh
-temporary directory and is deleted by default:
+The command writes a transactional JSON result outside the repository. It
+validates conversion output before an atomic move, validates the installed JSON
+again, and cannot pass without a fresh final result. It records the commit,
+clean source state, Xcode/CMake/SDK versions, Release/all-target scope, lane and
+bundle metadata, selected simulator model/runtime/UDID, both fresh PIDs,
+residency and test counts, evidence paths, warnings, and pass/fail. Evidence
+uses a fresh temporary directory and is deleted by default:
 
 ```sh
 ./scripts/accept-visionos.sh all \
@@ -79,8 +86,8 @@ temporary directory and is deleted by default:
   --result /tmp/peonpad-visionos-result.json
 ```
 
-Both explicit paths must be outside the checkout; an existing evidence
-directory is rejected so stale logs or screenshots cannot satisfy acceptance.
+Both explicit paths must be outside the checkout; existing evidence and result
+destinations are rejected so stale output cannot satisfy acceptance.
 `--keep-evidence` retains local logs and the screenshot for inspection. The JSON
 result is retained regardless. The generic acceptance script does not assert
 the smoke-card wording or a pixel hash, so the same command remains the gate
@@ -97,8 +104,9 @@ when the gameplay payload replaces the current shell.
   through public SDL window properties, then requests freeform visionOS window
   resizing with bounded minimum and maximum sizes.
 - `PeonPadAssets.xcassets` is compiled into `Assets.car` using the existing
-  original PeonPad icon. The copy/compiler bridge strips extended attributes
-  before signing.
+  original PeonPad icon. Verification requires the bundle's `AppIcon`
+  declaration and inspects the compiled catalog for that solid image stack. The
+  copy/compiler bridge strips extended attributes before signing.
 
 SDL3 retains application, scene, UIKit view, and Metal renderer ownership. The
 shell does not use `SDL_syswm`, sdl2-compat, a forked SDL, SwiftUI, or private

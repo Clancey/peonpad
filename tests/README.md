@@ -52,7 +52,11 @@ catalog and exercise wrong-runtime simulator override rejection.
 `tests/visionos-acceptance.sh` drives the production
 `scripts/accept-visionos.sh` entry point through fake Xcode, CMake, simctl, and
 Mach-O tools. It rejects invalid Vision Pro overrides, wrong models/runtimes,
-stale relaunch PIDs, launch and runtime failures, platform mismatches,
+stale relaunch PIDs, launch and prefixed startup-only runtime failures, negative
+readiness text, dirty staged/unstaged/untracked sources, failed producer
+enumeration, missing declared or compiled `AppIcon`, platform mismatches,
 prohibited bundle content, and unexpectedly signed command-line xros bundles.
-It also covers spaces in paths, default cleanup, retained evidence, and
-pass/fail JSON emission without requiring an installed simulator.
+It also covers spaces in paths, default cleanup, retained evidence, startup-only
+positive readiness, unwritable result destinations, failed or invalid JSON
+conversion/moves, and pass/fail result validation without requiring an
+installed simulator.

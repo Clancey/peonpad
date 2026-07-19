@@ -111,6 +111,11 @@ rg -q 'simctl launch --terminate-running-process' \
 rg -q 'launchctl procinfo' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -q 'simctl uninstall' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -q 'plutil -convert json' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -Fq 'PEONPAD_VISIONOS_READY=1' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -Fq 'PEONPAD_VISIONOS_READY=1' \
+  "$ROOT_DIR/tests/sdl3_foundation_smoke.cpp"
+rg -q 'assetutil --info' \
+  "$ROOT_DIR/scripts/verify-visionos-bundle.sh"
 if rg -q -- '--target peonpad_sdl3_smoke' "$VISIONOS_ACCEPTANCE_SCRIPT"; then
   print -u2 "visionOS acceptance builds only the smoke target"
   exit 1

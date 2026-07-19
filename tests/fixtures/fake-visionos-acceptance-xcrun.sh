@@ -68,7 +68,20 @@ case "$2" in
       PID=$(( 4100 + COUNT ))
     fi
     print "$PID" > "$STATE_DIR/current-pid"
-    print "PeonPad automated fixture ready: launch $COUNT" >> "$STDERR_FILE"
+    if [[ "$MODE" == startup-ready-only \
+        || "$MODE" == startup-bracketed-fatal ]]; then
+      /bin/date +%s > "$STATE_DIR/startup-epoch"
+      sleep 2
+    fi
+    case "$MODE" in
+      negative-readiness)
+        print "PeonPad renderer is not ready" >> "$STDERR_FILE"
+        ;;
+      startup-ready-only) ;;
+      *)
+        print "PEONPAD_VISIONOS_READY=1" >> "$STDERR_FILE"
+        ;;
+    esac
     BUNDLE_ID=${@[-1]}
     print "$BUNDLE_ID: $PID"
     ;;
@@ -81,12 +94,47 @@ case "$2" in
       print "state = running"
       print "bundle id = org.peonpad.visionos"
     elif [[ "$4" == log && "$5" == show ]]; then
-      if [[ "$MODE" == runtime-fatal ]]; then
-        print "Fake Vision Executable[4101:abc] PeonPad Metal renderer failed"
-      else
-        print "Fake Vision Executable[4101:abc] [com.apple.Accessibility:AXLoading] Failed to load a system Framework"
-        print "Fake Vision Executable[4101:abc] PeonPad automated fixture ready: unified log"
+      CURRENT_PID=$(<"$STATE_DIR/current-pid")
+      START_EPOCH=""
+      WANT_START=0
+      for argument in "$@"; do
+        if (( WANT_START )); then
+          START_EPOCH=${argument#@}
+          break
+        fi
+        [[ "$argument" == --start ]] && WANT_START=1
+      done
+      STARTUP_VISIBLE=1
+      if [[ "$MODE" == startup-ready-only \
+          || "$MODE" == startup-bracketed-fatal ]]; then
+        LAUNCH_EPOCH=$(<"$STATE_DIR/startup-epoch")
+        if [[ "$START_EPOCH" != <-> \
+            || $START_EPOCH -gt $LAUNCH_EPOCH ]]; then
+          STARTUP_VISIBLE=0
+        fi
       fi
+      case "$MODE" in
+        runtime-fatal)
+          print "Fake Vision Executable[$CURRENT_PID:abc] PeonPad Metal renderer failed"
+          ;;
+        startup-ready-only)
+          if (( STARTUP_VISIBLE )); then
+            print "Fake Vision Executable[$CURRENT_PID:abc] PEONPAD_VISIONOS_READY=1"
+          fi
+          ;;
+        startup-bracketed-fatal)
+          if (( STARTUP_VISIBLE )); then
+            print "Fake Vision Executable[$CURRENT_PID:abc] [org.peonpad:render] PeonPad Metal renderer failed"
+          fi
+          ;;
+        negative-readiness)
+          print "Fake Vision Executable[$CURRENT_PID:abc] PeonPad renderer is not ready"
+          ;;
+        *)
+          print "Fake Vision Executable[$CURRENT_PID:abc] [com.apple.Accessibility:AXLoading] Failed to load a system Framework"
+          print "Fake Vision Executable[$CURRENT_PID:abc] PEONPAD_VISIONOS_READY=1"
+          ;;
+      esac
     else
       exit 2
     fi

@@ -43,6 +43,17 @@ case "$TARGET" in
     ;;
 esac
 
+FRAMEWORK_LIST=""
+ASSET_INFO_FILE=""
+cleanup_temp_files() {
+  local temporary_file
+  for temporary_file in "$FRAMEWORK_LIST" "$ASSET_INFO_FILE"; do
+    [[ -z "$temporary_file" ]] ||
+      rm -f "$temporary_file" >/dev/null 2>&1 || :
+  done
+}
+trap cleanup_temp_files EXIT
+
 [[ -d "$APP" && -f "$APP/Info.plist" ]] || {
   print -u2 "missing visionOS application bundle: $APP"
   exit 1
@@ -105,8 +116,8 @@ version_at_least() {
   print -u2 "invalid visionOS bundle executable"
   exit 1
 }
-[[ -n "$PRIMARY_ICON" ]] || {
-  print -u2 "visionOS primary icon metadata is missing"
+[[ "$PRIMARY_ICON" == AppIcon ]] || {
+  print -u2 "visionOS primary icon must be AppIcon"
   exit 1
 }
 version_at_least "$PLIST_MINIMUM" "$MINIMUM_FLOOR" || {
@@ -210,9 +221,59 @@ MACHO_SDK=$(print -r -- "$LOAD_COMMANDS" |
   print -u2 "compiled visionOS icon/resource catalog is missing"
   exit 1
 }
+if ! ASSET_CATALOG_INFO=$(xcrun assetutil --info "$APP/Assets.car"); then
+  print -u2 "compiled visionOS asset catalog could not be inspected"
+  exit 1
+fi
+ASSET_INFO_FILE=$(mktemp \
+  "${TMPDIR:-/tmp}/peonpad-visionos-assets.XXXXXX") || {
+  print -u2 "could not create the asset catalog inspection file"
+  exit 1
+}
+print -r -- "$ASSET_CATALOG_INFO" > "$ASSET_INFO_FILE" || {
+  print -u2 "compiled visionOS asset catalog output could not be recorded"
+  exit 1
+}
+plutil -convert xml1 -o /dev/null "$ASSET_INFO_FILE" || {
+  print -u2 "compiled visionOS asset catalog output is invalid"
+  exit 1
+}
+ASSET_INDEX=0
+HAS_COMPILED_APP_ICON=0
+while ASSET_TYPE=$(plutil -extract "$ASSET_INDEX.AssetType" raw \
+    "$ASSET_INFO_FILE" 2>/dev/null); do
+  if [[ "$ASSET_TYPE" == SolidImageStack ]]; then
+    ASSET_NAME=$(plutil -extract "$ASSET_INDEX.Name" raw \
+      "$ASSET_INFO_FILE") || {
+      print -u2 "compiled visionOS solid image stack is missing its name"
+      exit 1
+    }
+    [[ "$ASSET_NAME" != AppIcon ]] || HAS_COMPILED_APP_ICON=1
+  fi
+  (( ASSET_INDEX += 1 ))
+done
+(( HAS_COMPILED_APP_ICON )) || {
+  print -u2 "compiled visionOS asset catalog does not contain AppIcon"
+  exit 1
+}
+rm -f "$ASSET_INFO_FILE" || {
+  print -u2 "asset catalog inspection file could not be removed"
+  exit 1
+}
+ASSET_INFO_FILE=""
 
 FRAMEWORK_COUNT=0
 if [[ -d "$APP/Frameworks" ]]; then
+  FRAMEWORK_LIST=$(mktemp \
+    "${TMPDIR:-/tmp}/peonpad-visionos-frameworks.XXXXXX") || {
+    print -u2 "could not create the framework inspection list"
+    exit 1
+  }
+  if ! find "$APP/Frameworks" -type f -perm -111 -print0 \
+      >"$FRAMEWORK_LIST"; then
+    print -u2 "embedded visionOS frameworks could not be enumerated"
+    exit 1
+  fi
   while IFS= read -r -d '' framework_binary; do
     (( FRAMEWORK_COUNT += 1 ))
     [[ "$(lipo -archs "$framework_binary")" == "arm64" ]] || {
@@ -261,32 +322,43 @@ if [[ -d "$APP/Frameworks" ]]; then
       print -u2 "embedded framework has invalid visionOS load metadata"
       exit 1
     }
-  done < <(find "$APP/Frameworks" -type f -perm -111 -print0)
+  done < "$FRAMEWORK_LIST"
+  rm -f "$FRAMEWORK_LIST" || {
+    print -u2 "framework inspection list could not be removed"
+    exit 1
+  }
+  FRAMEWORK_LIST=""
 fi
 
-while IFS= read -r dependency; do
-  case "$dependency" in
-    /System/Library/*|/usr/lib/*) ;;
-    @rpath/*)
-      relative_dependency=${dependency#@rpath/}
-      case "/$relative_dependency/" in
-        */../*)
-          print -u2 "embedded visionOS dependency contains parent traversal"
+if ! DEPENDENCIES=$(otool -L "$EXECUTABLE" |
+    awk 'NR > 1 {print $1}'); then
+  print -u2 "visionOS dependencies could not be inspected"
+  exit 1
+fi
+if [[ -n "$DEPENDENCIES" ]]; then
+  while IFS= read -r dependency; do
+    case "$dependency" in
+      /System/Library/*|/usr/lib/*) ;;
+      @rpath/*)
+        relative_dependency=${dependency#@rpath/}
+        case "/$relative_dependency/" in
+          */../*)
+            print -u2 "embedded visionOS dependency contains parent traversal"
+            exit 1
+            ;;
+        esac
+        [[ -f "$APP/Frameworks/$relative_dependency" ]] || {
+          print -u2 "missing embedded visionOS dependency: $relative_dependency"
           exit 1
-          ;;
-      esac
-      [[ -f "$APP/Frameworks/$relative_dependency" ]] || {
-        print -u2 "missing embedded visionOS dependency: $relative_dependency"
+        }
+        ;;
+      *)
+        print -u2 "unexpected visionOS linkage: $dependency"
         exit 1
-      }
-      ;;
-    *)
-      print -u2 "unexpected visionOS linkage: $dependency"
-      exit 1
-      ;;
-  esac
-done < <(otool -L "$EXECUTABLE" |
-  awk 'NR > 1 {print $1}')
+        ;;
+    esac
+  done <<< "$DEPENDENCIES"
+fi
 RPATHS=$(otool -l "$EXECUTABLE" | awk '
   $1 == "cmd" && $2 == "LC_RPATH" {want_path = 1; next}
   want_path && $1 == "path" {print $2; want_path = 0}

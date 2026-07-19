@@ -17,22 +17,24 @@ if [[ "$TEST_MODE" == 0 && \
       || -n "${PEONPAD_VISIONOS_HOST_ACCEPTANCE_SCRIPT:-}" \
       || -n "${PEONPAD_VISIONOS_HOST_CTEST_COUNT:-}" \
       || -n "${PEONPAD_VISIONOS_ACCEPTANCE_BUILD_ROOT:-}" \
-      || -n "${PEONPAD_VISIONOS_READY_PATTERN:-}" \
       || -n "${PEONPAD_VISIONOS_RESIDENCY_INTERVAL:-}" ) ]]; then
   print -u2 "acceptance dependency overrides require explicit test mode"
+  exit 2
+fi
+if [[ -n "${PEONPAD_VISIONOS_READY_PATTERN:-}" ]]; then
+  print -u2 "the visionOS readiness token is fixed and cannot be overridden"
   exit 2
 fi
 
 BUILD_SCRIPT=$SCRIPT_DIR/build-visionos-shell.sh
 VERIFY_SCRIPT=$SCRIPT_DIR/verify-visionos-bundle.sh
 FIND_SCRIPT=$SCRIPT_DIR/find-vision-pro-simulator.sh
-READY_PATTERN='PeonPad .* ready(:|$)'
+READY_TOKEN='PEONPAD_VISIONOS_READY=1'
 RESIDENCY_INTERVAL=2
 if [[ "$TEST_MODE" == 1 ]]; then
   BUILD_SCRIPT=${PEONPAD_VISIONOS_BUILD_SCRIPT:-$BUILD_SCRIPT}
   VERIFY_SCRIPT=${PEONPAD_VISIONOS_VERIFY_SCRIPT:-$VERIFY_SCRIPT}
   FIND_SCRIPT=${PEONPAD_VISIONOS_FIND_SCRIPT:-$FIND_SCRIPT}
-  READY_PATTERN=${PEONPAD_VISIONOS_READY_PATTERN:-$READY_PATTERN}
   RESIDENCY_INTERVAL=${PEONPAD_VISIONOS_RESIDENCY_INTERVAL:-0}
 fi
 
@@ -102,11 +104,6 @@ done
   print -u2 "PEONPAD_VISIONOS_RESIDENCY_INTERVAL must be a non-negative integer"
   exit 2
 }
-[[ -n "$READY_PATTERN" ]] || {
-  print -u2 "application readiness pattern cannot be empty"
-  exit 2
-}
-
 EVIDENCE_EXPLICIT=0
 if [[ -n "$EVIDENCE_DIR" ]]; then
   EVIDENCE_EXPLICIT=1
@@ -153,6 +150,10 @@ fi
   print -u2 "result path is a directory"
   exit 1
 }
+[[ ! -e "$RESULT_PATH" ]] || {
+  print -u2 "result path must be fresh and not already exist"
+  exit 1
+}
 mkdir -p "${RESULT_PATH:h}"
 if (( EVIDENCE_EXPLICIT )); then
   mkdir -p "$EVIDENCE_DIR"
@@ -184,6 +185,7 @@ TEST_PASSED=0
 HOST_CTEST_TOTAL=0
 HOST_CTEST_PASSED=0
 COMMIT_SHA=""
+SOURCE_STATE=unknown
 XCODE_VERSION=""
 XCODE_BUILD=""
 CMAKE_VERSION=""
@@ -267,6 +269,17 @@ discover_app() {
   print -r -- "$valid[1]"
 }
 
+validate_result_json() {
+  local result_file=$1
+  [[ -s "$result_file" ]] &&
+    grep -Eq '^[[:space:]]*\{' "$result_file" &&
+    plutil -convert xml1 -o /dev/null "$result_file" &&
+    [[ "$(plutil -extract schema_version raw "$result_file")" == 1 ]] &&
+    [[ "$(plutil -extract status raw "$result_file")" == "$STATUS" ]] &&
+    [[ "$(plutil -extract source_state raw "$result_file")" == \
+      "$SOURCE_STATE" ]]
+}
+
 write_result() {
   local result_plist="${RESULT_PATH}.plist.$$"
   local result_json="${RESULT_PATH}.json.$$"
@@ -274,91 +287,136 @@ write_result() {
   local retained_bool=false
   local test_bool=false
   local failed_count=$(( TEST_TOTAL - TEST_PASSED ))
+  local generated_at
   [[ "$STATUS" == pass ]] && passed_bool=true
   [[ -d "$EVIDENCE_DIR" ]] && retained_bool=true
   [[ "$TEST_MODE" == 1 ]] && test_bool=true
+  generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
 
-  rm -f "$result_plist" "$result_json"
-  plutil -create xml1 "$result_plist"
-  plutil -insert schema_version -integer 1 "$result_plist"
-  plutil -insert status -string "$STATUS" "$result_plist"
-  plutil -insert passed -bool "$passed_bool" "$result_plist"
-  plutil -insert test_mode -bool "$test_bool" "$result_plist"
-  plutil -insert failure -string "$FAILURE" "$result_plist"
-  plutil -insert generated_at -string "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$result_plist"
-  plutil -insert commit_sha -string "$COMMIT_SHA" "$result_plist"
-  plutil -insert target -string "$TARGET" "$result_plist"
-  plutil -insert configuration -string Release "$result_plist"
-  plutil -insert build_scope -string default/all-target "$result_plist"
-  plutil -insert result_path -string "$RESULT_PATH" "$result_plist"
-
-  plutil -insert toolchain -dictionary "$result_plist"
-  plutil -insert toolchain.xcode_version -string "$XCODE_VERSION" "$result_plist"
-  plutil -insert toolchain.xcode_build -string "$XCODE_BUILD" "$result_plist"
-  plutil -insert toolchain.cmake_version -string "$CMAKE_VERSION" "$result_plist"
-  plutil -insert toolchain.xrsimulator_sdk -string "$SDK_XRSIMULATOR" "$result_plist"
-  plutil -insert toolchain.xros_sdk -string "$SDK_XROS" "$result_plist"
-
-  plutil -insert tests -dictionary "$result_plist"
-  plutil -insert tests.total -integer "$TEST_TOTAL" "$result_plist"
-  plutil -insert tests.passed -integer "$TEST_PASSED" "$result_plist"
-  plutil -insert tests.failed -integer "$failed_count" "$result_plist"
-  plutil -insert tests.host_ctest_total -integer "$HOST_CTEST_TOTAL" "$result_plist"
-  plutil -insert tests.host_ctest_passed -integer "$HOST_CTEST_PASSED" "$result_plist"
-
-  plutil -insert evidence -dictionary "$result_plist"
-  plutil -insert evidence.directory -string "$EVIDENCE_DIR" "$result_plist"
-  plutil -insert evidence.screenshot -string "$SCREENSHOT_PATH" "$result_plist"
-  plutil -insert evidence.first_runtime_log -string \
-    "$EVIDENCE_DIR/first-first-party.log" "$result_plist"
-  plutil -insert evidence.relaunch_runtime_log -string \
-    "$EVIDENCE_DIR/relaunch-first-party.log" "$result_plist"
-  plutil -insert evidence.xrsimulator_build_log -string \
-    "$EVIDENCE_DIR/xrsimulator-build.log" "$result_plist"
-  plutil -insert evidence.xros_build_log -string \
-    "$EVIDENCE_DIR/xros-build.log" "$result_plist"
-  plutil -insert evidence.retained -bool "$retained_bool" "$result_plist"
-
-  plutil -insert lanes -dictionary "$result_plist"
-  plutil -insert lanes.xrsimulator -dictionary "$result_plist"
-  plutil -insert lanes.xrsimulator.status -string "$SIM_LANE_STATUS" "$result_plist"
-  plutil -insert lanes.xrsimulator.bundle_identifier -string "$SIM_BUNDLE_ID" "$result_plist"
-  plutil -insert lanes.xrsimulator.executable -string "$SIM_BUNDLE_EXECUTABLE" "$result_plist"
-  plutil -insert lanes.xrsimulator.platform -integer "$SIM_BUNDLE_PLATFORM" "$result_plist"
-  plutil -insert lanes.xrsimulator.minimum_os -string "$SIM_BUNDLE_MINIMUM" "$result_plist"
-  plutil -insert lanes.xrsimulator.sdk -string "$SIM_BUNDLE_SDK" "$result_plist"
-  plutil -insert lanes.xrsimulator.signature -string "$SIM_BUNDLE_SIGNATURE" "$result_plist"
-  plutil -insert lanes.xrsimulator.simulator -dictionary "$result_plist"
-  plutil -insert lanes.xrsimulator.simulator.model -string "$SIMULATOR_MODEL" "$result_plist"
-  plutil -insert lanes.xrsimulator.simulator.runtime -string "$SIMULATOR_RUNTIME" "$result_plist"
-  plutil -insert lanes.xrsimulator.simulator.udid -string "$VISION_UDID" "$result_plist"
-  plutil -insert lanes.xrsimulator.simulator.state -string "$SIMULATOR_STATE" "$result_plist"
-  plutil -insert lanes.xrsimulator.fresh_pid -integer "$FRESH_PID" "$result_plist"
-  plutil -insert lanes.xrsimulator.relaunch_pid -integer "$RELAUNCH_PID" "$result_plist"
-  plutil -insert lanes.xrsimulator.residency_checks -integer "$RESIDENCY_CHECKS" "$result_plist"
-
-  plutil -insert lanes.xros -dictionary "$result_plist"
-  plutil -insert lanes.xros.status -string "$XROS_LANE_STATUS" "$result_plist"
-  plutil -insert lanes.xros.bundle_identifier -string "$XROS_BUNDLE_ID" "$result_plist"
-  plutil -insert lanes.xros.executable -string "$XROS_BUNDLE_EXECUTABLE" "$result_plist"
-  plutil -insert lanes.xros.platform -integer "$XROS_BUNDLE_PLATFORM" "$result_plist"
-  plutil -insert lanes.xros.minimum_os -string "$XROS_BUNDLE_MINIMUM" "$result_plist"
-  plutil -insert lanes.xros.sdk -string "$XROS_BUNDLE_SDK" "$result_plist"
-  plutil -insert lanes.xros.signature -string "$XROS_BUNDLE_SIGNATURE" "$result_plist"
-  plutil -insert lanes.xros.manual_gate -string \
-    "Use an Xcode build with automatic signing, a local DEVELOPMENT_TEAM, and provisioning; then explicitly install the signed platform-11 app on a paired Apple Vision Pro." \
-    "$result_plist"
-
-  plutil -insert warnings -array "$result_plist"
-  if [[ "$TARGET" == xros || "$TARGET" == all ]]; then
-    plutil -insert warnings.0 -string \
-      "Physical-device signing, provisioning, installation, launch, and hardware behavior remain manual gates." \
-      "$result_plist"
+  if ! {
+    rm -f "$result_plist" "$result_json" &&
+    plutil -create xml1 "$result_plist" &&
+    plutil -insert schema_version -integer 1 "$result_plist" &&
+    plutil -insert status -string "$STATUS" "$result_plist" &&
+    plutil -insert passed -bool "$passed_bool" "$result_plist" &&
+    plutil -insert test_mode -bool "$test_bool" "$result_plist" &&
+    plutil -insert failure -string "$FAILURE" "$result_plist" &&
+    plutil -insert generated_at -string "$generated_at" "$result_plist" &&
+    plutil -insert commit_sha -string "$COMMIT_SHA" "$result_plist" &&
+    plutil -insert source_state -string "$SOURCE_STATE" "$result_plist" &&
+    plutil -insert target -string "$TARGET" "$result_plist" &&
+    plutil -insert configuration -string Release "$result_plist" &&
+    plutil -insert build_scope -string default/all-target "$result_plist" &&
+    plutil -insert result_path -string "$RESULT_PATH" "$result_plist" &&
+    plutil -insert toolchain -dictionary "$result_plist" &&
+    plutil -insert toolchain.xcode_version -string \
+      "$XCODE_VERSION" "$result_plist" &&
+    plutil -insert toolchain.xcode_build -string \
+      "$XCODE_BUILD" "$result_plist" &&
+    plutil -insert toolchain.cmake_version -string \
+      "$CMAKE_VERSION" "$result_plist" &&
+    plutil -insert toolchain.xrsimulator_sdk -string \
+      "$SDK_XRSIMULATOR" "$result_plist" &&
+    plutil -insert toolchain.xros_sdk -string \
+      "$SDK_XROS" "$result_plist" &&
+    plutil -insert tests -dictionary "$result_plist" &&
+    plutil -insert tests.total -integer "$TEST_TOTAL" "$result_plist" &&
+    plutil -insert tests.passed -integer "$TEST_PASSED" "$result_plist" &&
+    plutil -insert tests.failed -integer "$failed_count" "$result_plist" &&
+    plutil -insert tests.host_ctest_total -integer \
+      "$HOST_CTEST_TOTAL" "$result_plist" &&
+    plutil -insert tests.host_ctest_passed -integer \
+      "$HOST_CTEST_PASSED" "$result_plist" &&
+    plutil -insert evidence -dictionary "$result_plist" &&
+    plutil -insert evidence.directory -string \
+      "$EVIDENCE_DIR" "$result_plist" &&
+    plutil -insert evidence.screenshot -string \
+      "$SCREENSHOT_PATH" "$result_plist" &&
+    plutil -insert evidence.first_runtime_log -string \
+      "$EVIDENCE_DIR/first-first-party.log" "$result_plist" &&
+    plutil -insert evidence.relaunch_runtime_log -string \
+      "$EVIDENCE_DIR/relaunch-first-party.log" "$result_plist" &&
+    plutil -insert evidence.xrsimulator_build_log -string \
+      "$EVIDENCE_DIR/xrsimulator-build.log" "$result_plist" &&
+    plutil -insert evidence.xros_build_log -string \
+      "$EVIDENCE_DIR/xros-build.log" "$result_plist" &&
+    plutil -insert evidence.retained -bool \
+      "$retained_bool" "$result_plist" &&
+    plutil -insert lanes -dictionary "$result_plist" &&
+    plutil -insert lanes.xrsimulator -dictionary "$result_plist" &&
+    plutil -insert lanes.xrsimulator.status -string \
+      "$SIM_LANE_STATUS" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.bundle_identifier -string \
+      "$SIM_BUNDLE_ID" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.executable -string \
+      "$SIM_BUNDLE_EXECUTABLE" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.platform -integer \
+      "$SIM_BUNDLE_PLATFORM" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.minimum_os -string \
+      "$SIM_BUNDLE_MINIMUM" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.sdk -string \
+      "$SIM_BUNDLE_SDK" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.signature -string \
+      "$SIM_BUNDLE_SIGNATURE" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator -dictionary \
+      "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.model -string \
+      "$SIMULATOR_MODEL" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.runtime -string \
+      "$SIMULATOR_RUNTIME" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.udid -string \
+      "$VISION_UDID" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.state -string \
+      "$SIMULATOR_STATE" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.fresh_pid -integer \
+      "$FRESH_PID" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.relaunch_pid -integer \
+      "$RELAUNCH_PID" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.residency_checks -integer \
+      "$RESIDENCY_CHECKS" "$result_plist" &&
+    plutil -insert lanes.xros -dictionary "$result_plist" &&
+    plutil -insert lanes.xros.status -string \
+      "$XROS_LANE_STATUS" "$result_plist" &&
+    plutil -insert lanes.xros.bundle_identifier -string \
+      "$XROS_BUNDLE_ID" "$result_plist" &&
+    plutil -insert lanes.xros.executable -string \
+      "$XROS_BUNDLE_EXECUTABLE" "$result_plist" &&
+    plutil -insert lanes.xros.platform -integer \
+      "$XROS_BUNDLE_PLATFORM" "$result_plist" &&
+    plutil -insert lanes.xros.minimum_os -string \
+      "$XROS_BUNDLE_MINIMUM" "$result_plist" &&
+    plutil -insert lanes.xros.sdk -string \
+      "$XROS_BUNDLE_SDK" "$result_plist" &&
+    plutil -insert lanes.xros.signature -string \
+      "$XROS_BUNDLE_SIGNATURE" "$result_plist" &&
+    plutil -insert lanes.xros.manual_gate -string \
+      "Use an Xcode build with automatic signing, a local DEVELOPMENT_TEAM, and provisioning; then explicitly install the signed platform-11 app on a paired Apple Vision Pro." \
+      "$result_plist" &&
+    plutil -insert warnings -array "$result_plist"
+  }; then
+    rm -f "$result_plist" "$result_json" "$RESULT_PATH" >/dev/null 2>&1
+    return 1
   fi
 
-  plutil -convert json -o "$result_json" "$result_plist"
-  mv "$result_json" "$RESULT_PATH"
-  rm -f "$result_plist"
+  if [[ "$TARGET" == xros || "$TARGET" == all ]]; then
+    if ! plutil -insert warnings.0 -string \
+        "Physical-device signing, provisioning, installation, launch, and hardware behavior remain manual gates." \
+        "$result_plist"; then
+      rm -f "$result_plist" "$result_json" "$RESULT_PATH" >/dev/null 2>&1
+      return 1
+    fi
+  fi
+
+  if ! {
+    plutil -convert json -o "$result_json" "$result_plist" &&
+    validate_result_json "$result_json" &&
+    mv "$result_json" "$RESULT_PATH" &&
+    validate_result_json "$RESULT_PATH" &&
+    rm -f "$result_plist"
+  }; then
+    rm -f "$result_plist" "$result_json" "$RESULT_PATH" >/dev/null 2>&1
+    return 1
+  fi
 }
 
 cleanup() {
@@ -449,9 +507,25 @@ TRAPZERR() {
 trap 'finish $?' EXIT
 trap 'FAILURE="acceptance interrupted"; finish 130' INT TERM
 
+verify_clean_source() {
+  local source_changes
+  begin_check "verify clean source snapshot"
+  COMMIT_SHA=$(git -C "$ROOT_DIR" rev-parse --verify HEAD) ||
+    fail_check "repository HEAD could not be recorded"
+  if ! source_changes=$(git -C "$ROOT_DIR" status --porcelain=v1 \
+      --untracked-files=all --ignored=no); then
+    fail_check "repository source state could not be inspected"
+  fi
+  if [[ -n "$source_changes" ]]; then
+    SOURCE_STATE=dirty
+    fail_check "repository source inputs are not clean"
+  fi
+  SOURCE_STATE=clean
+  pass_check
+}
+
 collect_toolchain() {
-  begin_check "collect toolchain and commit metadata"
-  COMMIT_SHA=$(git -C "$ROOT_DIR" rev-parse HEAD)
+  begin_check "collect toolchain metadata"
   XCODE_OUTPUT=$(xcodebuild -version)
   XCODE_VERSION=$(print -r -- "$XCODE_OUTPUT" |
     awk '$1 == "Xcode" {print $2; exit}')
@@ -464,7 +538,7 @@ collect_toolchain() {
   if [[ "$TARGET" == xros || "$TARGET" == all ]]; then
     SDK_XROS=$(xcrun --sdk xros --show-sdk-version)
   fi
-  [[ -n "$COMMIT_SHA" && -n "$XCODE_VERSION" && -n "$CMAKE_VERSION" ]]
+  [[ -n "$XCODE_VERSION" && -n "$CMAKE_VERSION" ]]
   pass_check
 }
 
@@ -640,7 +714,9 @@ launch_application() {
 
   : > "$stdout_file"
   : > "$stderr_file"
+  : > "$launch_log"
   begin_check "$ordinal fresh application launch"
+  LAST_LAUNCH_EPOCH=$(date +%s)
   if launch_result=$(xcrun simctl launch --terminate-running-process \
       "--stdout=$stdout_file" "--stderr=$stderr_file" \
       "$VISION_UDID" "$SIM_BUNDLE_ID" 2>"$launch_log"); then
@@ -654,7 +730,6 @@ launch_application() {
   [[ "$pid" == <-> && $pid -gt 0 ]] ||
     fail_check "$ordinal launch did not return a process identifier"
   LAST_LAUNCH_PID=$pid
-  LAST_LAUNCH_EPOCH=$(date +%s)
   pass_check
 }
 
@@ -664,6 +739,22 @@ procinfo_is_resident() {
     grep -Eq '^[[:space:]]*state = running$' "$procinfo_file" &&
     grep -F "program path = " "$procinfo_file" |
       grep -Fq "/$SIM_BUNDLE_EXECUTABLE"
+}
+
+readiness_observed() {
+  awk -v token="$READY_TOKEN" '
+    {
+      sub(/\r$/, "")
+      token_start = length($0) - length(token) + 1
+      if ($0 == token ||
+          (token_start > 1 &&
+           substr($0, token_start) == token &&
+           substr($0, token_start - 1, 1) ~ /[[:space:]]/)) {
+        found = 1
+      }
+    }
+    END {exit !found}
+  ' "$@"
 }
 
 verify_residency_and_logs() {
@@ -702,17 +793,28 @@ verify_residency_and_logs() {
   pass_check
 
   begin_check "$ordinal explicit readiness marker"
-  grep -Eq "$READY_PATTERN" \
+  readiness_observed \
     "$stdout_file" "$stderr_file" "$unified_file" ||
     fail_check "$ordinal application readiness marker was not observed"
   pass_check
 
   begin_check "$ordinal first-party fatal/render/runtime log scan"
   awk -v process="$SIM_BUNDLE_EXECUTABLE" '
-    index($0, process "[") {
-      message = $0
-      sub("^.*" process "\\[[^]]+\\] ", "", message)
-      if (message !~ /^[[(]/) print
+    {
+      marker = process "["
+      marker_start = index($0, marker)
+      if (!marker_start) next
+      message = substr($0, marker_start + length(marker))
+      marker_end = index(message, "] ")
+      if (!marker_end) {
+        print
+        next
+      }
+      message = substr(message, marker_end + 2)
+      if (message == "[com.apple.Accessibility:AXLoading] Failed to load a system Framework") {
+        next
+      }
+      print message
     }
   ' "$unified_file" > "$first_party_file"
   if grep -Eiq "$fatal_pattern" \
@@ -770,6 +872,7 @@ run_simulator_runtime() {
   SIM_LANE_STATUS=pass
 }
 
+verify_clean_source
 collect_toolchain
 if [[ "$TARGET" == all ]]; then
   run_host_acceptance

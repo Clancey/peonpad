@@ -19,6 +19,7 @@ Load command 1
 EOF
         ;;
       -L)
+        [[ -z "${PEONPAD_TEST_OTOOL_L_FAIL:-}" ]] || exit 71
         print "$2:"
         print "\t/System/Library/Frameworks/UIKit.framework/UIKit (compatibility version 1.0.0, current version 1.0.0)"
         if [[ -n "${PEONPAD_TEST_EMBEDDED_DEPENDENCY:-}" \
@@ -30,6 +31,24 @@ EOF
         exit 2
         ;;
     esac
+    ;;
+  find)
+    if [[ -n "${PEONPAD_TEST_FIND_FRAMEWORKS_FAIL:-}" \
+        && "$1" == */Frameworks ]]; then
+      exit 71
+    fi
+    exec /usr/bin/find "$@"
+    ;;
+  xcrun)
+    [[ "$1" == assetutil && "$2" == --info && -f "$3" ]] || exit 2
+    cat <<EOF
+[
+  {
+    "AssetType" : "SolidImageStack",
+    "Name" : "${PEONPAD_TEST_COMPILED_ICON:-AppIcon}"
+  }
+]
+EOF
     ;;
   codesign)
     case "$1" in

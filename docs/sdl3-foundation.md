@@ -25,7 +25,7 @@ The Zlib-licensed release archives are committed under
 
 The canonical staged Stratagus tree is reconstructed by ordered patches
 `0001` through `0010-direct-sdl3-engine.patch`. Its tracked-tree SHA-256 is
-`00ba11206fbf39657a312908c343659f1fbc28162ada469afb810d60d460471d`.
+`9c8710b17b62f9fa775c2c002b5bfb1787811b515c7e881a4ccc268d17a2548e`.
 The stage script, public preflight, and reverse/reapply guardrail all enforce
 that value.
 

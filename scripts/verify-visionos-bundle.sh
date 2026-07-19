@@ -240,8 +240,10 @@ plutil -convert xml1 -o /dev/null "$ASSET_INFO_FILE" || {
 }
 ASSET_INDEX=0
 HAS_COMPILED_APP_ICON=0
-while ASSET_TYPE=$(plutil -extract "$ASSET_INDEX.AssetType" raw \
-    "$ASSET_INFO_FILE" 2>/dev/null); do
+while plutil -extract "$ASSET_INDEX" xml1 -o /dev/null \
+    "$ASSET_INFO_FILE" 2>/dev/null; do
+  ASSET_TYPE=$(plutil -extract "$ASSET_INDEX.AssetType" raw \
+    "$ASSET_INFO_FILE" 2>/dev/null) || ASSET_TYPE=""
   if [[ "$ASSET_TYPE" == SolidImageStack ]]; then
     ASSET_NAME=$(plutil -extract "$ASSET_INDEX.Name" raw \
       "$ASSET_INFO_FILE") || {

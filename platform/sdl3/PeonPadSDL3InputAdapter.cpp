@@ -78,9 +78,13 @@ PeonPadAdaptSDL3TouchEvent(TouchInputState &touchInput,
                            int width, int height,
                            std::uint32_t timestamp, int modifiers)
 {
-	const TouchPoint position{event.x * width, event.y * height};
+	const TouchPoint position{event.x, event.y};
 	switch (event.type) {
 		case SDL_EVENT_FINGER_DOWN:
+			if (position.x < 0.0f || position.y < 0.0f
+			    || position.x >= width || position.y >= height) {
+				return {};
+			}
 			return touchInput.Begin(event.fingerID, position, timestamp, modifiers);
 		case SDL_EVENT_FINGER_MOTION:
 			return touchInput.Update(event.fingerID, position, timestamp, modifiers);

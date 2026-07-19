@@ -223,16 +223,22 @@ static void OggFree(OggData *data)
 /**
 **  Draw Ogg data to the overlay
 */
-static void OutputTheora(OggData &data, SDL_Texture &yuv_overlay, SDL_Rect &rect)
+static bool OutputTheora(OggData &data, SDL_Texture &yuv_overlay, SDL_Rect &rect)
 {
 	yuv_buffer yuv;
 
 	theora_decode_YUVout(&data.tstate, &yuv);
 
-	SDL_UpdateYUVTexture(&yuv_overlay, nullptr, yuv.y, yuv.y_stride, yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride);
-	SDL_RenderClear(TheRenderer);
-	SDL_RenderCopy(TheRenderer, &yuv_overlay, nullptr, &rect);
-	SDL_RenderPresent(TheRenderer);
+	if (!SdlCompatUpdateYuvTexture(
+		    &yuv_overlay, nullptr, yuv.y, yuv.y_stride,
+		    yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride)
+	    || !SdlCompatRenderClear(TheRenderer)
+	    || !SdlCompatRenderCopy(TheRenderer, &yuv_overlay, nullptr, &rect)
+	    || !SdlCompatRenderPresent(TheRenderer)) {
+		ErrorPrint("Unable to render movie frame: %s\n", SDL_GetError());
+		return false;
+	}
+	return true;
 }
 
 /**
@@ -273,7 +279,7 @@ int PlayMovie(const std::string &name)
 	CFile f;
 	if (f.open(filename.c_str(), CL_OPEN_READ) == -1) {
 		ErrorPrint("Can't open file '%s'\n", name.c_str());
-		return 0;
+		return -1;
 	}
 
 	OggData data{};
@@ -298,7 +304,13 @@ int PlayMovie(const std::string &name)
 		rect.y = 0;
 	}
 
-	SDL_RenderClear(TheRenderer);
+	if (!SdlCompatRenderClear(TheRenderer)) {
+		ErrorPrint("Unable to clear renderer for movie playback: %s\n",
+		           SDL_GetError());
+		OggFree(&data);
+		f.close();
+		return -1;
+	}
 	Video.ClearScreen();
 	sdl2::TexturePtr yuv_overlay{SDL_CreateTexture(TheRenderer,
 	                                               SDL_PIXELFORMAT_YV12,
@@ -312,7 +324,7 @@ int PlayMovie(const std::string &name)
 			"SDL_CreateYUVOverlay: %dx%d\n", data.tinfo.frame_width, data.tinfo.frame_height);
 		OggFree(&data);
 		f.close();
-		return 0;
+		return -1;
 	}
 
 	// since video's may be longer and should be streamed, we play them as music, but
@@ -338,12 +350,16 @@ int PlayMovie(const std::string &name)
 	SetCallbacks(&callbacks);
 
 	Invalidate();
-	SDL_RenderClear(TheRenderer);
-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
-	SDL_RenderDrawRect(TheRenderer, nullptr);
+	bool playbackFailed = false;
+	if (!SdlCompatRenderClear(TheRenderer)
+	    || !SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255)
+	    || !SdlCompatRenderDrawRect(TheRenderer, nullptr)) {
+		ErrorPrint("Unable to prepare movie renderer: %s\n", SDL_GetError());
+		playbackFailed = true;
+	}
 	// SDL_RenderPresent(TheRenderer);
 
-	MovieStop = false;
+	MovieStop = playbackFailed;
 	const unsigned int start_ticks = SDL_GetTicks();
 	bool need_data = true;
 	while (!MovieStop) {
@@ -363,7 +379,11 @@ int PlayMovie(const std::string &name)
 			continue;
 		}
 		if (diff > 0) {
-			OutputTheora(data, *yuv_overlay, rect);
+			if (!OutputTheora(data, *yuv_overlay, rect)) {
+				playbackFailed = true;
+				MovieStop = true;
+				break;
+			}
 			need_data = true;
 		}
 
@@ -380,7 +400,7 @@ int PlayMovie(const std::string &name)
 
 	SetCallbacks(old_callbacks);
 
-	return 0;
+	return playbackFailed ? -1 : 0;
 }
 
 Movie::~Movie()
@@ -396,14 +416,24 @@ Movie::~Movie()
 static void RenderToSurface(SDL_Surface &surface, SDL_Texture *yuv_overlay, SDL_Rect &rect, OggData &data) {
 	yuv_buffer yuv{};
 	theora_decode_YUVout(&data.tstate, &yuv);
-	SDL_UpdateYUVTexture(yuv_overlay, nullptr, yuv.y, yuv.y_stride, yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride);
-	SDL_RenderClear(TheRenderer);
+	if (!SdlCompatUpdateYuvTexture(
+		    yuv_overlay, nullptr, yuv.y, yuv.y_stride,
+		    yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride)
+	    || !SdlCompatRenderClear(TheRenderer)) {
+		ErrorPrint("Unable to prepare movie surface: %s\n", SDL_GetError());
+		SDL_FillRect(&surface, nullptr, 0);
+		return;
+	}
 
 	// since SDL will render us at logical size, and SDL_RenderReadPixels will read the at
 	// output size, we need to adapt the rectangles to read and write from dynamically
 	int rw, rh, ww, wh;
-	SDL_GetWindowSize(TheWindow, &ww, &wh);
-	SDL_RenderGetLogicalSize(TheRenderer, &rw, &rh);
+	if (!SdlCompatGetRenderOutputSize(TheRenderer, &ww, &wh)
+	    || !SdlCompatGetRenderLogicalSize(TheRenderer, &rw, &rh)) {
+		ErrorPrint("Unable to query renderer dimensions: %s\n", SDL_GetError());
+		SDL_FillRect(&surface, nullptr, 0);
+		return;
+	}
 	SDL_Rect render_rect;
 	render_rect.x = 0;
 	render_rect.y = 0;
@@ -418,9 +448,14 @@ static void RenderToSurface(SDL_Surface &surface, SDL_Texture *yuv_overlay, SDL_
 	read_rect.h = rect.h;
 	read_rect.x = (ww - (rw * scale)) / 2;
 	read_rect.y = (wh - (rh * scale)) / 2;
-	SDL_RenderCopy(TheRenderer, yuv_overlay, nullptr, &render_rect);
-	if (SDL_RenderReadPixels(TheRenderer, &read_rect, surface.format->format, surface.pixels, surface.pitch)) {
-		ErrorPrint("Reading from renderer not supported\n");
+	if (!SdlCompatRenderCopy(
+		    TheRenderer, yuv_overlay, nullptr, &render_rect)) {
+		ErrorPrint("Unable to render movie surface: %s\n", SDL_GetError());
+		SDL_FillRect(&surface, nullptr, 0);
+		return;
+	}
+	if (!SdlCompatRenderReadPixels(TheRenderer, &read_rect, &surface)) {
+		ErrorPrint("Reading from renderer not supported: %s\n", SDL_GetError());
 		SDL_FillRect(&surface, nullptr, 0); // completely transparent
 	}
 }
@@ -440,8 +475,9 @@ bool Movie::Load(const std::string &name, int w, int h)
 	rect.w = w;
 	rect.h = h;
 
-	mSurface = SDL_CreateRGBSurface(
-		0, w, h, TheScreen->format->BitsPerPixel, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+	mSurface = SdlCompatCreateSurface(
+		w, h, SdlCompatGetPixelFormatDetails(TheScreen).BitsPerPixel,
+		0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
 
 	if (mSurface == nullptr) {
 		ErrorPrint("SDL_CreateRGBSurface: %s\n", SDL_GetError());

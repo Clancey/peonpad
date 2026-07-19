@@ -29,6 +29,7 @@
 
 #include "util.h"
 
+#include "sdl_compat.h"
 #include "stratagus.h"
 
 #include <SDL.h>
@@ -422,8 +423,11 @@ std::optional<std::string> GetClipboard()
 	}
 }
 
-void SetClipboard(const std::string &str) {
-	SDL_SetClipboardText(str.c_str());
+void SetClipboard(const std::string &str)
+{
+	if (!SdlCompatSetClipboardText(str.c_str())) {
+		ErrorPrint("Unable to set clipboard text: %s\n", SDL_GetError());
+	}
 }
 
 /*----------------------------------------------------------------------------

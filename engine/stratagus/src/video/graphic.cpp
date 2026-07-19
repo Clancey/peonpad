@@ -132,7 +132,7 @@ void CGraphic::DrawSubCustomMod(int gx, int gy, int w, int h, int x, int y,
 								SDL_Surface *surface /*= TheScreen*/) const
 {
 	Assert(surface);
-	Assert(surface->format->BitsPerPixel == 32);
+	Assert(SdlCompatGetPixelFormatDetails(surface).BitsPerPixel == 32);
 
 
 	size_t srcOffset = mSurface->w * gy + gx;
@@ -633,21 +633,27 @@ void CGraphic::GenFramesMap()
 static void ApplyGrayScale(SDL_Surface *Surface, int Width, int Height)
 {
 	SDL_LockSurface(Surface);
-	const SDL_PixelFormat *f = Surface->format;
-	const int bpp = Surface->format->BytesPerPixel;
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(Surface);
+	const int bpp = format.BytesPerPixel;
 	const double redGray = 0.21;
 	const double greenGray = 0.72;
 	const double blueGray = 0.07;
 
 	switch (bpp) {
 		case 1: {
-			SDL_Color colors[256];
-			SDL_Palette &pal = *Surface->format->palette;
-			for (int i = 0; i < 256; ++i) {
-				const int gray = redGray * pal.colors[i].r + greenGray * pal.colors[i].g + blueGray * pal.colors[i].b;
+			SDL_Palette *const palette = SdlCompatGetSurfacePalette(Surface);
+			Assert(palette != nullptr);
+			std::vector<SDL_Color> colors(palette->ncolors);
+			for (int i = 0; i < palette->ncolors; ++i) {
+				const int gray = redGray * palette->colors[i].r
+					+ greenGray * palette->colors[i].g
+					+ blueGray * palette->colors[i].b;
 				colors[i].r = colors[i].g = colors[i].b = gray;
+				colors[i].a = palette->colors[i].a;
 			}
-			SDL_SetPaletteColors(&pal, &colors[0], 0, 256);
+			SDL_SetPaletteColors(
+				palette, colors.data(), 0, static_cast<int>(colors.size()));
 			break;
 		}
 		case 4: {
@@ -655,10 +661,10 @@ static void ApplyGrayScale(SDL_Surface *Surface, int Width, int Height)
 			for (int i = 0; i < Height; ++i) {
 				for (int j = 0; j < Width; ++j) {
 					p = static_cast<Uint32 *>(Surface->pixels) + (i * Surface->w + j);
-					const Uint32 gray = ((Uint8)((*p) * redGray) >> f->Rshift) +
-										((Uint8)(*(p + 1) * greenGray) >> f->Gshift) +
-										((Uint8)(*(p + 2) * blueGray) >> f->Bshift) +
-										((Uint8)(*(p + 3)) >> f->Ashift);
+					const Uint32 gray = ((Uint8)((*p) * redGray) >> format.Rshift) +
+										((Uint8)(*(p + 1) * greenGray) >> format.Gshift) +
+										((Uint8)(*(p + 2) * blueGray) >> format.Bshift) +
+										((Uint8)(*(p + 3)) >> format.Ashift);
 					*p = gray;
 				}
 			}
@@ -701,7 +707,7 @@ void CGraphic::Load(bool grayscale)
 	OriginWidth = mSurface->w;
 	OriginHeight = mSurface->h;
 
-	if (mSurface->format->BytesPerPixel == 1) {
+	if (SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel == 1) {
 		VideoPaletteListAdd(mSurface);
 	}
 
@@ -748,7 +754,7 @@ static void FreeSurface(SDL_Surface **surface)
 
 	unsigned char *pixels = nullptr;
 
-	if ((*surface)->flags & SDL_PREALLOC) {
+	if (SdlCompatSurfaceUsesPreallocatedPixels(*surface)) {
 		pixels = (unsigned char *)(*surface)->pixels;
 	}
 
@@ -775,18 +781,25 @@ void CGraphic::Flip()
 		return;
 	}
 
-	SDL_Surface *s = SurfaceFlip = SDL_ConvertSurface(mSurface, mSurface->format, 0);
+	SDL_Surface *s = SurfaceFlip = SdlCompatDuplicateSurface(mSurface);
+	if (SurfaceFlip == nullptr) {
+		ErrorPrint("Unable to duplicate graphic '%s': %s\n",
+		           File.u8string().c_str(), SDL_GetError());
+		ExitFatal(-1);
+	}
 	Uint32 ckey;
-	if (!SDL_GetColorKey(mSurface, &ckey)) {
-		SDL_SetColorKey(SurfaceFlip, SDL_TRUE, ckey);
+	if (SdlCompatGetColorKey(mSurface, &ckey)) {
+		SdlCompatSetColorKey(SurfaceFlip, true, ckey);
 	}
 	SDL_SetSurfaceBlendMode(SurfaceFlip, SDL_BLENDMODE_NONE);
-	if (SurfaceFlip->format->BytesPerPixel == 1) {
+	const int bytesPerPixel =
+		SdlCompatGetPixelFormatDetails(SurfaceFlip).BytesPerPixel;
+	if (bytesPerPixel == 1) {
 		VideoPaletteListAdd(SurfaceFlip);
 	}
 	SDL_LockSurface(mSurface);
 	SDL_LockSurface(s);
-	switch (s->format->BytesPerPixel) {
+	switch (bytesPerPixel) {
 		case 1:
 			for (int i = 0; i < s->h; ++i) {
 				for (int j = 0; j < s->w; ++j) {
@@ -851,11 +864,14 @@ void CGraphic::Resize(int w, int h)
 
 	Resized = true;
 	Uint32 ckey;
-	bool useckey = !SDL_GetColorKey(mSurface, &ckey);
+	const bool useckey = SdlCompatGetColorKey(mSurface, &ckey);
 
-	int bpp = mSurface->format->BytesPerPixel;
+	const int bpp = SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel;
 	if (bpp == 1) {
-		SDL_Color pal[256];
+		SDL_Palette *const palette = SdlCompatGetSurfacePalette(mSurface);
+		Assert(palette != nullptr);
+		const std::vector<SDL_Color> paletteColors(
+			palette->colors, palette->colors + palette->ncolors);
 
 		SDL_LockSurface(mSurface);
 
@@ -873,14 +889,22 @@ void CGraphic::Resize(int w, int h)
 		SDL_UnlockSurface(mSurface);
 		VideoPaletteListRemove(mSurface);
 
-		memcpy(pal, mSurface->format->palette->colors, sizeof(SDL_Color) * 256);
 		SDL_FreeSurface(mSurface);
 
-		mSurface = SDL_CreateRGBSurfaceFrom(data, w, h, 8, w, 0, 0, 0, 0);
-		if (mSurface->format->BytesPerPixel == 1) {
+		mSurface =
+			SdlCompatCreateSurfaceFrom(data, w, h, 8, w, 0, 0, 0, 0);
+		if (mSurface == nullptr) {
+			delete[] data;
+			ErrorPrint("Unable to resize indexed graphic '%s': %s\n",
+			           File.u8string().c_str(), SDL_GetError());
+			ExitFatal(-1);
+		}
+		if (SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel == 1) {
 			VideoPaletteListAdd(mSurface);
 		}
-		SDL_SetPaletteColors(mSurface->format->palette, pal, 0, 256);
+		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(mSurface),
+		                     paletteColors.data(), 0,
+		                     static_cast<int>(paletteColors.size()));
 	} else {
 		SDL_LockSurface(mSurface);
 
@@ -931,20 +955,25 @@ void CGraphic::Resize(int w, int h)
 			}
 		}
 
-		int Rmask = mSurface->format->Rmask;
-		int Gmask = mSurface->format->Gmask;
-		int Bmask = mSurface->format->Bmask;
-		int Amask = mSurface->format->Amask;
+		const SdlCompatPixelFormatDetails format =
+			SdlCompatGetPixelFormatDetails(mSurface);
 
 		SDL_UnlockSurface(mSurface);
 		VideoPaletteListRemove(mSurface);
 		SDL_FreeSurface(mSurface);
 
-		mSurface =
-			SDL_CreateRGBSurfaceFrom(data, w, h, 8 * bpp, w * bpp, Rmask, Gmask, Bmask, Amask);
+		mSurface = SdlCompatCreateSurfaceFrom(
+			data, w, h, 8 * bpp, w * bpp,
+			format.Rmask, format.Gmask, format.Bmask, format.Amask);
+		if (mSurface == nullptr) {
+			delete[] data;
+			ErrorPrint("Unable to resize graphic '%s': %s\n",
+			           File.u8string().c_str(), SDL_GetError());
+			ExitFatal(-1);
+		}
 	}
 	if (useckey) {
-		SDL_SetColorKey(mSurface, SDL_TRUE, ckey);
+		SdlCompatSetColorKey(mSurface, true, ckey);
 	}
 
 	Height = h / (originHeight / Height);
@@ -1028,20 +1057,26 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
 	const uint16_t cols = GetFrameCountPerRow();
 	const int newGraphicHeight = GetGraphicHeight() + Height * ((numOfFramesToAdd - 1) / cols + 1);
 
-	const SDL_PixelFormat *pf = mSurface->format;
-	const uint8_t bpp = mSurface->format->BytesPerPixel;
-	SDL_Surface *newSurface = SDL_CreateRGBSurface(SDL_SWSURFACE,
-	                                               GetGraphicWidth(),
-	                                               newGraphicHeight,
-	                                               8 * bpp,
-	                                               pf->Rmask,
-	                                               pf->Gmask,
-	                                               pf->Bmask,
-	                                               pf->Amask);
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(mSurface);
+	const uint8_t bpp = format.BytesPerPixel;
+	SDL_Surface *newSurface = SdlCompatCreateSurface(
+		GetGraphicWidth(),
+		newGraphicHeight,
+		8 * bpp,
+		format.Rmask,
+		format.Gmask,
+		format.Bmask,
+		format.Amask);
+	if (newSurface == nullptr) {
+		ErrorPrint("Unable to expand graphic '%s': %s\n",
+		           File.u8string().c_str(), SDL_GetError());
+		ExitFatal(-1);
+	}
 	uint32_t ckey;
-	const bool useckey = !SDL_GetColorKey(mSurface, &ckey);
+	const bool useckey = SdlCompatGetColorKey(mSurface, &ckey);
 	if (useckey) {
-		SDL_SetColorKey(newSurface, SDL_TRUE, ckey);
+		SdlCompatSetColorKey(newSurface, true, ckey);
 	}
 
 	SDL_FillRect(newSurface, nullptr, useckey ? ckey : 0);
@@ -1056,8 +1091,10 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
 	if (bpp == 1) {
 		VideoPaletteListRemove(mSurface);
 
-		const SDL_Palette *palette = mSurface->format->palette;
-		SDL_SetPaletteColors(newSurface->format->palette, palette->colors, 0, palette->ncolors);
+		const SDL_Palette *palette = SdlCompatGetSurfacePalette(mSurface);
+		Assert(palette != nullptr);
+		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(newSurface),
+		                     palette->colors, 0, palette->ncolors);
 
 		VideoPaletteListAdd(newSurface);
 	}
@@ -1079,9 +1116,11 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
 */
 bool CGraphic::TransparentPixel(int x, int y)
 {
-	int bpp = mSurface->format->BytesPerPixel;
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(mSurface);
+	const int bpp = format.BytesPerPixel;
 	Uint32 colorkey;
-	bool has_colorkey = !SDL_GetColorKey(mSurface, &colorkey);
+	const bool has_colorkey = SdlCompatGetColorKey(mSurface, &colorkey);
 	if ((bpp == 1 && !has_colorkey) || bpp == 3) {
 		return false;
 	}
@@ -1097,7 +1136,7 @@ bool CGraphic::TransparentPixel(int x, int y)
 		bool ckey = has_colorkey;
 		if (ckey && *p == colorkey) {
 			ret = true;
-		} else if (p[mSurface->format->Ashift >> 3] == 255) {
+		} else if (p[format.Ashift >> 3] == 255) {
 			ret = true;
 		}
 	}
@@ -1117,7 +1156,8 @@ void CGraphic::SetPaletteColor(int idx, int r, int g, int b) {
 	color.r = r;
 	color.g = g;
 	color.b = b;
-	SDL_SetPaletteColors(mSurface->format->palette, &color, idx, 1);
+	SDL_SetPaletteColors(
+		SdlCompatGetSurfacePalette(mSurface), &color, idx, 1);
 }
 
 void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
@@ -1141,17 +1181,24 @@ void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
 		return;
 	}
 
-	int bpp = mSurface->format->BytesPerPixel;
+	const SdlCompatPixelFormatDetails destinationFormat =
+		SdlCompatGetPixelFormatDetails(mSurface);
+	const SdlCompatPixelFormatDetails sourceFormat =
+		SdlCompatGetPixelFormatDetails(other->mSurface);
+	const int bpp = destinationFormat.BytesPerPixel;
 	unsigned int srcColorKey;
 	unsigned int dstColorKey;
 
-	if (!((bpp == 1 && SDL_GetColorKey(other->mSurface, &srcColorKey) == 0 && SDL_GetColorKey(mSurface, &dstColorKey) == 0) || bpp == 4)) {
+	if (!((bpp == 1
+	       && SdlCompatGetColorKey(other->mSurface, &srcColorKey)
+	       && SdlCompatGetColorKey(mSurface, &dstColorKey))
+	      || bpp == 4)) {
 		PrintOnStdOut(Format("ERROR: OverlayGraphic only supported for 8-bit graphics with "
 		                     "transparency or RGBA graphics (%s)",
 		                     File.c_str()));
 		return;
 	}
-	if ((bpp != other->mSurface->format->BytesPerPixel)) {
+	if (bpp != sourceFormat.BytesPerPixel) {
 		PrintOnStdOut(Format(
 			"ERROR: OverlayGraphic only supported graphics with same depth (%s depth != %s depth)",
 			File.c_str(),
@@ -1190,27 +1237,27 @@ void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
 				for (int y = 0; y < mSurface->h; y++) {
 					uint32_t* src = src_base + x + y * other->mSurface->pitch;
 					uint32_t* dst = dst_base + x + y * mSurface->pitch;
-					double alphaSrc = (*src & other->mSurface->format->Amask) / 255.0;
+					double alphaSrc = (*src & sourceFormat.Amask) / 255.0;
 					if (mask) {
 						alphaSrc = 1 - alphaSrc;
 					}
-					double alphaDst = (*dst & mSurface->format->Amask) / 255.0;
-					uint8_t rSrc = *src & other->mSurface->format->Rmask;
-					uint8_t rDst = *dst & mSurface->format->Rmask;
-					uint8_t gSrc = *src & other->mSurface->format->Gmask;
-					uint8_t gDst = *dst & mSurface->format->Gmask;
-					uint8_t bSrc = *src & other->mSurface->format->Bmask;
-					uint8_t bDst = *dst & mSurface->format->Bmask;
+					double alphaDst = (*dst & destinationFormat.Amask) / 255.0;
+					uint8_t rSrc = *src & sourceFormat.Rmask;
+					uint8_t rDst = *dst & destinationFormat.Rmask;
+					uint8_t gSrc = *src & sourceFormat.Gmask;
+					uint8_t gDst = *dst & destinationFormat.Gmask;
+					uint8_t bSrc = *src & sourceFormat.Bmask;
+					uint8_t bDst = *dst & destinationFormat.Bmask;
 
 					double aOut = std::min(1.0, alphaSrc + alphaDst * (1 - alphaSrc));
 					uint8_t rOut = static_cast<uint8_t>((rSrc * alphaSrc + rDst * alphaDst * (1 - alphaSrc)) / aOut);
 					uint8_t gOut = static_cast<uint8_t>((gSrc * alphaSrc + gDst * alphaDst * (1 - alphaSrc)) / aOut);
 					uint8_t bOut = static_cast<uint8_t>((bSrc * alphaSrc + bDst * alphaDst * (1 - alphaSrc)) / aOut);
 
-					*dst = (static_cast<uint8_t>(aOut * 255) << mSurface->format->Ashift) |
-						(rOut << mSurface->format->Rshift) |
-						(gOut << mSurface->format->Gshift) |
-						(bOut << mSurface->format->Bshift);
+					*dst = (static_cast<uint8_t>(aOut * 255) << destinationFormat.Ashift) |
+						(rOut << destinationFormat.Rshift) |
+						(gOut << destinationFormat.Gshift) |
+						(bOut << destinationFormat.Bshift);
 				}
 			}
 			break;
@@ -1236,7 +1283,8 @@ static inline void dither(SDL_Surface *Surface) {
 
 static void applyAlphaGrayscaleToSurface(SDL_Surface **src, int alpha)
 {
-	SDL_Surface *alphaSurface = SDL_CreateRGBSurface(0, (*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
+	SDL_Surface *alphaSurface = SdlCompatCreateSurface(
+		(*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
 	if (!alphaSurface) {
 		ErrorPrint("Cannot create surface: %s\n", SDL_GetError());
 		ExitFatal(-1);
@@ -1251,7 +1299,8 @@ static void applyAlphaGrayscaleToSurface(SDL_Surface **src, int alpha)
 static void shrinkSurfaceFramesInY(SDL_Surface **src, int shrink, const std::vector<CGraphic::frame_pos_t> &frameMap, int frameW, int frameH)
 {
 	shrink = std::abs(shrink);
-	SDL_Surface *alphaSurface = SDL_CreateRGBSurface(0, (*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
+	SDL_Surface *alphaSurface = SdlCompatCreateSurface(
+		(*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
 	if (!alphaSurface) {
 		ErrorPrint("Cannot create surface: %s\n", SDL_GetError());
 		ExitFatal(-1);
@@ -1259,7 +1308,7 @@ static void shrinkSurfaceFramesInY(SDL_Surface **src, int shrink, const std::vec
 	for (const auto& frame : frameMap) {
 		const SDL_Rect srcRect = { frame.x, frame.y, frameW, frameH };
 		SDL_Rect dstRect = { frame.x, frame.y + shrink / 2, frameW, frameH - (shrink - shrink / 2) };
-		SDL_BlitScaled(*src, &srcRect, alphaSurface, &dstRect);
+		SdlCompatBlitScaled(*src, &srcRect, alphaSurface, &dstRect);
 	}
 	SDL_FreeSurface(*src);
 	*src = alphaSurface;
@@ -1343,7 +1392,7 @@ CFiller::bits_map::~bits_map()
 void CFiller::bits_map::Init(CGraphic *g)
 {
 	SDL_Surface *s = g->getSurface();
-	int bpp = s->format->BytesPerPixel;
+	const int bpp = SdlCompatGetPixelFormatDetails(s).BytesPerPixel;
 	unsigned int ckey;
 
 	if (bstore) {
@@ -1353,7 +1402,7 @@ void CFiller::bits_map::Init(CGraphic *g)
 		Height = 0;
 	}
 
-	if ((bpp == 1 && SDL_GetColorKey(s, &ckey) != 0) || bpp == 3) {
+	if ((bpp == 1 && !SdlCompatGetColorKey(s, &ckey)) || bpp == 3) {
 		return;
 	}
 
@@ -1367,7 +1416,7 @@ void CFiller::bits_map::Init(CGraphic *g)
 
 	SDL_LockSurface(s);
 
-	switch (s->format->BytesPerPixel) {
+	switch (bpp) {
 		case 1: {
 			unsigned char *ptr = (unsigned char *)s->pixels;
 
@@ -1391,7 +1440,7 @@ void CFiller::bits_map::Init(CGraphic *g)
 			break;
 		case 4:
 		{
-			if (!SDL_GetColorKey(s, &ckey)) {
+			if (SdlCompatGetColorKey(s, &ckey)) {
 				unsigned int *ptr = (unsigned int *)s->pixels;
 
 				for (int i = 0; i < Height; ++i) {

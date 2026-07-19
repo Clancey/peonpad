@@ -6,11 +6,11 @@
  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
  *
- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
  * Copyright (c) 2016, 2018, 2019 Gwilherm Baudic
  *                                                         Js_./
  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
  *                                                 _Qhm`] _f "'c  1!5m
  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
  *                                               .)j(] .d_/ '-(  P .   S
@@ -65,6 +65,7 @@
 #include "guisan/image.hpp"
 #include "guisan/sdl/sdlimage.hpp"
 #include "guisan/sdl/sdlpixel.hpp"
+#include "sdl_compat.h"
 
 // For some reason an old version of MSVC did not like std::abs,
 // so we added this macro.
@@ -103,9 +104,9 @@ namespace gcn
     {
         mRenderTarget = renderer;
         // An internal surface is still required to be able to handle surfaces and colorkeys
-        mTarget = SDL_CreateRGBSurface(0, width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
-        SDL_FillRect(mTarget, nullptr, SDL_MapRGB(mTarget->format, 0xff, 0, 0xff));
-        SDL_SetColorKey(mTarget, SDL_TRUE, SDL_MapRGB(mTarget->format, 0xff, 0, 0xff)); // magenta, Guisan default
+        mTarget = SdlCompatCreateSurface(width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+        SDL_FillRect(mTarget, nullptr, SdlCompatMapRGB(mTarget, 0xff, 0, 0xff));
+        SDL_SetColorKey(mTarget, SDL_TRUE, SdlCompatMapRGB(mTarget, 0xff, 0, 0xff)); // magenta, Guisan default
         SDL_SetSurfaceBlendMode(mTarget, SDL_BLENDMODE_NONE); // needed to cleanup temp data properly
         mTexture = SDL_CreateTextureFromSurface(mRenderTarget, mTarget);
         SDL_SetTextureBlendMode(mTexture, SDL_BLENDMODE_BLEND);
@@ -188,14 +189,14 @@ namespace gcn
         
         if (srcImage->getTexture() == nullptr)
         {
-            SDL_FillRect(mTarget, &temp, SDL_MapRGBA(mTarget->format, 0xff, 0, 0xff, 0));
+            SDL_FillRect(mTarget, &temp, SdlCompatMapRGBA(mTarget, 0xff, 0, 0xff, 0));
             SDL_BlitSurface(srcImage->getSurface(), &src, mTarget, &temp);
             SDL_UpdateTexture(mTexture, &temp, mTarget->pixels, mTarget->pitch);
-            SDL_RenderCopy(mRenderTarget, mTexture, &temp, &dst);
+            SdlCompatRenderCopy(mRenderTarget, mTexture, &temp, &dst);
         } 
         else 
         {
-            SDL_RenderCopy(mRenderTarget, srcImage->getTexture(), &src, &dst);
+            SdlCompatRenderCopy(mRenderTarget, srcImage->getTexture(), &src, &dst);
         }    
     }
 
@@ -232,7 +233,7 @@ namespace gcn
             
             saveRenderColor();
             SDL_SetRenderDrawColor(mRenderTarget, mColor.r, mColor.g, mColor.b, mColor.a);
-            SDL_RenderFillRect(mRenderTarget, &rect);
+            SdlCompatRenderFillRect(mRenderTarget, &rect);
             restoreRenderColor();
         }
         else
@@ -245,7 +246,7 @@ namespace gcn
 
             saveRenderColor();
             SDL_SetRenderDrawColor(mRenderTarget, mColor.r, mColor.g, mColor.b, mColor.a);
-            SDL_RenderFillRect(mRenderTarget, &rect);
+            SdlCompatRenderFillRect(mRenderTarget, &rect);
             restoreRenderColor();
         }
     }
@@ -436,10 +437,10 @@ namespace gcn
         temp.w = source.w;
         temp.h = source.h;
 
-        SDL_FillRect(mTarget, &temp, SDL_MapRGBA(mTarget->format, 0xff, 0, 0xff, 0));
+        SDL_FillRect(mTarget, &temp, SdlCompatMapRGBA(mTarget, 0xff, 0, 0xff, 0));
         SDL_BlitSurface(surface, &source, mTarget, &temp);
         SDL_UpdateTexture(mTexture, &temp, mTarget->pixels, mTarget->pitch);
-        SDL_RenderCopy(mRenderTarget, mTexture, &temp, &destination);
+        SdlCompatRenderCopy(mRenderTarget, mTexture, &temp, &destination);
     }
 
     void SDL2Graphics::drawSDLTexture(SDL_Texture * texture, SDL_Rect source, 
@@ -456,7 +457,7 @@ namespace gcn
         destination.w = source.w;
         destination.h = source.h;
 
-        SDL_RenderCopy(mRenderTarget, texture, &source, &destination);
+        SdlCompatRenderCopy(mRenderTarget, texture, &source, &destination);
     }
     
     void SDL2Graphics::saveRenderColor()

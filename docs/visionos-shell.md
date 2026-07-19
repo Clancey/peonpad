@@ -54,8 +54,26 @@ Apple APIs.
 
 The top-level `PEONPAD_VISIONOS` boundary remains distinct from iOS and macOS.
 The toolchain probe requires `TARGET_OS_VISION=1`, `TARGET_OS_IOS=0`, and
-`TARGET_OS_OSX=0`. The guarded `PEONPAD_ENABLE_ENGINE` and
-`PEONPAD_ENABLE_SDL3` combination remains a hard error.
+`TARGET_OS_OSX=0`. `PEONPAD_ENABLE_ENGINE=ON` and
+`PEONPAD_ENABLE_SDL3=ON` now compile and link the complete engine for both
+xrsimulator and xros. That engine artifact is not copied into or launched by
+the smoke-shell application.
+
+## Engine handoff contract
+
+The next packaging layer must place a complete redistribution-approved game
+payload at `${SDL_GetBasePath()}/Aleona`, then launch the SDL3 Stratagus
+artifact. Engine startup emits exactly `PEONPAD_ENGINE_READY` only after
+`PreMenuSetup()` succeeds. It is a raw stdout line that is flushed before
+startup continues; output failure is fatal. Missing scripts/assets and renderer,
+surface, I/O, or audio initialization failures terminate nonzero without that
+marker; automation must not retain readiness from an earlier process.
+
+Clean all-target Release builds on July 19, 2026 produced arm64 engine and shell
+executables for xrsimulator platform 12 and unsigned xros platform 11. This is
+compile/link and bundle-structure evidence only. The current shell continues
+to launch the public foundation payload and display
+`SMOKE SHELL — NO GAMEPLAY`.
 
 ## Rendering and input transform
 
@@ -69,6 +87,10 @@ is recomputed after window, drawable-pixel, display-scale, and safe-area changes
 The inverse transform rejects points in the bars and maps drawable pixels back
 to logical coordinates. `PeonPadSDL3MapWindowPointToLogical` first converts
 UIKit/SDL window points to Retina drawable pixels, then calls that same inverse.
+The staged engine derives a single SDL renderer scale and logical-coordinate
+viewport from this geometry, disables SDL logical presentation to avoid double
+scaling, and converts SDL3 pointer/touch events through the active renderer
+before dispatch.
 The Release test runs with `-DNDEBUG` and uses explicit checks for default, wide,
 tall, Retina/fractional display scale, asymmetric non-zero safe areas,
 safe-area invalidation, repeated-resize, and bar-input cases:
@@ -154,5 +176,5 @@ ignored Warcraft content and writes no source-adjacent state; SDL's pref path is
 inside its application container.
 
 RealityKit, SwiftUI ornaments, immersive spaces, ARKit or custom hand skeletons,
-true 3D rendering, controller-remapping UX, and the guarded full SDL3 gameplay
-engine are explicitly out of scope for this shell.
+true 3D rendering, controller-remapping UX, engine packaging, and playable
+gameplay are explicitly out of scope for this shell.

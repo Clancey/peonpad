@@ -113,7 +113,7 @@ struct MngWrapper
 
 		mng->free();
 		mng->mSurface =
-			SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 8 * 3, Rmask, Gmask, Bmask, 0);
+			SdlCompatCreateSurface(width, height, 8 * 3, Rmask, Gmask, Bmask, 0);
 		if (mng->mSurface == nullptr) {
 			ErrorPrint("Out of memory");
 			exit(1);

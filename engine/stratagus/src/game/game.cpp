@@ -236,9 +236,11 @@ static void LoadStratagusMap(const fs::path &smpdir, const fs::path &mapname)
 static void WriteMapPreview(const fs::path &mapname, CMap &map)
 {
 	const int rectSize = 5; // size of rectange used for player start spots
-	const SDL_PixelFormat *fmt = MinimapSurface->format;
-	SDL_Surface *preview = SDL_CreateRGBSurface(SDL_SWSURFACE,
-												UI.Minimap.W, UI.Minimap.H, 32, fmt->Rmask, fmt->Gmask, fmt->Bmask, 0);
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(MinimapSurface);
+	SDL_Surface *preview = SdlCompatCreateSurface(
+		UI.Minimap.W, UI.Minimap.H, 32,
+		format.Rmask, format.Gmask, format.Bmask, 0);
 	SDL_BlitSurface(MinimapSurface, nullptr, preview, nullptr);
 
 	SDL_LockSurface(preview);

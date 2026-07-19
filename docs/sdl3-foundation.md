@@ -1,9 +1,15 @@
-# Direct SDL3 foundation
+# Direct SDL3 engine lane
 
-SDL2 remains PeonPad's default and accepted application path. The direct SDL3
-lane is enabled only with `PEONPAD_ENABLE_SDL3=ON`; it deliberately refuses a
-same-config `PEONPAD_ENABLE_ENGINE=ON` build until the full Stratagus port is
-complete. No sdl2-compat code or SDL fork is present.
+SDL2 remains PeonPad's default and hardware-accepted application path. The
+opt-in combination
+
+```sh
+-DPEONPAD_ENABLE_ENGINE=ON -DPEONPAD_ENABLE_SDL3=ON
+```
+
+now builds the complete staged Stratagus engine directly against SDL 3.4.12,
+SDL_image 3.4.4, and SDL_mixer 3.2.4. It also builds the native Wargus launcher
+and host tools on macOS. No sdl2-compat code, SDL fork, or backport is present.
 
 ## Locked inputs
 
@@ -14,78 +20,121 @@ complete. No sdl2-compat code or SDL fork is present.
 | SDL_mixer | 3.2.4 | `72a81869b45e249e8e67102db4e98dd2441f05a1` | `f2ea848ccdf2f394cd4973ee0f6c482e04511044695cccfd46bab6dcd7f780aa` |
 
 The Zlib-licensed release archives are committed under
-`third_party/sdl3/sources`. CMake reads only those local archives. Run
-`scripts/verify-sdl3-sources.sh` to verify their immutable hashes.
+`third_party/sdl3/sources`. CMake reads only those local archives.
+`scripts/verify-sdl3-sources.sh` checks their immutable hashes.
 
-## SDL2 application inventory
+The canonical staged Stratagus tree is reconstructed by ordered patches
+`0001` through `0010-direct-sdl3-engine.patch`. Its tracked-tree SHA-256 is
+`00ba11206fbf39657a312908c343659f1fbc28162ada469afb810d60d460471d`.
+The stage script, public preflight, and reverse/reapply guardrail all enforce
+that value.
 
-The staged Stratagus application uses SDL in 53 source/header files, plus the
-Apple safe-area bridge. The highest-impact files are `src/video/sdl.cpp`,
-`src/video/graphic.cpp`,
-`src/sound/sound_server.cpp`, `src/video/movie.cpp`, and
-`src/video/shaders.cpp`.
+## Ported engine surface
 
-| Group | Current SDL2 APIs and behavior | Direct SDL3 requirement |
-| --- | --- | --- |
-| Entry/lifecycle | `main`, `SDL_Init`, `SDL_InitSubSystem`, `SDL_Quit`, `SDL_WasInit`, `SDL_APP_*`, `SDL_QUIT` | SDL main callbacks, boolean init results, `SDL_EVENT_*`, event watches for background/termination |
-| Events/text | `SDL_PollEvent`, `SDL_PeepEvents`, `SDL_PushEvent`, key/mouse/window/touch events, `SDL_StartTextInput`, `SDL_StopTextInput` | New event constants and fields; text input now takes a window; finger cancellation is `SDL_EVENT_FINGER_CANCELED` |
-| Controller | `SDL_NumJoysticks`, `SDL_IsGameController`, open/close/name/instance ownership, controller axis/button/device events | `SDL_GetGamepads`, instance-ID `SDL_OpenGamepad`, `SDL_Gamepad*`, `event.down`; preserve the existing intent/state adapter and GCEventInteraction ownership |
-| Renderer/window | create/destroy window, renderer, texture; logical size, scale, viewport, output size, draw/copy/present/read pixels, high-DPI/fullscreen/grab | `SDL_SetRenderLogicalPresentation`, float render geometry, boolean returns, pixel-size APIs, SDL3 renderer properties |
-| Surfaces/pixels | create/from/convert/free/lock/blit/fill, palettes, color keys/modulation, map/get RGB(A), clip rects | SDL3 surface constructors and embedded pixel-format details; `SDL_MapSurfaceRGB(A)` and changed conversion signatures |
-| Images | `IMG_Init`, `IMG_Quit`, `IMG_Load_RW`, `IMG_SavePNG` | no image init phase; `SDL_IOStream`, `IMG_Load_IO`; boolean save results |
-| Audio | classic `Mix_Chunk`/`Mix_Music`, global channels/music, decoder enumeration, panning, volume, callbacks, RW loaders | `MIX_Mixer`, `MIX_Audio`, reusable `MIX_Track`, properties and explicit object ownership; this is the largest remaining subsystem rewrite |
-| Filesystem | `SDL_GetBasePath`, `SDL_GetPrefPath`, SDL environment allocation/free | APIs remain, with SDL3 ownership and boolean-return auditing |
-| Native Apple window | `SDL_SysWMinfo`/`SDL_GetWindowWMInfo` in the iOS safe-area bridge | `SDL_GetWindowProperties` plus `SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER` or `SDL_PROP_WINDOW_COCOA_WINDOW_POINTER` |
-| GL/video tools | GL procedure/swap/bind APIs, YUV textures, legacy overlay references, clipboard, dynamic loading | audit renderer-vs-GL ownership and replace removed overlay/format calls |
+Version differences are concentrated in `sdl_compat.h`, `sdl_gl_compat.h`,
+the SDL3 include facade under `platform/sdl3/include`, the reviewed input and
+Apple-window adapters, and the typed mixer adapter. Gameplay code continues to
+use the engine's established abstractions.
 
-The exact symbol inventory is reproducible without scanning vendored libraries:
-
-```sh
-rg -o --no-filename --glob '*.{c,cc,cpp,cxx,h,hpp,m,mm}' \
-  '\b(?:SDL|IMG|Mix)_[A-Za-z0-9_]+' engine/stratagus/src \
-  | sort -u
-```
-
-Wargus tools do not call SDL directly; they consume the linked Stratagus
-launcher/engine interfaces.
-
-## Foundation coverage
-
-The smoke payload uses SDL3 main callbacks and directly exercises core
-initialization, lifecycle events, base/pref paths, image decode, the SDL_mixer
-3 object model and decode/memory mixing, renderer logical letterboxing,
-textures/surfaces/pixels, text input, gamepad instance discovery/ownership, and
-the supported Apple native-window properties. The SDL3 input adapter maps
-gamepad/touch/focus events into the existing controller and touch intent state,
-including cancellation and multi-source ownership behavior.
-
-Build each lane without proprietary data:
-
-```sh
-./scripts/build-sdl3-foundation.sh macos
-./scripts/build-sdl3-foundation.sh ios-simulator
-./scripts/build-sdl3-foundation.sh xrsimulator
-./scripts/build-visionos-shell.sh xrsimulator --launch
-./scripts/build-visionos-shell.sh xros
-```
-
-Evidence captured July 15, 2026:
-
-| Lane | Result |
+| Area | Direct SDL3 implementation |
 | --- | --- |
-| macOS 13 arm64 | All foundation targets built, and the callback payload ran with both software and Metal renderers and reported exact core `3.4.12`, image `3.4.4`, and mixer `3.2.4` runtime versions. |
-| iOS Simulator 16 arm64 | All foundation targets, including the toolchain probe and input adapter, compiled; the SDL3-family payload and Apple bridge linked as Mach-O platform 7 with SDK 26.5. |
-| visionOS Simulator 2 arm64 | All foundation and native shell targets compiled as Mach-O platform 12 with SDK 26.5. The app installed, launched, remained resident, and rendered its public smoke card on Apple Vision Pro / visionOS 26.5. |
-| visionOS device 2 arm64 | The complete unsigned xros configuration built as Mach-O platform 11 with SDK 26.5. Xcode team signing and available paired hardware remain manual gates. |
-| Default SDL2 | The full macOS Stratagus/Wargus app and tools built, and the default input/guardrail CTests passed. |
+| Lifecycle and events | Initialization and shutdown, polling and pushed user events, focus, background, foreground, termination, text input, clipboard, cursor visibility, and Apple safe-area refresh use SDL3's boolean results and `SDL_EVENT_*` model. Pointer and finger events pass through `SDL_ConvertEventToRenderCoordinates` before gameplay or Guisan dispatch; begins in safe-area or aspect bars are rejected while releases still perform ownership cleanup. |
+| Windows and rendering | Window, renderer, texture, logical-presentation, drawable-pixel, viewport, render-target, readback, copy, clear, and present behavior is adapted with checked SDL3 results and typed integer-to-float geometry conversion. Apple engine rendering disables SDL logical presentation before applying one uniform safe-area scale and logical-coordinate viewport, avoiding composed double scaling. |
+| Surfaces and pixels | Owned and preallocated surfaces, embedded pixel-format details, indexed palettes, palette alpha, color keys and modulation, locking, conversion, blitting, filling, clipping, and RGB(A) mapping are covered. |
+| Image and file I/O | `CFile` transfers ownership through SDL3 `SDL_IOStream` callbacks; seek, size, read, close, error status, and `IMG_Load_IO` ownership are explicit. Plain, gzip, and bzip2 streams share status-returning seek semantics, preserve position across uncompressed-size queries, and support reliable `SEEK_END`; bzip2 backwards seeks reopen and skip deterministically. SDL_image 3 has no global codec-init phase, so the legacy init/quit calls are isolated compatibility no-ops rather than gameplay fallbacks. |
+| Audio and music | `PeonPadSDL3MixerAdapter` maps the engine's channel/music contract to stable `MIX_Mixer`, `MIX_Audio`, and `MIX_Track` objects. It preserves allocation, playback, loops, pause/resume/halt/query, prior-volume returns, panning, callbacks, music ownership, and teardown while propagating mixer failures. Paused tracks remain playing and are not reused as free channels, matching SDL_mixer 2. |
+| Controllers and touch | SDL3 gamepad discovery, instance ownership, axis/button/device events, focus cancellation, finger cancellation, and source-aware mouse-button ownership reuse the reviewed intent router. |
+| GL, YUV, and movies | YUV texture upload, renderer-backed movie frames, shaders, OpenGL context/swap, and SDL3 OpenGL texture properties are checked. SDL2 retains its existing bind/unbind path. |
+| Platform services | Base/pref paths, delays, ticks, environment use, dynamic loading, fullscreen/grab, screenshots, fog, minimap, palette cycling, and Guisan's SDL renderer/surface/input backends compile through the same typed boundary. |
+| Tools | Native macOS builds produce Stratagus, Wargus, `wartool`, and `pudconvert`. The Wargus host utilities do not link SDL and remain host-only during Apple cross-compilation; all target/runtime engine code still compiles and links for each Apple SDK. |
 
-The native xrsimulator build currently emits upstream SDL/SDL_image warnings
-for deprecated Uniform Type APIs and conditionally unused UIKit/Metal symbols.
-They remain visible and are not suppressed.
+## Release-sensitive tests
 
-The xrsimulator lane now has native scene ownership, bundle metadata, a
-resizable UIKit/Metal window, and runtime shell acceptance. It remains only the
-public SDL3 smoke payload. A later stacked PR must port the remaining engine
-renderer, surface/pixel, SDL_image I/O, SDL_mixer playback, event loop, and tool
-call sites before enabling `PEONPAD_ENABLE_ENGINE`. Audio-session, Vision Pro
-controller/input, comfort, and gameplay acceptance remain unclaimed.
+The macOS SDL3 configuration registers the existing engine suite plus focused
+tests that do not depend on disabled C/C++ assertions:
+
+- input cancellation, focus loss, multi-source button overlap, and gamepad
+  ownership;
+- surface creation/conversion, indexed palettes, preallocated ownership,
+  renderer upload/readback, and the OpenGL property boundary;
+- plain, gzip, and bzip2 `CFile` size/seek/restoration, descriptor/stream close
+  ownership, and SDL IO error behavior;
+- mixer initialization, channel allocation, callbacks, volume, panning,
+  pause/resume, music replacement, teardown, and failure paths;
+- non-unit renderer-coordinate conversion, safe-area bar rejection, and 4:3
+  viewport/inverse input mapping under `-DNDEBUG`;
+- exact raw readiness output and its explicit failure path.
+
+On July 19, 2026, the clean SDL3 Release tree passed all 74 registered tests.
+The clean default SDL2 Release tree passed all four top-level compatibility
+tests and built its unchanged vendored SDL2 engine/app/tools lane.
+
+## Reproducible build evidence
+
+The final validation used complete default builds, not selected smoke targets:
+
+```sh
+cmake --fresh -S . -B build/validation-sdl3-engine \
+  -G "Unix Makefiles" \
+  -DPEONPAD_ENABLE_ENGINE=ON \
+  -DPEONPAD_ENABLE_SDL3=ON \
+  -DBUILD_TESTING=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0
+cmake --build build/validation-sdl3-engine --parallel
+ctest --test-dir build/validation-sdl3-engine --output-on-failure
+```
+
+The same all-target configure/build was repeated with each Apple toolchain:
+
+```text
+cmake/toolchains/ios-simulator-arm64.cmake
+cmake/toolchains/xros-simulator-arm64.cmake
+cmake/toolchains/xros-arm64.cmake
+```
+
+| Lane | July 19, 2026 result |
+| --- | --- |
+| macOS 13 arm64, direct SDL3 | Full Stratagus, Wargus, `wartool`, `pudconvert`, app bundle, foundation, adapters, and tests built. All 74 tests passed. The foundation runtime reported the pinned versions with both `renderer=software` and `renderer=metal`. |
+| macOS 13 arm64, default SDL2 | Full Stratagus, Wargus, `wartool`, `pudconvert`, and app bundle built as arm64. All four top-level tests passed. |
+| iOS Simulator 16 arm64 | The complete SDL3 engine and foundation linked as Mach-O platform 7. Engine and adapter archives are arm64; tolua generation used a separately built native arm64 host executable. |
+| visionOS Simulator 2 arm64 | The complete SDL3 engine and native smoke shell linked as Mach-O platform 12. The inspected shell bundle remains the public non-gameplay payload. |
+| visionOS device 2 arm64 | The complete SDL3 engine and unsigned native smoke shell linked as arm64 Mach-O platform 11. Bundle inspection passed; no provisioning profile or signing identity was added. |
+
+Public preflight, SDL source/license/hash checks, Release viewport/input checks,
+bundle/content scans, and exact patch reverse/reapply reconstruction also
+passed without fetching inputs from the network.
+
+## Automation and packaging contract
+
+The native Apple engine resolves legal game scripts beneath
+`${SDL_GetBasePath()}/Aleona`. A packaging layer must place the complete
+redistribution-approved payload there before launch.
+
+Successful startup writes exactly:
+
+```text
+PEONPAD_ENGINE_READY
+```
+
+The marker is written as one raw line to process stdout and flushed immediately,
+only after `PreMenuSetup()` succeeds. A write or flush failure aborts startup.
+Script, asset, surface, renderer, and audio failures remain errors; missing
+startup data exits nonzero and does not emit the marker. Automation must treat
+process exit before that exact line as failure rather than retaining readiness
+from an earlier run.
+
+The current `PeonPadVisionShell.app` intentionally does not package or launch
+this engine artifact. A later layer must perform that application integration.
+
+## Deliberately deferred acceptance
+
+This port proves source parity and complete compile/link coverage. It does not
+claim native visionOS gameplay, bundled game data, gestures, eye/hand targeting,
+audio-session behavior, signing, sustained performance, or physical Vision Pro
+acceptance. The smoke shell still displays `SMOKE SHELL — NO GAMEPLAY`.
+
+The native xrsimulator build also retains visible upstream SDL/SDL_image
+warnings for deprecated Uniform Type APIs and conditionally unused
+UIKit/Metal symbols; they are not suppressed.

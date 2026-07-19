@@ -112,6 +112,25 @@ int main()
 	Check(viewport.x == 230 && viewport.y == 40
 	      && viewport.width == 2000 && viewport.height == 1500,
 	      "safe-area viewport remains exact 4:3");
+	PeonPadRendererTransform rendererTransform{};
+	Check(PeonPadCalculateRendererTransform(viewport, rendererTransform),
+	      "safe-area renderer transform");
+	const int renderedX = static_cast<int>(std::floor(
+		rendererTransform.viewportX * rendererTransform.scale));
+	const int renderedY = static_cast<int>(std::floor(
+		rendererTransform.viewportY * rendererTransform.scale));
+	const int renderedWidth = static_cast<int>(std::ceil(
+		rendererTransform.viewportWidth * rendererTransform.scale));
+	const int renderedHeight = static_cast<int>(std::ceil(
+		rendererTransform.viewportHeight * rendererTransform.scale));
+	Check(renderedX >= viewport.x && renderedY >= viewport.y,
+	      "single renderer transform starts inside safe viewport");
+	Check(renderedX + renderedWidth <= viewport.x + viewport.width
+	      && renderedY + renderedHeight <= viewport.y + viewport.height,
+	      "single renderer transform cannot overscale safe viewport");
+	Check(rendererTransform.scale <= viewport.scale
+	      && rendererTransform.scale > viewport.scale - 0.01f,
+	      "single renderer scale preserves fitted content size");
 	CheckPoint(viewport, 229.0f, 790.0f, false, 0.0f, 0.0f,
 	           "safe-area pillarbox rejected");
 	CheckPoint(viewport, 2230.0f, 790.0f, false, 0.0f, 0.0f,
@@ -227,6 +246,8 @@ int main()
 	Check(!PeonPadCalculateViewport(1200, 900, 640, 480,
 	                                {600, 0, 600, 0}, viewport),
 	      "exhausted insets rejected");
+	Check(!PeonPadCalculateRendererTransform(viewport, rendererTransform),
+	      "empty viewport cannot produce a renderer transform");
 	Check(!PeonPadCalculatePixelInsets(
 		      1200, 800, 2400, 1600,
 		      {1200, 0, 1, 800}, pixelInsets),

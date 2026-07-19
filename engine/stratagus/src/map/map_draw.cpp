@@ -395,13 +395,13 @@ static void ShowUnitName(const CViewport &vp, PixelPos pos, CUnit *unit, bool hi
 	if (unit && unit->IsAliveOnMap()) {
 		int backgroundColor;
 		if (unit->Player->Index == (*tplayer).Index) {
-			backgroundColor = Video.MapRGB(TheScreen->format, 0, 0, 252);
+			backgroundColor = Video.MapRGB(TheScreen, 0, 0, 252);
 		} else if (unit->Player->IsAllied(*tplayer)) {
-			backgroundColor = Video.MapRGB(TheScreen->format, 0, 176, 0);
+			backgroundColor = Video.MapRGB(TheScreen, 0, 176, 0);
 		} else if (unit->Player->IsEnemy(*tplayer)) {
-			backgroundColor = Video.MapRGB(TheScreen->format, 252, 0, 0);
+			backgroundColor = Video.MapRGB(TheScreen, 252, 0, 0);
 		} else {
-			backgroundColor = Video.MapRGB(TheScreen->format, 176, 176, 176);
+			backgroundColor = Video.MapRGB(TheScreen, 176, 176, 176);
 		}
 		width = font.getWidth(unit->Type->Name) + 10;
 		x = std::min<int>(GameCursor->G->Width + pos.x, vp.BottomRightPos.x - 1 - width);

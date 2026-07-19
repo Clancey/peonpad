@@ -133,10 +133,15 @@ void CMinimap::Create()
 	}
 
 	// Palette updated from UpdateMinimapTerrain()
-	SDL_PixelFormat *f    = Map.TileGraphic->getSurface()->format;
-	MinimapTerrainSurface = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, f->BitsPerPixel, f->Rmask, f->Gmask, f->Bmask, f->Amask);
-	MinimapSurface 		  = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, 32, RMASK, GMASK, BMASK, 0);
-	MinimapFogSurface 	  = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, 32, RMASK, GMASK, BMASK, AMASK);
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface());
+	MinimapTerrainSurface = SdlCompatCreateSurface(
+		W, H, format.BitsPerPixel,
+		format.Rmask, format.Gmask, format.Bmask, format.Amask);
+	MinimapSurface = SdlCompatCreateSurface(
+		W, H, 32, RMASK, GMASK, BMASK, 0);
+	MinimapFogSurface = SdlCompatCreateSurface(
+		W, H, 32, RMASK, GMASK, BMASK, AMASK);
 
     SDL_SetSurfaceBlendMode(MinimapFogSurface, SDL_BLENDMODE_BLEND);
 
@@ -172,11 +177,12 @@ void CMinimap::UpdateTerrain()
 	if (!scaley) {
 		scaley = 1;
 	}
-	const int bpp = Map.TileGraphic->getSurface()->format->BytesPerPixel;
+	const int bpp =
+		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface()).BytesPerPixel;
 
 	if (bpp == 1) {
-		SDL_SetPaletteColors(MinimapTerrainSurface->format->palette,
-		                     Map.TileGraphic->getSurface()->format->palette->colors,
+		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(MinimapTerrainSurface),
+		                     SdlCompatGetSurfacePalette(Map.TileGraphic->getSurface())->colors,
 		                     0,
 		                     256);
 	}
@@ -250,7 +256,8 @@ void CMinimap::UpdateXY(const Vec2i &pos)
 	}
 
 	const int tilepitch = Map.TileGraphic->getSurface()->w / PixelTileSize.x;
-	const int bpp = Map.TileGraphic->getSurface()->format->BytesPerPixel;
+	const int bpp =
+		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface()).BytesPerPixel;
 
 	//
 	//  Pixel 7,6 7,14, 15,6 15,14 are taken for the minimap picture.
@@ -322,7 +329,7 @@ static void DrawUnitOn(const CUnit &unit, int red_phase)
 
 	Uint32 color;
 	if (unit.Player->Index == PlayerNumNeutral) {
-		color = Video.MapRGB(TheScreen->format, type->NeutralMinimapColorRGB);
+		color = Video.MapRGB(TheScreen, type->NeutralMinimapColorRGB);
 	} else if (unit.Player == ThisPlayer && !Editor.Running) {
 		if (unit.Attacked && unit.Attacked + ATTACK_BLINK_DURATION > GameCycle &&
 			(red_phase || unit.Attacked + ATTACK_RED_DURATION > GameCycle)) {
@@ -348,8 +355,8 @@ static void DrawUnitOn(const CUnit &unit, int red_phase)
 	}
 	int bpp = 0;
 	SDL_Color c;
-	bpp = MinimapSurface->format->BytesPerPixel;
-	SDL_GetRGB(color, TheScreen->format, &c.r, &c.g, &c.b);
+	bpp = SdlCompatGetPixelFormatDetails(MinimapSurface).BytesPerPixel;
+	SdlCompatGetRGB(TheScreen, color, &c.r, &c.g, &c.b);
 	while (w-- >= 0) {
 		int h = h0;
 		while (h-- >= 0) {
@@ -377,7 +384,8 @@ void CMinimap::Update()
 
 	// Clear Minimap background if not transparent
 	if (!Transparent) {
-		SDL_FillRect(MinimapSurface, nullptr, SDL_MapRGB(MinimapSurface->format, 0, 0, 0));
+		SDL_FillRect(MinimapSurface, nullptr,
+		             SdlCompatMapRGB(MinimapSurface, 0, 0, 0));
 	}
 
 	//
@@ -493,7 +501,7 @@ void CMinimap::Destroy()
 		SDL_FreeSurface(MinimapSurface);
 		MinimapSurface = nullptr;
 	}
-	if (MinimapFogSurface && MinimapFogSurface->format != nullptr) {
+	if (SdlCompatSurfaceHasFormat(MinimapFogSurface)) {
 		SDL_FreeSurface(MinimapFogSurface);
 		MinimapFogSurface = nullptr;
 	}

@@ -27,7 +27,7 @@ option(PEONPAD_ENABLE_ENGINE
   OFF
 )
 option(PEONPAD_ENABLE_SDL3
-  "Build the direct SDL3 foundation lane (SDL2 remains the default)"
+  "Build the direct SDL3 lane (SDL2 remains the default)"
   OFF
 )
 
@@ -119,13 +119,12 @@ if(PEONPAD_ENABLE_ENGINE)
     )
   endif()
 
-  if(PEONPAD_VISIONOS)
+  if(PEONPAD_VISIONOS AND NOT PEONPAD_ENABLE_SDL3)
     message(FATAL_ERROR
-      "PEONPAD_ENABLE_ENGINE is not available for visionOS. Build only the "
-      "guarded PEONPAD_ENABLE_SDL3 smoke shell until the full gameplay engine "
-      "has completed its direct SDL3 port."
+      "PEONPAD_ENABLE_ENGINE on visionOS requires "
+      "PEONPAD_ENABLE_SDL3=ON."
     )
-  elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT PEONPAD_ENABLE_SDL3)
     message(FATAL_ERROR
       "PEONPAD_ENABLE_ENGINE currently selects the proven macOS superbuild. "
       "Use the iOS library target added in the next phase for iPadOS."
@@ -149,87 +148,154 @@ if(PEONPAD_ENABLE_ENGINE)
   set(PEONPAD_STRATAGUS_BINARY
     "${PEONPAD_ENGINE_BINARY_DIR}/stratagus")
 
-  ExternalProject_Add(peonpad_stratagus
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus"
-    BINARY_DIR "${PEONPAD_ENGINE_BINARY_DIR}"
-    DOWNLOAD_COMMAND ""
-    UPDATE_COMMAND ""
-    PATCH_COMMAND ""
-    CMAKE_ARGS
-      "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
-      "-DCMAKE_OSX_ARCHITECTURES:STRING=${PEONPAD_MACOS_ARCHITECTURE}"
-      "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${PEONPAD_MACOS_DEPLOYMENT_TARGET}"
-      "-DCMAKE_INSTALL_PREFIX:PATH=${PEONPAD_STAGE_DIR}"
-      "-DBUILD_VENDORED_LUA:BOOL=ON"
-      "-DBUILD_VENDORED_SDL:BOOL=ON"
-      "-DBUILD_VENDORED_MEDIA_LIBS:BOOL=ON"
-      "-DBUILD_TESTING:BOOL=OFF"
-      "-DDOWNLOAD_FREEPATS:BOOL=OFF"
-      "-DENABLE_DEV:BOOL=ON"
-      "-DENABLE_DOC:BOOL=OFF"
-      "-DWITH_OPENMP:BOOL=OFF"
-      "-DWITH_STACKTRACE:BOOL=OFF"
-    BUILD_COMMAND
-      "${CMAKE_COMMAND}" --build <BINARY_DIR> --target stratagus --parallel
-    INSTALL_COMMAND
-      "${CMAKE_COMMAND}" -E copy <BINARY_DIR>/stratagus
-      "${CMAKE_BINARY_DIR}/stratagus"
-    BUILD_ALWAYS TRUE
-    BUILD_BYPRODUCTS
-      "${PEONPAD_STRATAGUS_BINARY}"
-      "${CMAKE_BINARY_DIR}/stratagus"
-    USES_TERMINAL_CONFIGURE TRUE
-    USES_TERMINAL_BUILD TRUE
-  )
+  if(PEONPAD_ENABLE_SDL3)
+    set(BUILD_VENDORED_LUA ON CACHE BOOL "" FORCE)
+    set(BUILD_VENDORED_SDL OFF CACHE BOOL "" FORCE)
+    set(BUILD_VENDORED_MEDIA_LIBS ON CACHE BOOL "" FORCE)
+    set(DOWNLOAD_FREEPATS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_DEV ON CACHE BOOL "" FORCE)
+    set(ENABLE_DOC OFF CACHE BOOL "" FORCE)
+    set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
+    set(WITH_STACKTRACE OFF CACHE BOOL "" FORCE)
+    set(PEONPAD_USE_SDL3 ON CACHE BOOL "" FORCE)
+    set(PEONPAD_SDL3_COMPAT_INCLUDE_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/platform/sdl3/include"
+      CACHE PATH "" FORCE)
+    set(PEONPAD_SDL3_PLATFORM_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/platform/sdl3"
+      CACHE PATH "" FORCE)
+    set(PEONPAD_APPLE_PLATFORM_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple"
+      CACHE PATH "" FORCE)
 
-  ExternalProject_Add(peonpad_wargus
-    DEPENDS peonpad_stratagus
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/game/wargus"
-    BINARY_DIR "${PEONPAD_WARGUS_BINARY_DIR}"
-    DOWNLOAD_COMMAND ""
-    UPDATE_COMMAND ""
-    PATCH_COMMAND ""
-    CMAKE_ARGS
-      "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
-      "-DCMAKE_OSX_ARCHITECTURES:STRING=${PEONPAD_MACOS_ARCHITECTURE}"
-      "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${PEONPAD_MACOS_DEPLOYMENT_TARGET}"
-      "-DCMAKE_INSTALL_PREFIX:PATH=${PEONPAD_STAGE_DIR}"
-      "-DSTRATAGUS:FILEPATH=${PEONPAD_STRATAGUS_BINARY}"
-      "-DSTRATAGUS_INCLUDE_DIR:PATH=${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus/gameheaders"
-      "-DENABLE_VENDORED_LIBS:BOOL=ON"
-      "-DENABLE_STATIC:BOOL=OFF"
-      "-DWITH_STORMLIB:BOOL=ON"
-    BUILD_COMMAND
-      "${CMAKE_COMMAND}" --build <BINARY_DIR>
-      --target wargus wartool pudconvert --parallel
-    INSTALL_COMMAND "${CMAKE_COMMAND}" -E true
-    BUILD_ALWAYS TRUE
-    BUILD_BYPRODUCTS
-      "${PEONPAD_WARGUS_BINARY_DIR}/wargus"
-      "${PEONPAD_WARGUS_BINARY_DIR}/wartool"
-      "${PEONPAD_WARGUS_BINARY_DIR}/pudconvert"
-    USES_TERMINAL_CONFIGURE TRUE
-    USES_TERMINAL_BUILD TRUE
-  )
+    if(CMAKE_CROSSCOMPILING AND NOT STRATAGUS_HOST_TOLUAPP)
+      set(_peonpad_host_tolua_binary
+        "${CMAKE_BINARY_DIR}/host-tools/tolua/toluapp")
+      ExternalProject_Add(peonpad_stratagus_host_tolua
+        SOURCE_DIR
+          "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus/third-party/lua-5.1.5"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/host-tools/tolua"
+        DOWNLOAD_COMMAND ""
+        UPDATE_COMMAND ""
+        PATCH_COMMAND ""
+        CMAKE_ARGS
+          "-DCMAKE_BUILD_TYPE:STRING=Release"
+          "-DCMAKE_OSX_ARCHITECTURES:STRING=${CMAKE_HOST_SYSTEM_PROCESSOR}"
+        BUILD_COMMAND
+          "${CMAKE_COMMAND}" --build <BINARY_DIR> --target toluapp --parallel
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${_peonpad_host_tolua_binary}"
+        USES_TERMINAL_CONFIGURE TRUE
+        USES_TERMINAL_BUILD TRUE
+      )
+      set(STRATAGUS_HOST_TOLUAPP "${_peonpad_host_tolua_binary}"
+        CACHE FILEPATH "Native tolua++ generator used by cross builds" FORCE)
+    endif()
 
-  set(PEONPAD_MACOS_APP "${CMAKE_BINARY_DIR}/PeonPad.app")
-  set(PEONPAD_MACOS_APP_EXECUTABLE
-    "${PEONPAD_MACOS_APP}/Contents/MacOS/PeonPad")
-  add_custom_target(peonpad_macos_bundle
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-      "${PEONPAD_MACOS_APP}/Contents/MacOS"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-      "${CMAKE_BINARY_DIR}/stratagus" "${PEONPAD_MACOS_APP_EXECUTABLE}"
-    COMMAND "${CMAKE_COMMAND}" -E copy
-      "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple/macos/Info.plist"
-      "${PEONPAD_MACOS_APP}/Contents/Info.plist"
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare-macos-bundle.sh"
-      "${PEONPAD_MACOS_APP}"
-    DEPENDS peonpad_stratagus
-    VERBATIM
-  )
-  add_dependencies(peonpad_macos_bundle peonpad_stratagus)
+    add_subdirectory(engine/stratagus "${PEONPAD_ENGINE_BINARY_DIR}")
+    if(TARGET peonpad_stratagus_host_tolua)
+      add_dependencies(stratagus_lib peonpad_stratagus_host_tolua)
+    endif()
+  else()
+    ExternalProject_Add(peonpad_stratagus
+      SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus"
+      BINARY_DIR "${PEONPAD_ENGINE_BINARY_DIR}"
+      DOWNLOAD_COMMAND ""
+      UPDATE_COMMAND ""
+      PATCH_COMMAND ""
+      CMAKE_ARGS
+        "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
+        "-DCMAKE_OSX_ARCHITECTURES:STRING=${PEONPAD_MACOS_ARCHITECTURE}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${PEONPAD_MACOS_DEPLOYMENT_TARGET}"
+        "-DCMAKE_INSTALL_PREFIX:PATH=${PEONPAD_STAGE_DIR}"
+        "-DBUILD_VENDORED_LUA:BOOL=ON"
+        "-DBUILD_VENDORED_SDL:BOOL=ON"
+        "-DBUILD_VENDORED_MEDIA_LIBS:BOOL=ON"
+        "-DBUILD_TESTING:BOOL=OFF"
+        "-DDOWNLOAD_FREEPATS:BOOL=OFF"
+        "-DENABLE_DEV:BOOL=ON"
+        "-DENABLE_DOC:BOOL=OFF"
+        "-DWITH_OPENMP:BOOL=OFF"
+        "-DWITH_STACKTRACE:BOOL=OFF"
+      BUILD_COMMAND
+        "${CMAKE_COMMAND}" --build <BINARY_DIR> --target stratagus --parallel
+      INSTALL_COMMAND
+        "${CMAKE_COMMAND}" -E copy <BINARY_DIR>/stratagus
+        "${CMAKE_BINARY_DIR}/stratagus"
+      BUILD_ALWAYS TRUE
+      BUILD_BYPRODUCTS
+        "${PEONPAD_STRATAGUS_BINARY}"
+        "${CMAKE_BINARY_DIR}/stratagus"
+      USES_TERMINAL_CONFIGURE TRUE
+      USES_TERMINAL_BUILD TRUE
+    )
+  endif()
 
-  add_custom_target(peonpad_macos ALL
-    DEPENDS peonpad_wargus peonpad_macos_bundle)
+  if(NOT CMAKE_CROSSCOMPILING)
+    if(PEONPAD_ENABLE_SDL3)
+      set(_peonpad_wargus_engine_dependency stratagus)
+    else()
+      set(_peonpad_wargus_engine_dependency peonpad_stratagus)
+    endif()
+    ExternalProject_Add(peonpad_wargus
+      DEPENDS ${_peonpad_wargus_engine_dependency}
+      SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/game/wargus"
+      BINARY_DIR "${PEONPAD_WARGUS_BINARY_DIR}"
+      DOWNLOAD_COMMAND ""
+      UPDATE_COMMAND ""
+      PATCH_COMMAND ""
+      CMAKE_ARGS
+        "-DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}"
+        "-DCMAKE_OSX_ARCHITECTURES:STRING=${PEONPAD_MACOS_ARCHITECTURE}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING=${PEONPAD_MACOS_DEPLOYMENT_TARGET}"
+        "-DCMAKE_INSTALL_PREFIX:PATH=${PEONPAD_STAGE_DIR}"
+        "-DSTRATAGUS:FILEPATH=${PEONPAD_STRATAGUS_BINARY}"
+        "-DSTRATAGUS_INCLUDE_DIR:PATH=${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus/gameheaders"
+        "-DENABLE_VENDORED_LIBS:BOOL=ON"
+        "-DENABLE_STATIC:BOOL=OFF"
+        "-DWITH_STORMLIB:BOOL=ON"
+      BUILD_COMMAND
+        "${CMAKE_COMMAND}" --build <BINARY_DIR>
+        --target wargus wartool pudconvert --parallel
+      INSTALL_COMMAND "${CMAKE_COMMAND}" -E true
+      BUILD_ALWAYS TRUE
+      BUILD_BYPRODUCTS
+        "${PEONPAD_WARGUS_BINARY_DIR}/wargus"
+        "${PEONPAD_WARGUS_BINARY_DIR}/wartool"
+        "${PEONPAD_WARGUS_BINARY_DIR}/pudconvert"
+      USES_TERMINAL_CONFIGURE TRUE
+      USES_TERMINAL_BUILD TRUE
+    )
+  endif()
+
+  if(NOT CMAKE_CROSSCOMPILING)
+    set(PEONPAD_MACOS_APP "${CMAKE_BINARY_DIR}/PeonPad.app")
+    set(PEONPAD_MACOS_APP_EXECUTABLE
+      "${PEONPAD_MACOS_APP}/Contents/MacOS/PeonPad")
+    if(PEONPAD_ENABLE_SDL3)
+      set(_peonpad_macos_engine_source "$<TARGET_FILE:stratagus>")
+      set(_peonpad_macos_engine_dependency stratagus)
+    else()
+      set(_peonpad_macos_engine_source "${CMAKE_BINARY_DIR}/stratagus")
+      set(_peonpad_macos_engine_dependency peonpad_stratagus)
+    endif()
+    add_custom_target(peonpad_macos_bundle
+      COMMAND "${CMAKE_COMMAND}" -E make_directory
+        "${PEONPAD_MACOS_APP}/Contents/MacOS"
+      COMMAND "${CMAKE_COMMAND}" -E copy
+        "${_peonpad_macos_engine_source}" "${PEONPAD_MACOS_APP_EXECUTABLE}"
+      COMMAND "${CMAKE_COMMAND}" -E copy
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple/macos/Info.plist"
+        "${PEONPAD_MACOS_APP}/Contents/Info.plist"
+      COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare-macos-bundle.sh"
+        "${PEONPAD_MACOS_APP}"
+      DEPENDS ${_peonpad_macos_engine_dependency}
+      VERBATIM
+    )
+
+    add_custom_target(peonpad_macos ALL
+      DEPENDS peonpad_wargus peonpad_macos_bundle)
+  elseif(PEONPAD_ENABLE_SDL3)
+    add_custom_target(peonpad_sdl3_engine ALL DEPENDS stratagus)
+  endif()
 endif()

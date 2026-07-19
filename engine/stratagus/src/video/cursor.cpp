@@ -102,7 +102,12 @@ SDL_Cursor *CCursor::GetSDLCursor()
 		for (unsigned int i = SdlCursors.size(); i <= SpriteFrame; i++) {
 			G->Load();
 			int ww, wh;
-			SDL_GetWindowSize(TheWindow, &ww, &wh);
+			if (!SdlCompatGetWindowSize(TheWindow, &ww, &wh)
+			    || ww <= 0 || wh <= 0) {
+				ErrorPrint("Unable to query cursor window size: %s\n",
+				           SDL_GetError());
+				return nullptr;
+			}
 
 			double xScale = (double)ww / Video.Width;
 			double yScale = (double)wh / (Video.Height * Video.VerticalPixelSize);
@@ -115,25 +120,47 @@ SDL_Cursor *CCursor::GetSDLCursor()
 				// wh = Video.Height * xScale;
 			}
 
-			int w = floor(G->getWidth() * xScale);
-			int h = floor(G->getHeight() * yScale);
+			const int w = std::max(
+				1, static_cast<int>(floor(G->getWidth() * xScale)));
+			const int h = std::max(
+				1, static_cast<int>(floor(G->getHeight() * yScale)));
 
 			SDL_Rect srect = {G->frame_map[i].x, G->frame_map[i].y, G->getWidth(), G->getHeight()};
 
 			sdl2::SurfacePtr intermediate{
-				SDL_CreateRGBSurface(0, srect.w, srect.h, 32, RMASK, GMASK, BMASK, AMASK)};
-			SDL_BlitSurface(G->getSurface(), &srect, intermediate.get(), nullptr);
+				SdlCompatCreateSurface(
+					srect.w, srect.h, 32, RMASK, GMASK, BMASK, AMASK)};
+			if (!intermediate
+			    || !SdlCompatBlitSurface(
+				    G->getSurface(), &srect, intermediate.get(), nullptr)) {
+				ErrorPrint("Unable to create cursor source surface: %s\n",
+				           SDL_GetError());
+				return nullptr;
+			}
 
 			sdl2::SurfacePtr cursorFrame{
-				SDL_CreateRGBSurface(0, w, h, 32, RMASK, GMASK, BMASK, AMASK)};
-			SDL_BlitScaled(intermediate.get(), nullptr, cursorFrame.get(), nullptr);
+				SdlCompatCreateSurface(w, h, 32, RMASK, GMASK, BMASK, AMASK)};
+			if (!cursorFrame
+			    || !SdlCompatBlitScaled(
+				    intermediate.get(), nullptr, cursorFrame.get(), nullptr)) {
+				ErrorPrint("Unable to scale cursor surface: %s\n",
+				           SDL_GetError());
+				return nullptr;
+			}
 
 			intermediate.reset();
 
+			sdl2::CursorPtr cur{
+				SDL_CreateColorCursor(
+					cursorFrame.get(),
+					static_cast<int>(floor(HotPos.x * xScale)),
+					static_cast<int>(floor(HotPos.y * yScale)))};
+			if (!cur) {
+				ErrorPrint("Unable to create hardware cursor: %s\n",
+				           SDL_GetError());
+				return nullptr;
+			}
 			SdlCursorSurfaces.push_back(std::move(cursorFrame));
-			sdl2::CursorPtr cur{SDL_CreateColorCursor(SdlCursorSurfaces.back().get(),
-			                                          floor(HotPos.x * xScale),
-			                                          floor(HotPos.y * yScale))};
 			SdlCursors.push_back(std::move(cur));
 		}
 	}
@@ -318,7 +345,9 @@ void DrawCursor()
 			LastSizeVersion = SizeChangeCounter;
 		}
 	} else if (ActuallyVisibleGameCursor) {
-		SDL_SetCursor(Video.blankCursor.get());
+		if (!SdlCompatSetCursor(Video.blankCursor.get())) {
+			ErrorPrint("Unable to hide hardware cursor: %s\n", SDL_GetError());
+		}
 		ActuallyVisibleGameCursor = nullptr;
 	}
 
@@ -336,7 +365,10 @@ void DrawCursor()
 	//  Only draw it if it exists
 	if (GameCursor == nullptr || IsDemoMode()) {
 		if (Preference.HardwareCursor) {
-			SDL_SetCursor(Video.blankCursor.get());
+			if (!SdlCompatSetCursor(Video.blankCursor.get())) {
+				ErrorPrint("Unable to hide hardware cursor: %s\n",
+				           SDL_GetError());
+			}
 			ActuallyVisibleGameCursor = nullptr;
 		}
 		return;
@@ -352,17 +384,25 @@ void DrawCursor()
 				if (HiddenSurface) {
 					VideoPaletteListRemove(HiddenSurface.get());
 				}
-				HiddenSurface.reset(SDL_CreateRGBSurface(SDL_SWSURFACE,
-				                                         GameCursor->G->getWidth(),
-				                                         GameCursor->G->getHeight(),
-				                                         TheScreen->format->BitsPerPixel,
-				                                         TheScreen->format->Rmask,
-				                                         TheScreen->format->Gmask,
-				                                         TheScreen->format->Bmask,
-				                                         TheScreen->format->Amask));
+				const SdlCompatPixelFormatDetails format =
+					SdlCompatGetPixelFormatDetails(TheScreen);
+				HiddenSurface.reset(SdlCompatCreateSurface(
+					GameCursor->G->getWidth(),
+					GameCursor->G->getHeight(),
+					format.BitsPerPixel,
+					format.Rmask,
+					format.Gmask,
+					format.Bmask,
+					format.Amask));
 			}
 			SDL_Rect srcRect = { Sint16(pos.x), Sint16(pos.y), Uint16(GameCursor->G->getWidth()), Uint16(GameCursor->G->getHeight())};
-			SDL_BlitSurface(TheScreen, &srcRect, HiddenSurface.get(), nullptr);
+			if (!HiddenSurface
+			    || !SdlCompatBlitSurface(
+				    TheScreen, &srcRect, HiddenSurface.get(), nullptr)) {
+				ErrorPrint("Unable to preserve software cursor background: %s\n",
+				           SDL_GetError());
+				return;
+			}
 		}
 
 		if (!GameCursor->G->IsLoaded()) {
@@ -375,7 +415,12 @@ void DrawCursor()
 			if (!GameCursor->G->IsLoaded()) {
 				GameCursor->G->Load();
 			}
-			SDL_SetCursor(GameCursor->GetSDLCursor());
+			SDL_Cursor *cursor = GameCursor->GetSDLCursor();
+			if (cursor == nullptr || !SdlCompatSetCursor(cursor)) {
+				ErrorPrint("Unable to display hardware cursor: %s\n",
+				           SDL_GetError());
+				return;
+			}
 			ActuallyVisibleGameCursor = GameCursor;
 			VisibleGameCursorFrame = GameCursor->SpriteFrame;
 		}
@@ -390,9 +435,16 @@ void HideCursor()
 	if (!Preference.HardwareCursor && !GameRunning && !Editor.Running && GameCursor) {
 		const PixelPos pos = CursorScreenPos - GameCursor->HotPos;
 		SDL_Rect dstRect = {Sint16(pos.x), Sint16(pos.y), 0, 0 };
-		SDL_BlitSurface(HiddenSurface.get(), nullptr, TheScreen, &dstRect);
+		if (HiddenSurface
+		    && !SdlCompatBlitSurface(
+			    HiddenSurface.get(), nullptr, TheScreen, &dstRect)) {
+			ErrorPrint("Unable to restore software cursor background: %s\n",
+			           SDL_GetError());
+		}
 	} else {
-		SDL_SetCursor(Video.blankCursor.get());
+		if (!SdlCompatSetCursor(Video.blankCursor.get())) {
+			ErrorPrint("Unable to hide hardware cursor: %s\n", SDL_GetError());
+		}
 		ActuallyVisibleGameCursor = nullptr;
 	}
 }

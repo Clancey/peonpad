@@ -226,6 +226,7 @@ extern void beos_init(int argc, char **argv);
 
 #include <cstdlib>
 #include <cstdio>
+#include <stdexcept>
 
 #ifdef USE_WIN32
 # include <dbghelp.h>
@@ -714,12 +715,13 @@ try {
 #endif
 	//  Setup some defaults.
 	#ifdef PEONPAD_IOS
-		if (char *basePath = SDL_GetBasePath()) {
-			StratagusLibPath = (fs::path(basePath) / "Aleona").string();
-			SDL_free(basePath);
-		} else {
-			StratagusLibPath = ".";
+		const std::string basePath = SdlCompatGetBasePath();
+		if (basePath.empty()) {
+			throw std::runtime_error(
+				std::string("Unable to resolve SDL application base path: ")
+				+ SDL_GetError());
 		}
+		StratagusLibPath = (fs::path(basePath) / "Aleona").string();
 	#elif !defined(MAC_BUNDLE)
 		StratagusLibPath = ".";
 	#else
@@ -801,6 +803,9 @@ try {
 	UnitManager->Init(); // Units memory management
 	PreMenuSetup();     // Load everything needed for menus
 
+	if (!SdlCompatWriteReadinessMarker(stdout)) {
+		throw std::runtime_error(SDL_GetError());
+	}
 	MenuLoop();
 
 	Exit(0);

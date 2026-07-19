@@ -15,7 +15,7 @@ std::vector<InputIntent> AdaptSdlTouchEvent(TouchInputState &touchInput,
                                             int width, int height,
                                             std::uint32_t timestamp, int modifiers);
 
-SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint8 windowEvent,
+SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint32 windowEvent,
                                             bool networkGame,
                                             bool pauseOnLeave);
 

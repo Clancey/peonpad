@@ -433,9 +433,8 @@ void CViewport::AdjustFogSurface()
 									/ PixelTileSize.y + 2)
 									* PixelTileSize.y; /// +2 because of Offset.y
 
-    this->FogSurface = SDL_CreateRGBSurface(SDL_SWSURFACE, surfaceWidth,
-                                                     	   surfaceHeight,
-                                                     	   32, RMASK, GMASK, BMASK, AMASK);
+    this->FogSurface = SdlCompatCreateSurface(
+        surfaceWidth, surfaceHeight, 32, RMASK, GMASK, BMASK, AMASK);
     SDL_SetSurfaceBlendMode(this->FogSurface, SDL_BLENDMODE_NONE);
 
 	const uint32_t fogColorSolid = FogOfWar->GetFogColorSDL() | (uint32_t(0xFF) << ASHIFT);

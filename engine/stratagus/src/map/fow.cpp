@@ -137,13 +137,15 @@ void CFogOfWar::InitTiled()
     CFogOfWar::TiledFogSrc->Load();
 
     if (Settings.Type == FogOfWarTypes::cTiledLegacy) {
-        TileOfFogOnly = SDL_CreateRGBSurface(SDL_SWSURFACE, PixelTileSize.x, PixelTileSize.y,
-                                             32, RMASK, GMASK, BMASK, AMASK);
+        TileOfFogOnly = SdlCompatCreateSurface(
+            PixelTileSize.x, PixelTileSize.y, 32,
+            RMASK, GMASK, BMASK, AMASK);
         SDL_FillRect(TileOfFogOnly, nullptr, Settings.FogColorSDL | uint32_t(Settings.ExploredOpacity) << ASHIFT);
     }
 
-    SDL_Surface * const newFogSurface = SDL_ConvertSurfaceFormat(CFogOfWar::TiledFogSrc->getSurface(),
-                                                                 SDL_MasksToPixelFormatEnum(32, RMASK, GMASK, BMASK, AMASK), 0);
+    SDL_Surface * const newFogSurface = SdlCompatConvertSurface(
+        CFogOfWar::TiledFogSrc->getSurface(),
+        SdlCompatPixelFormatForMasks(32, RMASK, GMASK, BMASK, AMASK));
     TiledAlphaFog = CGraphic::New("");
     TiledAlphaFog->setSurface(newFogSurface);
     TiledAlphaFog->Width = PixelTileSize.x;
@@ -540,7 +542,8 @@ void CFogOfWar::UpscaleBilinear(const uint8_t *const src, const SDL_Rect &srcRec
     constexpr int32_t fixedOne = 65536;
 
     uint32_t *const target = (uint32_t*)trgSurface->pixels;
-    const uint16_t AShift = trgSurface->format->Ashift;
+    const uint16_t AShift =
+        SdlCompatGetPixelFormatDetails(trgSurface).Ashift;
 
     /// FIXME: '-1' shouldn't be here, but without it the resulting fog has a shift to the left and upward
     const int32_t xRatio = (int32_t(srcRect.w - 1) << 16) / trgRect.w;
@@ -604,7 +607,8 @@ void CFogOfWar::UpscaleBilinear(const uint8_t *const src, const SDL_Rect &srcRec
 void CFogOfWar::UpscaleSimple(const uint8_t *src, const SDL_Rect &srcRect, const int16_t srcWidth,
                               SDL_Surface *const trgSurface, const SDL_Rect &trgRect) const
 {
-    const uint16_t surfaceAShift = trgSurface->format->Ashift;
+    const uint16_t surfaceAShift =
+        SdlCompatGetPixelFormatDetails(trgSurface).Ashift;
 
     const uint8_t texelWidth  = PixelTileSize.x / 4;
     const uint8_t texelHeight = PixelTileSize.y / 4;

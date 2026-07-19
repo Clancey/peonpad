@@ -1,0 +1,6 @@
+#ifndef PEONPAD_SDL3_COMPAT_SDL_OPENGL_H
+#define PEONPAD_SDL3_COMPAT_SDL_OPENGL_H
+
+#include <SDL3/SDL_opengl.h>
+
+#endif

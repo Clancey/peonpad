@@ -48,3 +48,11 @@ native xros/xrsimulator shell configuration. Its launch route verifies an Apple
 Vision Pro under a visionOS runtime, install, launch PID residency, and optional
 local screenshot evidence. Guardrails also compile the layered visionOS icon
 catalog and exercise wrong-runtime simulator override rejection.
+
+`tests/visionos-acceptance.sh` drives the production
+`scripts/accept-visionos.sh` entry point through fake Xcode, CMake, simctl, and
+Mach-O tools. It rejects invalid Vision Pro overrides, wrong models/runtimes,
+stale relaunch PIDs, launch and runtime failures, platform mismatches,
+prohibited bundle content, and unexpectedly signed command-line xros bundles.
+It also covers spaces in paths, default cleanup, retained evidence, and
+pass/fail JSON emission without requiring an installed simulator.

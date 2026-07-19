@@ -799,7 +799,39 @@ verify_residency_and_logs() {
   pass_check
 
   begin_check "$ordinal first-party fatal/render/runtime log scan"
-  awk -v process="$SIM_BUNDLE_EXECUTABLE" '
+  awk -v process="$SIM_BUNDLE_EXECUTABLE" -v bundle="$SIM_BUNDLE_ID" '
+    function ends_with(value, suffix) {
+      return length(value) >= length(suffix) &&
+        substr(value, length(value) - length(suffix) + 1) == suffix
+    }
+    function known_unrelated_simulator_message(message,
+                                                keyboard_scene,
+                                                hosting_scene) {
+      if (message == "[com.apple.Accessibility:AXLoading] Failed to load a system Framework") {
+        return 1
+      }
+      if (index(message, "[com.apple.BoardServices:XPCErrors] ") == 1 &&
+          message ~ /\[[CS]:[0-9]+\] Alloc [0-9]+:FBWorkspace-/ &&
+          ends_with(message, "FBWorkspace-" bundle)) {
+        return 1
+      }
+      keyboard_scene = "UISceneHosting-" bundle \
+        ":UIHostedScene-com.apple.RealityKeyboard-"
+      if (index(message, "[com.apple.FrontBoard:Scene] ") == 1 &&
+          index(message, keyboard_scene) &&
+          (index(message, " Invalidating scene: ") ||
+           ends_with(message, "] Scene invalidated."))) {
+        return 1
+      }
+      hosting_scene = "UISceneHosting-" bundle
+      if (index(message, "[com.apple.UIKit:KBProxyForwarding] ") == 1 &&
+          index(message, "Presentation environment invalidated:") &&
+          index(message, hosting_scene) &&
+          index(message, "UIHostedScene-com.apple.RealityKeyboard-")) {
+        return 1
+      }
+      return 0
+    }
     {
       marker = process "["
       marker_start = index($0, marker)
@@ -811,9 +843,7 @@ verify_residency_and_logs() {
         next
       }
       message = substr(message, marker_end + 2)
-      if (message == "[com.apple.Accessibility:AXLoading] Failed to load a system Framework") {
-        next
-      }
+      if (known_unrelated_simulator_message(message)) next
       print message
     }
   ' "$unified_file" > "$first_party_file"

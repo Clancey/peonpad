@@ -132,6 +132,9 @@ case "$2" in
           ;;
         *)
           print "Fake Vision Executable[$CURRENT_PID:abc] [com.apple.Accessibility:AXLoading] Failed to load a system Framework"
+          print "Fake Vision Executable[$CURRENT_PID:abc] [com.apple.BoardServices:XPCErrors] [C:4] Alloc 4101:FBWorkspace-org.peonpad.visionos"
+          print "Fake Vision Executable[$CURRENT_PID:abc] [com.apple.FrontBoard:Scene] Invalidating scene: UISceneHosting-org.peonpad.visionos:UIHostedScene-com.apple.RealityKeyboard-11111111-1111-1111-1111-111111111111"
+          print "Fake Vision Executable[$CURRENT_PID:abc] [com.apple.UIKit:KBProxyForwarding] Presentation environment invalidated: UISceneHosting-org.peonpad.visionos UIHostedScene-com.apple.RealityKeyboard-11111111-1111-1111-1111-111111111111"
           print "Fake Vision Executable[$CURRENT_PID:abc] PEONPAD_VISIONOS_READY=1"
           ;;
       esac

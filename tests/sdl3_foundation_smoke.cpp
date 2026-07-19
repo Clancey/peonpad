@@ -320,8 +320,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 	            SDL_GetVersion(), IMG_Version(), MIX_Version(),
 	            SDL_GetRendererName(state->Renderer));
 #ifdef PEONPAD_VISIONOS
-	SDL_Log("PeonPad native visionOS smoke shell ready: "
-	        "resizable 4:3 aspect-fit; no playable gameplay");
+	SDL_Log("PEONPAD_VISIONOS_READY=1");
 #endif
 	return SDL_APP_CONTINUE;
 }

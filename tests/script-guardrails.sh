@@ -38,6 +38,7 @@ fi
 "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-sdl3-foundation.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-visionos-shell.sh" --help >/dev/null
+"$ROOT_DIR/scripts/accept-visionos.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
@@ -102,6 +103,27 @@ rg -q 'simctl install' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'simctl launch --terminate-running-process' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'launchctl procinfo' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'native visionOS builds require CMake 3\.28' "$VISIONOS_BUILD_SCRIPT"
+VISIONOS_ACCEPTANCE_SCRIPT="$ROOT_DIR/scripts/accept-visionos.sh"
+rg -q 'build-visionos-shell\.sh' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'verify-visionos-bundle\.sh' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'simctl launch --terminate-running-process' \
+  "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'launchctl procinfo' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'simctl uninstall' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'plutil -convert json' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -Fq 'PEONPAD_VISIONOS_READY=1' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -Fq 'PEONPAD_VISIONOS_READY=1' \
+  "$ROOT_DIR/tests/sdl3_foundation_smoke.cpp"
+rg -q 'assetutil --info' \
+  "$ROOT_DIR/scripts/verify-visionos-bundle.sh"
+if rg -q -- '--target peonpad_sdl3_smoke' "$VISIONOS_ACCEPTANCE_SCRIPT"; then
+  print -u2 "visionOS acceptance builds only the smoke target"
+  exit 1
+fi
+if rg -q 'SMOKE SHELL|NO GAMEPLAY' "$VISIONOS_ACCEPTANCE_SCRIPT"; then
+  print -u2 "generic visionOS acceptance contains a smoke-only assertion"
+  exit 1
+fi
 rg -q 'PEONPAD_VISIONOS_DEVICE_INSTALL' \
   "$ROOT_DIR/scripts/install-visionos-device.sh"
 rg -q 'native visionOS configuration \(3\.28\+\)' \
@@ -210,6 +232,8 @@ if PATH="$SIMCTL_TEST_BIN:$PATH" \
   exit 1
 fi
 cmake -E remove_directory "$SIMCTL_TEST_ROOT"
+
+"$ROOT_DIR/tests/visionos-acceptance.sh"
 
 IOS_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in"
 plutil -lint "$IOS_PLIST" >/dev/null

@@ -34,6 +34,65 @@ selected toolchain, build the complete default target, and inspect the generated
 application with `scripts/verify-visionos-bundle.sh`. They do not select only
 the smoke executable.
 
+## Automated acceptance
+
+`accept-visionos.sh` is the noninteractive acceptance entry point. It composes
+the existing clean build, source-lock, bundle, public preflight, compatibility,
+viewport/input, and script-guardrail checks rather than reproducing them:
+
+```sh
+./scripts/accept-visionos.sh xrsimulator
+./scripts/accept-visionos.sh xros
+./scripts/accept-visionos.sh all
+```
+
+Every lane is Release and builds the complete default/all target. The simulator
+lane selects only an available Apple Vision Pro on a visionOS runtime, preferring
+the newest booted match deterministically. It boots when necessary, installs the
+freshly compared bundle, launches with the previous process terminated, requires
+three parsed residency checks, captures process-scoped logs and a fresh
+screenshot, requires the exact stable `PEONPAD_VISIONOS_READY=1` token, scans
+first-party output for fatal/SDL/Metal/render/viewport/safe-area failures, then
+terminates, relaunches with a different PID, and repeats the lifecycle checks.
+Each log window starts immediately before its launch, remains PID-scoped, and
+excludes only explicitly identified unrelated simulator messages.
+
+The xros lane builds without signing and requires platform 11, arm64, visionOS
+2.0 or newer, the selected SDK, valid scene/icon/resource/linkage/rpath
+metadata, no simulator slice, no signing artifacts, and a failing strict
+signature verification. It does not sign, install, or launch on hardware.
+
+`all` additionally performs a fresh Release SDL3 host configuration and complete
+default build, runs every configured CTest (currently 7/7), the direct
+`-DNDEBUG` viewport/input checks, public preflight, and Designed-for-iPad
+compatibility preflight. Before any configure or build, acceptance rejects
+staged, unstaged, or untracked source changes. Ignored generated build paths
+remain allowed, and explicit evidence paths must remain outside the repository.
+Any failed build, test, lifecycle check, log scan, cleanup, or result write
+fails the command immediately.
+
+The command writes a transactional JSON result outside the repository. It
+validates conversion output before an atomic move, validates the installed JSON
+again, and cannot pass without a fresh final result. It records the commit,
+clean source state, Xcode/CMake/SDK versions, Release/all-target scope, lane and
+bundle metadata, selected simulator model/runtime/UDID, both fresh PIDs,
+residency and test counts, evidence paths, warnings, and pass/fail. Evidence
+uses a fresh temporary directory and is deleted by default:
+
+```sh
+./scripts/accept-visionos.sh all \
+  --keep-evidence \
+  --evidence-dir /tmp/peonpad-visionos-evidence \
+  --result /tmp/peonpad-visionos-result.json
+```
+
+Both explicit paths must be outside the checkout; existing evidence and result
+destinations are rejected so stale output cannot satisfy acceptance.
+`--keep-evidence` retains local logs and the screenshot for inspection. The JSON
+result is retained regardless. The generic acceptance script does not assert
+the smoke-card wording or a pixel hash, so the same command remains the gate
+when the gameplay payload replaces the current shell.
+
 ## Native shell boundary
 
 `platform/apple/visionos` contains the native shell policy:
@@ -45,8 +104,9 @@ the smoke executable.
   through public SDL window properties, then requests freeform visionOS window
   resizing with bounded minimum and maximum sizes.
 - `PeonPadAssets.xcassets` is compiled into `Assets.car` using the existing
-  original PeonPad icon. The copy/compiler bridge strips extended attributes
-  before signing.
+  original PeonPad icon. Verification requires the bundle's `AppIcon`
+  declaration and inspects the compiled catalog for that solid image stack. The
+  copy/compiler bridge strips extended attributes before signing.
 
 SDL3 retains application, scene, UIKit view, and Metal renderer ownership. The
 shell does not use `SDL_syswm`, sdl2-compat, a forked SDL, SwiftUI, or private
@@ -124,12 +184,15 @@ Optional screenshot evidence must stay outside the repository:
   --screenshot /tmp/peonpad-visionos-smoke.png
 ```
 
-On July 15, 2026, Xcode 26.6 built a clean arm64 platform-12 application against
-the visionOS 26.5 Simulator SDK. It installed and launched on Apple Vision Pro /
-visionOS 26.5, remained resident, logged
-`PeonPad native visionOS smoke shell ready`, and displayed the public card
-“SMOKE SHELL — NO GAMEPLAY.” The screenshot and generated application remain
-local build evidence and are not committed.
+On July 18, 2026, the automated xrsimulator lane passed on Xcode 26.6, CMake
+4.3.1, and the visionOS 26.5 Simulator SDK. Fresh install, launch, three
+residency checks, explicit termination, different-PID relaunch, three more
+residency checks, readiness markers, and first-party log scans all passed on
+Apple Vision Pro / visionOS 26.5. The retained fresh screenshot was manually
+inspected: it showed the expected native SDL3 + Metal card, exact 4:3 aspect-fit
+surface, and “SMOKE SHELL — NO GAMEPLAY.” This is current-shell evidence only,
+not a generic pixel or wording assertion. The screenshot, logs, generated app,
+and JSON report remain local and are not committed.
 
 ## Physical-device signing gate
 
@@ -166,6 +229,17 @@ The install gate rejects simulator binaries, unsigned apps, missing profiles,
 non-Vision-Pro destinations, and calls made without the explicit environment
 acknowledgement. The currently discoverable physical Vision Pro was unavailable,
 so signing, install, launch, and hardware acceptance remain external gates.
+
+The automated `xros` lane passed on July 18, 2026 against SDK 26.5 and confirmed
+that the command-line bundle is unsigned. Physical acceptance therefore still
+requires all of the following local-only steps: select a unique bundle
+identifier, enable Xcode automatic signing, provide `DEVELOPMENT_TEAM` through
+the local Xcode account, allow Xcode to create/embed a development provisioning
+profile, pair and trust an Apple Vision Pro, opt in with
+`PEONPAD_VISIONOS_DEVICE_INSTALL=1`, install that signed platform-11 bundle, and
+manually verify launch, rendering, input, audio, suspend/resume, and termination
+on the device. No signing identity, profile, credential, or device install is
+handled by automated acceptance.
 
 ## Bundle and content checks
 

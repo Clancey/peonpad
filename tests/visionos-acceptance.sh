@@ -261,6 +261,24 @@ run_acceptance startup-ready-only xrsimulator \
   --result "$STARTUP_READY_RESULT" >/dev/null
 [[ "$(plutil -extract status raw "$STARTUP_READY_RESULT")" == pass ]]
 
+prepare_acceptance_state simulator-objc-noise
+OBJC_NOISE_RESULT="$TEMP_ROOT/simulator objc noise result.json"
+run_acceptance simulator-objc-noise xrsimulator \
+  --evidence-dir "$TEMP_ROOT/simulator objc noise evidence" \
+  --result "$OBJC_NOISE_RESULT" >/dev/null
+[[ "$(plutil -extract status raw "$OBJC_NOISE_RESULT")" == pass ]]
+
+prepare_acceptance_state simulator-objc-near-miss
+OBJC_NEAR_MISS_RESULT="$TEMP_ROOT/simulator objc near miss result.json"
+if run_acceptance simulator-objc-near-miss xrsimulator \
+    --evidence-dir "$TEMP_ROOT/simulator objc near miss evidence" \
+    --result "$OBJC_NEAR_MISS_RESULT" >/dev/null 2>&1; then
+  print -u2 "acceptance broadly ignored a first-party crash signature"
+  exit 1
+fi
+[[ "$(plutil -extract failure raw "$OBJC_NEAR_MISS_RESULT")" == \
+  "first logs contain a first-party fatal, SDL, Metal, viewport, safe-area, or rendering error" ]]
+
 prepare_acceptance_state startup-fatal
 STARTUP_FATAL_RESULT="$TEMP_ROOT/startup fatal result.json"
 if run_acceptance startup-bracketed-fatal xrsimulator \

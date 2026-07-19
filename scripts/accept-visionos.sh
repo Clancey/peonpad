@@ -764,6 +764,7 @@ verify_residency_and_logs() {
   local stderr_file="$EVIDENCE_DIR/$ordinal-stderr.log"
   local unified_file="$EVIDENCE_DIR/$ordinal-unified.log"
   local first_party_file="$EVIDENCE_DIR/$ordinal-first-party.log"
+  local runtime_scan_file="$EVIDENCE_DIR/$ordinal-runtime-scan.log"
   local index
   local fatal_pattern='(fatal|assertion failed|uncaught exception|abort trap|crash)|(PeonPad|SDL|Metal|render(er|ing)?|viewport|safe[- ]?area).*(error|failed|failure|invalid|unavailable|missing)|(error|failed|failure|invalid|unavailable|missing).*(PeonPad|SDL|Metal|render(er|ing)?|viewport|safe[- ]?area)'
 
@@ -847,8 +848,24 @@ verify_residency_and_logs() {
       print message
     }
   ' "$unified_file" > "$first_party_file"
-  if grep -Eiq "$fatal_pattern" \
-      "$stdout_file" "$stderr_file" "$first_party_file"; then
+  awk '
+    function ends_with(value, suffix) {
+      return length(value) >= length(suffix) &&
+        substr(value, length(value) - length(suffix) + 1) == suffix
+    }
+    function known_simulator_objc_duplicate(message, copy, roots) {
+      if (message !~ /^objc\[[0-9]+\]: Class [^ ]+ is implemented in both / ||
+          !ends_with(message,
+            "This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.")) {
+        return 0
+      }
+      copy = message
+      roots = gsub(/\/Library\/Developer\/CoreSimulator\/Volumes\//, "", copy)
+      return roots == 2
+    }
+    !known_simulator_objc_duplicate($0) {print}
+  ' "$stdout_file" "$stderr_file" "$first_party_file" > "$runtime_scan_file"
+  if grep -Eiq "$fatal_pattern" "$runtime_scan_file"; then
     fail_check "$ordinal logs contain a first-party fatal, SDL, Metal, viewport, safe-area, or rendering error"
   fi
   pass_check

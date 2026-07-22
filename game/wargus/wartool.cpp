@@ -3375,12 +3375,19 @@ int main(int argc, char** argv)
 	} else {
 		fprintf(f, "wargus.expansion = false\n");
 	}
-	if (rip < 0) {
-		fprintf(f, "wargus.music_extension = \".wav\"\n");
-	} else if (rip) {
+	if (rip > 0) {
 		fprintf(f, "wargus.music_extension = \".ogg\"\n");
-	} else {
+	} else if (rip == 0) {
 		fprintf(f, "wargus.music_extension = \".mid\"\n");
+	} else {
+		// WAV conversion failed (rip < 0). Fall back to .mid if MIDI files
+		// were generated (e.g. BNE disc image extraction without CD ripping).
+		snprintf(buf, 4095, "%s/%s/%s.mid", Dir, MUSIC_PATH, MusicNames[0]);
+		if (access(buf, F_OK) == 0) {
+			fprintf(f, "wargus.music_extension = \".mid\"\n");
+		} else {
+			fprintf(f, "wargus.music_extension = \".wav\"\n");
+		}
 	}
 	if (CDType & CD_BNE) {
 		fprintf(f, "wargus.bne = true\n");

@@ -194,26 +194,26 @@ bool HasDecoderNamed(const char *name)
  * Detaches `chunk` from any channel currently pointing at it (halting
  * playback first) so Mix_FreeChunk() can safely destroy the underlying
  * MIX_Audio even if the caller forgot to stop playback first.
+ *
+ * Best-effort: even if a stop or audio-clear call fails, the channel slot
+ * is still nulled so Mix_FreeChunk can proceed without leaving a dangling
+ * pointer in the channel table.
  */
-bool DetachChunkFromChannels(Mix_Chunk *chunk)
+void DetachChunkFromChannels(Mix_Chunk *chunk)
 {
 	if (g_state.mixer == nullptr) {
-		return true;
+		return;
 	}
 	MixerLock lock(g_state.mixer);
 	for (size_t i = 0; i < g_state.channelTracks.size(); ++i) {
 		if (g_state.channelChunk[i] == chunk) {
-			if (TrackActive(g_state.channelTracks[i])
-			    && !MIX_StopTrack(g_state.channelTracks[i], 0)) {
-				return false;
+			if (TrackActive(g_state.channelTracks[i])) {
+				MIX_StopTrack(g_state.channelTracks[i], 0);
 			}
-			if (!MIX_SetTrackAudio(g_state.channelTracks[i], nullptr)) {
-				return false;
-			}
+			MIX_SetTrackAudio(g_state.channelTracks[i], nullptr);
 			g_state.channelChunk[i] = nullptr;
 		}
 	}
-	return true;
 }
 
 } // namespace
@@ -484,9 +484,7 @@ void Mix_FreeChunk(Mix_Chunk *chunk)
 	if (chunk == nullptr) {
 		return;
 	}
-	if (!DetachChunkFromChannels(chunk)) {
-		return;
-	}
+	DetachChunkFromChannels(chunk);
 	if (chunk->PeonPadMixAudio != nullptr) {
 		MIX_DestroyAudio(chunk->PeonPadMixAudio);
 	}

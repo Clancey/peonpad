@@ -81,8 +81,11 @@ PeonPadAdaptSDL3TouchEvent(TouchInputState &touchInput,
 	const TouchPoint position{event.x, event.y};
 	switch (event.type) {
 		case SDL_EVENT_FINGER_DOWN:
+			// SDL3 touch coordinates are normalized to [0.0, 1.0]; reject
+			// anything outside that range rather than comparing against pixel
+			// dimensions which are always much greater than 1.0.
 			if (position.x < 0.0f || position.y < 0.0f
-			    || position.x >= width || position.y >= height) {
+			    || position.x >= 1.0f || position.y >= 1.0f) {
 				return {};
 			}
 			return touchInput.Begin(event.fingerID, position, timestamp, modifiers);

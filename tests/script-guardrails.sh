@@ -258,6 +258,18 @@ cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 # executable) and carries no proprietary Warcraft II data.
 "$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" >/dev/null
 
+# Tabletop gameplay slice: pure-logic snapshot model, command reducer, and
+# defect regressions (dead-unit validation, two-hand suppression). Runs on
+# the host Mac; no Simulator needed.
+"$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" >/dev/null
+if rg -Fq 'assert(' \
+    "$ROOT_DIR/tests/tabletop_gameplay_state_test.swift"; then
+  print -u2 "tabletop gameplay tests rely on Swift assert instead of" \
+    "always-on checks"
+  exit 1
+fi
+
 TABLETOP_PLIST="$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in"
 plutil -lint "$TABLETOP_PLIST" >/dev/null
 [[ "$(plutil -extract UIDeviceFamily.0 raw "$TABLETOP_PLIST")" == "7" ]]

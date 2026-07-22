@@ -223,20 +223,63 @@ extension TabletopTestRoster {
     }
 }
 
+// MARK: - Gameplay unit → spec mapping
+
+extension TabletopUnitSpec {
+    /// Converts a pure-state `TabletopGameplayUnit` to the RealityKit-facing
+    /// `TabletopUnitSpec`. The owner index is mapped to a representative tint
+    /// so each player's units are visually distinguishable without real art.
+    init(gameplayUnit: TabletopGameplayUnit) {
+        self.id = gameplayUnit.id
+        self.tileX = gameplayUnit.tileX
+        self.tileZ = gameplayUnit.tileZ
+        self.facingRadians = gameplayUnit.facingRadians
+        self.tint = TabletopBoardBuilder.ownerTint(owner: gameplayUnit.owner)
+    }
+}
+
+// MARK: - Terrain color mapping
+
+private extension TabletopTerrainKind {
+    /// A representative `UIColor` for each terrain kind, used to tint board
+    /// tiles when the board is built from a `TabletopGameplaySnapshot`.
+    var tileColor: UIColor {
+        switch self {
+        case .grass:  return UIColor(white: 0.70, alpha: 1)
+        case .dirt:   return UIColor(white: 0.45, alpha: 1)
+        case .water:  return UIColor(hue: 0.57, saturation: 0.65, brightness: 0.45, alpha: 1)
+        case .rock:   return UIColor(white: 0.22, alpha: 1)
+        case .forest: return UIColor(hue: 0.34, saturation: 0.55, brightness: 0.30, alpha: 1)
+        }
+    }
+}
+
 enum TabletopBoardBuilder {
-    /// Builds the static board surface: a checkerboard grid of tiles plus a
-    /// translucent fog-of-war plane sitting just above it. Both stay glued
-    /// to the board plane because they are children of `boardRoot`.
-    static func addSurface(to boardRoot: Entity) {
+    /// Maps a player/team index to a representative unit tint so that units
+    /// belonging to different players are visually distinguishable.
+    static func ownerTint(owner: Int) -> UIColor {
+        switch owner {
+        case 0:  return .systemBlue
+        case 1:  return .systemRed
+        default: return .systemGray
+        }
+    }
+
+    /// Builds the board surface from a gameplay snapshot: one tile quad per
+    /// map cell (terrain-coloured) plus a translucent fog-of-war plane just
+    /// above it. Both are parented to `boardRoot` so any board
+    /// translate/rotate/scale carries them together.
+    static func addSurface(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) {
         let half = TabletopBoardMetrics.tileCountPerSide / 2
         for tileZ in -half...half {
             for tileX in -half...half {
+                let color = snapshot.terrain(atTileX: tileX, tileZ: tileZ).tileColor
                 let tile = ModelEntity(
                     mesh: .generatePlane(
                         width: TabletopBoardMetrics.tileSize * 0.96,
                         depth: TabletopBoardMetrics.tileSize * 0.96
                     ),
-                    materials: [translucentUnlitMaterial((tileX + tileZ).isMultiple(of: 2) ? UIColor(white: 0.70, alpha: 1) : UIColor(white: 0.18, alpha: 1))]
+                    materials: [translucentUnlitMaterial(color)]
                 )
                 tile.name = "board.tile.\(tileX).\(tileZ)"
                 tile.position = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
@@ -256,11 +299,14 @@ enum TabletopBoardBuilder {
         boardRoot.addChild(fog)
     }
 
-    static func addUnits(to boardRoot: Entity) -> [TabletopLiveUnit] {
-        TabletopTestRoster.units.map { spec in
-            let unit = TabletopLiveUnit(spec: spec)
-            boardRoot.addChild(unit.root)
-            return unit
+    /// Builds live RealityKit units from the snapshot's unit roster and
+    /// parents them all to `boardRoot`.
+    static func addUnits(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) -> [TabletopLiveUnit] {
+        snapshot.units.map { gameplayUnit in
+            let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
+            let liveUnit = TabletopLiveUnit(spec: spec)
+            boardRoot.addChild(liveUnit.root)
+            return liveUnit
         }
     }
 }

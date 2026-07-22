@@ -1,12 +1,13 @@
-# Native visionOS tabletop foundation
+# Native visionOS tabletop foundation and gameplay slice
 
 PeonPad has a second, entirely separate native visionOS target: a SwiftUI +
 RealityKit **tabletop** app that renders a placeable, spatially-manipulable
-procedural battlefield board with upright transparent unit billboards. This is
-a *foundation layer only* -- there is no Stratagus, no map, no proprietary
-Warcraft II art or data, and no gameplay. It exists to prove the spatial board,
-gesture, and directional-billboard mechanics before any real battlefield data
-is ported.
+procedural battlefield board with upright transparent unit billboards. It
+includes a production-quality gameplay slice with a versioned, Codable pure-
+state snapshot model, deterministic command reduction, and interactive unit
+selection and movement. There is no Stratagus, no proprietary Warcraft II art
+or data -- only representative procedural content to prove the spatial board,
+gesture, and gameplay mechanics.
 
 It is fully independent of, and does not modify, either of the branch's other
 two native paths:
@@ -37,14 +38,17 @@ or bringing Swift/RealityKit into the SDL3 shell's process -- both violate
 - A plain SwiftUI `App` (`TabletopApp.swift`) with a `WindowGroup` launcher and
   an `ImmersiveSpace` (`.mixed` style) that the launcher opens automatically.
 - A `RealityView`-based scene (`TabletopBoardView.swift`) that builds the
-  board, wires `SpatialEventGesture` input, and re-orients every unit's
-  billboard once per frame.
+  board from the gameplay snapshot, wires `SpatialEventGesture` input, and
+  re-orients every unit's billboard once per frame.
 - A pure, RealityKit-independent Swift module (`TabletopGestureState.swift`)
-  that holds every piece of deterministic logic: gesture-sample interpretation,
-  chirality-based command/board-manipulation routing, two-hand scale, and the
-  camera-relative directional-billboard frame resolution. This file imports
-  nothing from RealityKit/SwiftUI/UIKit and is unit tested on the host Mac
-  (see below), independent of any simulator or device.
+  that holds every piece of deterministic gesture logic: gesture-sample
+  interpretation, chirality-based command/board-manipulation routing, two-hand
+  scale, and the camera-relative directional-billboard frame resolution. This
+  file imports nothing from RealityKit/SwiftUI/UIKit and is unit tested on the
+  host Mac (see below), independent of any simulator or device.
+- A pure, RealityKit-independent gameplay module (`TabletopGameplayState.swift`)
+  that holds the versioned Codable snapshot model and command reducer (see
+  below). Also imports nothing from RealityKit/SwiftUI/UIKit.
 
 There is no Xcode project and no CMake target: `scripts/build-visionos-tabletop.sh`
 invokes `swiftc -target arm64-apple-xros2.0-simulator` (or the non-simulator
@@ -125,13 +129,71 @@ viewer rather than a flat window. This is purely an automated-evidence
 concern; nothing about the gesture or manipulation logic depends on this
 default height, and a user can move the board anywhere with the left hand.
 
+## Gameplay slice: snapshot model and command reducer
+
+`TabletopGameplayState.swift` is a pure-logic module (no UIKit/RealityKit/
+SwiftUI) that holds the complete gameplay state for the interactive tabletop
+slice:
+
+- **`TabletopGameplaySnapshot`** -- a versioned (`version: Int`), `Codable`,
+  value-type record containing the full battlefield: `mapSize`, per-tile
+  `terrain` (`[TabletopTerrainTile]`), per-tile `fogMask` (`[TabletopFogTile]`),
+  `units` (`[TabletopGameplayUnit]`), and `selection`
+  (`TabletopGameplaySelection`). The `validatedSelectedUnit` computed property
+  returns the currently selected unit only if it is alive (`hp > 0`),
+  preventing dead-unit visual state from persisting after a unit is killed.
+
+- **`TabletopGameplayUnit`** -- one unit's complete state: stable `id`,
+  `owner` (player/team index), `hp`, `maxHP`, `facingRadians`, `tileX`, and
+  `tileZ`. `isAlive` is `hp > 0`.
+
+- **`TabletopGameplayCommand`** -- a `Codable` enum covering the four
+  operations the right-hand command reducer can dispatch: `selectUnit(id:)`,
+  `deselectAll`, `moveUnit(id:toTileX:toTileZ:)`, and `stopUnit(id:)`.
+
+- **`TabletopGameplayCommandReducer`** -- two static pure functions:
+  - `validate(_:command:)` returns `.valid`, `.rejectedUnitNotFound(id:)`, or
+    `.rejectedDeadUnit(id:hp:)`.
+  - `reduce(_:command:)` validates then applies the command, returning the
+    new snapshot unchanged when the command is invalid. Dead units (`hp == 0`)
+    are rejected by every command; the snapshot never partially mutates on
+    failure.
+
+- **`TabletopGameplaySnapshot.demo()`** -- a representative procedural
+  battlefield (7 × 7 tiles, mixed terrain, eight alive test units across two
+  player teams, all fog revealed) used as the initial state in the app and as
+  test fixtures. No proprietary Warcraft II data.
+
+### Two-hand suppression (defect regression)
+
+Staggered two-hand release must never dispatch an accidental right-hand
+gameplay command. Whenever both hands are simultaneously active (two-hand
+board-manipulation mode), the bridge layer in `TabletopBoardView` calls
+`commandReducer.suppressRightHandID(_:)` with the current right-hand event
+ID. The `TabletopCommandReducer` (in `TabletopGestureState.swift`) tracks
+these IDs in a `Set<Int>` and silently drops any `.ended` or `.cancelled`
+event whose ID is in the set, removing the ID afterwards so the same numeric
+ID cannot be accidentally suppressed in a later, unrelated gesture. This
+prevents the defect where a left-hand board-grab followed by a right-hand
+pinch on a unit would fire a selection command when the left hand released
+first and the right-hand terminal event subsequently arrived.
+
+### Dead-unit defensive rejection
+
+`TabletopGameplayCommandReducer.validate` rejects any `selectUnit`, `moveUnit`,
+or `stopUnit` command whose target unit has `hp == 0`. The `reduce` function
+returns the snapshot unchanged on any invalid command. `validatedSelectedUnit`
+also defensively returns `nil` when the previously-selected unit has since died,
+so rendering code never needs to guard for this case.
+
 ## Build, test, and launch
 
 Pure-logic unit tests run on the host Mac, independent of any SDK or
 simulator, and are part of `tests/script-guardrails.sh`:
 
 ```sh
-./scripts/test-visionos-tabletop-gestures.sh
+./scripts/test-visionos-tabletop-gestures.sh   # gesture, billboard, two-hand suppression
+./scripts/test-visionos-tabletop-gameplay.sh   # snapshot model, command reducer, dead-unit rejection
 ```
 
 Build the app bundle (no launch):
@@ -167,12 +229,13 @@ proprietary Warcraft content.
 
 On July 22, 2026, a full `xrsimulator` build, install, launch, and screenshot
 passed against Xcode 26.6 and the visionOS 26.5 Simulator SDK on an Apple
-Vision Pro simulator. The retained screenshot shows the checkerboard board,
-eight translucent colored cylindrical unit billboards clearly rising off
+Vision Pro simulator. The retained screenshot shows the terrain-coloured board
+tiles, eight translucent colored cylindrical unit billboards clearly rising off
 their tiles, and the board-attached "Tabletop / Recenter" palette near the
 board's front edge -- all inside the immersive space, none of it a flat
 window. `tests/script-guardrails.sh` (including the tabletop-specific static
-checks and the 93/93-passing pure-logic test run) passed in full.
+checks, the 99/99-passing gesture pure-logic test run, and the 171/171-passing
+gameplay pure-logic test run) passed in full.
 
 ## Scope boundary
 
@@ -180,6 +243,6 @@ RealityKit/SwiftUI ownership in this app is confined entirely to
 `platform/apple/visionos/tabletop`; nothing under the smoke shell's
 `platform/apple/visionos` files was touched. There is no Stratagus, no map
 loading, no real unit stats or sprite art, and no persistent save state --
-only a procedural test board, a fixed roster of eight tinted placeholder
-units (one per canonical direction), and the gesture/board-manipulation/
-directional-billboard mechanics described above.
+only a procedural demo board, a roster of eight tinted placeholder units (one
+per canonical direction, two player teams), and the gesture/board-manipulation/
+directional-billboard/gameplay mechanics described above.

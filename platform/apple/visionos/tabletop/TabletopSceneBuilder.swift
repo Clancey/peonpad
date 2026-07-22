@@ -78,11 +78,21 @@ final class TabletopLiveUnit {
     let spec: TabletopUnitSpec
     let root: Entity
     let quad: ModelEntity
+    let body: ModelEntity
     let baseMaterial: UnlitMaterial
     let mirroredMaterial: UnlitMaterial
 
+    /// Selection state and the currently-resolved directional hue are both
+    /// stored here so `setSelected` and `applyDirectionalFrame` -- one
+    /// driven by right-hand command intents, the other re-run every frame
+    /// by `refreshBillboards()` -- always compose into a single material
+    /// update instead of independently overwriting each other's alpha.
+    private(set) var isSelected = false
+    private var currentHue: UIColor
+
     init(spec: TabletopUnitSpec) {
         self.spec = spec
+        self.currentHue = spec.tint
 
         let root = Entity()
         root.name = "unit.\(spec.id)"
@@ -118,20 +128,36 @@ final class TabletopLiveUnit {
 
         self.root = root
         self.quad = quad
+        self.body = body
         self.baseMaterial = translucentUnlitMaterial(spec.tint)
         self.mirroredMaterial = translucentUnlitMaterial(spec.tint.withAlphaComponent(0.85))
     }
 
     /// Highlights or un-highlights this unit to give visible feedback for
-    /// the right-hand selection command intent.
+    /// the right-hand selection command intent. Composes with whatever
+    /// directional hue is currently resolved rather than overwriting it, so
+    /// the next per-frame `applyDirectionalFrame` call doesn't need to
+    /// (re)decide the selection alpha itself.
     func setSelected(_ selected: Bool) {
-        let alpha: CGFloat = selected ? 1.0 : 0.22
-        (quad.model?.materials).map { _ in
-            quad.model?.materials = [translucentUnlitMaterial(spec.tint.withAlphaComponent(alpha))]
-        }
-        if let body = root.findEntity(named: root.name + ".body") as? ModelEntity {
-            body.model?.materials = [translucentUnlitMaterial(spec.tint.withAlphaComponent(selected ? 0.5 : 0.22))]
-        }
+        isSelected = selected
+        applyQuadMaterial()
+        applyBodyMaterial()
+    }
+
+    /// Applies the current directional hue and the current selection alpha
+    /// to the quad in one material assignment, so neither `setSelected` nor
+    /// `applyDirectionalFrame` ever clobbers the other's contribution.
+    private func applyQuadMaterial() {
+        let alpha = TabletopUnitAppearance.quadAlpha(selected: isSelected)
+        quad.model?.materials = [translucentUnlitMaterial(currentHue.withAlphaComponent(CGFloat(alpha)))]
+    }
+
+    /// Applies the current selection alpha to the cylindrical body. The
+    /// body has no directional hue of its own (it always uses the unit's
+    /// base tint), so this only needs the selection state.
+    private func applyBodyMaterial() {
+        let alpha = TabletopUnitAppearance.bodyAlpha(selected: isSelected)
+        body.model?.materials = [translucentUnlitMaterial(spec.tint.withAlphaComponent(CGFloat(alpha)))]
     }
 
     /// Applies this frame's directional-frame resolution: rotates the quad
@@ -165,10 +191,13 @@ final class TabletopLiveUnit {
         // Mirroring is represented procedurally (no sprite art is embedded):
         // a horizontally-flipped scale plus a dimmer tint stands in for
         // "this canonical frame is being mirrored", while the hue always
-        // reflects the resolved canonical direction.
-        let canonicalHue = TabletopTestRoster.canonicalTint(resolution.canonical, base: spec.tint)
+        // reflects the resolved canonical direction. The hue is stored and
+        // composed with the current selection alpha via applyQuadMaterial()
+        // rather than assigned directly, so this per-frame call can never
+        // erase whatever setSelected last decided.
+        currentHue = TabletopTestRoster.canonicalTint(resolution.canonical, base: spec.tint)
         quad.scale.x = resolution.mirrored ? -abs(quad.scale.x) : abs(quad.scale.x)
-        quad.model?.materials = [translucentUnlitMaterial(canonicalHue)]
+        applyQuadMaterial()
     }
 }
 

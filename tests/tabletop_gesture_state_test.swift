@@ -272,6 +272,139 @@ func testTwoHandRotationFromHandPairAngle() {
     expectNear(abs(transform.yawRadians), .pi / 2, tolerance: 1e-6, "rotating the hand pair a quarter turn yaws the board a quarter turn")
 }
 
+// MARK: - Board manipulation: no-jump hand-count transitions
+
+func testTwoHandJoinLeftFirstDoesNotJump() {
+    var manipulator = TabletopBoardManipulator()
+    let leftStart = TabletopGestureSample(id: 30, chirality: .left, phase: .active, location3D: .zero)
+    _ = manipulator.update(left: leftStart, right: nil)
+
+    let leftMoved = TabletopGestureSample(id: 30, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: 0.5, y: 0, z: 0))
+    let afterOneHand = manipulator.update(left: leftMoved, right: nil)
+    expectNear(afterOneHand.position.x, 0.5, "one-hand drag moves the board before the second hand joins")
+
+    // The right hand joins at its own current location while the left hand
+    // sample is unchanged: nothing has moved relative to this instant, so
+    // the board must not jump the moment two-hand mode begins.
+    let rightJoin = TabletopGestureSample(id: 31, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 1, y: 0, z: 0))
+    let atJoin = manipulator.update(left: leftMoved, right: rightJoin)
+    expectNear(atJoin.position.x, afterOneHand.position.x, "the instant the second (right) hand joins does not itself move the board")
+    expectNear(atJoin.position.z, afterOneHand.position.z, "the instant the second (right) hand joins does not itself move the board (z)")
+    expectNear(atJoin.yawRadians, afterOneHand.yawRadians, "the instant the second (right) hand joins does not itself rotate the board")
+    expectNear(atJoin.scale, afterOneHand.scale, "the instant the second (right) hand joins does not itself rescale the board")
+
+    // Spreading both hands after the join should scale up smoothly from
+    // this fresh anchor, not from the original one-hand start sample.
+    let leftWide = TabletopGestureSample(id: 30, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: 0.2, y: 0, z: 0))
+    let rightWide = TabletopGestureSample(id: 31, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 1.3, y: 0, z: 0))
+    let afterSpread = manipulator.update(left: leftWide, right: rightWide)
+    expect(afterSpread.scale > atJoin.scale, "spreading both hands after the join grows the scale smoothly, without a jump")
+}
+
+func testTwoHandJoinRightFirstDoesNotJump() {
+    var manipulator = TabletopBoardManipulator()
+    // A lone right hand never manipulates the board, but its start sample is
+    // still tracked once active, and it is free to wander before the left
+    // hand joins.
+    let rightStart = TabletopGestureSample(id: 40, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 1, y: 0, z: 0))
+    let whileRightAlone = manipulator.update(left: nil, right: rightStart)
+    expectEqual(whileRightAlone, .identity, "a lone right hand never moves the board even while tracked")
+
+    let rightWandered = TabletopGestureSample(id: 40, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 4, y: 0, z: 3))
+    _ = manipulator.update(left: nil, right: rightWandered)
+
+    // The left hand now joins. Even though the right hand's start sample is
+    // stale (from far away), the join must re-anchor BOTH hands, so the
+    // instant of joining still does not move the board.
+    let leftJoin = TabletopGestureSample(id: 41, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -1, y: 0, z: 0))
+    let atJoin = manipulator.update(left: leftJoin, right: rightWandered)
+    expectEqual(atJoin, .identity, "the instant the left hand joins a wandered right hand does not itself move the board")
+
+    // Moving both hands further apart should scale up smoothly from this
+    // fresh anchor, not blow up from the stale, far-away right-hand start.
+    let leftWide = TabletopGestureSample(id: 41, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -2, y: 0, z: 0))
+    let rightWide = TabletopGestureSample(id: 40, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 5, y: 0, z: 3))
+    let afterSpread = manipulator.update(left: leftWide, right: rightWide)
+    expect(afterSpread.scale > atJoin.scale, "spreading both hands after a right-first join grows the scale smoothly, without a jump")
+}
+
+func testTwoHandReleaseRightContinueLeftDoesNotJump() {
+    var manipulator = TabletopBoardManipulator()
+    let leftStart = TabletopGestureSample(id: 50, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -0.2, y: 0, z: 0))
+    let rightStart = TabletopGestureSample(id: 51, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 0.2, y: 0, z: 0))
+    _ = manipulator.update(left: leftStart, right: rightStart)
+
+    let leftMid = TabletopGestureSample(id: 50, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -0.4, y: 0, z: 0))
+    let rightMid = TabletopGestureSample(id: 51, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 0.4, y: 0, z: 0))
+    let afterTwoHand = manipulator.update(left: leftMid, right: rightMid)
+    expectNear(afterTwoHand.scale, 2.0, "two-hand spreading before release doubles the scale")
+
+    // The right hand releases; the left hand's sample is unchanged. This
+    // must not jump: the surviving hand's start sample and the
+    // transform-at-start both need to be re-anchored to right now.
+    let rightEnded = TabletopGestureSample(id: 51, chirality: .right, phase: .ended, location3D: TabletopPoint3D(x: 0.4, y: 0, z: 0))
+    let atRelease = manipulator.update(left: leftMid, right: rightEnded)
+    expectNear(atRelease.position.x, afterTwoHand.position.x, "releasing the right hand does not itself move the board")
+    expectNear(atRelease.yawRadians, afterTwoHand.yawRadians, "releasing the right hand does not itself rotate the board")
+    expectNear(atRelease.scale, afterTwoHand.scale, "releasing the right hand does not itself change the scale")
+
+    // One-hand manipulation with the surviving left hand should continue
+    // smoothly from here, on top of the scale two-hand mode left behind.
+    let leftFurther = TabletopGestureSample(id: 50, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -0.5, y: 0, z: 0))
+    let afterContinued = manipulator.update(left: leftFurther, right: nil)
+    expectNear(afterContinued.position.x, -0.1, "one-hand manipulation continues smoothly from the re-anchored release point")
+    expectNear(afterContinued.scale, 2.0, "the scale established during two-hand mode persists through one-hand continuation")
+}
+
+func testTwoHandReleaseLeftLeavesRightHandStableDoesNotJump() {
+    var manipulator = TabletopBoardManipulator()
+    let leftStart = TabletopGestureSample(id: 60, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -0.2, y: 0, z: 0))
+    let rightStart = TabletopGestureSample(id: 61, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 0.2, y: 0, z: 0))
+    _ = manipulator.update(left: leftStart, right: rightStart)
+
+    let leftMid = TabletopGestureSample(id: 60, chirality: .left, phase: .active, location3D: TabletopPoint3D(x: -0.4, y: 0, z: 0))
+    let rightMid = TabletopGestureSample(id: 61, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 0.4, y: 0, z: 0))
+    let afterTwoHand = manipulator.update(left: leftMid, right: rightMid)
+    expectNear(afterTwoHand.scale, 2.0, "two-hand spreading before release doubles the scale")
+
+    // The left hand releases; only the right hand remains. A lone right
+    // hand never manipulates the board, so this must hold exactly at the
+    // two-hand result -- no jump, no drift.
+    let leftEnded = TabletopGestureSample(id: 60, chirality: .left, phase: .ended, location3D: TabletopPoint3D(x: -0.4, y: 0, z: 0))
+    let atRelease = manipulator.update(left: leftEnded, right: rightMid)
+    expectEqual(atRelease, afterTwoHand, "releasing the left hand and continuing with a lone right hand does not jump")
+
+    // Further right-hand-only movement still must not move the board.
+    let rightFurther = TabletopGestureSample(id: 61, chirality: .right, phase: .active, location3D: TabletopPoint3D(x: 2, y: 0, z: -1))
+    let afterRightAlone = manipulator.update(left: nil, right: rightFurther)
+    expectEqual(afterRightAlone, afterTwoHand, "a lone right hand remains inert even after having just been part of a two-hand grab")
+}
+
+// MARK: - Unit billboard appearance: selection composes with direction
+
+func testUnitAppearanceQuadAlphaComposesWithSelection() {
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: true), 1.0, "a selected unit's directional quad is fully opaque")
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: false), 0.22, "a deselected unit's directional quad stays dim")
+}
+
+func testUnitAppearanceBodyAlphaComposesWithSelection() {
+    expectNear(TabletopUnitAppearance.bodyAlpha(selected: true), 0.5, "a selected unit's cylindrical body brightens")
+    expectNear(TabletopUnitAppearance.bodyAlpha(selected: false), 0.22, "a deselected unit's cylindrical body stays dim")
+}
+
+func testUnitAppearanceIsIndependentOfDirectionalResolution() {
+    // The appearance resolver takes only selection state -- it must never
+    // need (or be tempted to fold in) which canonical direction was
+    // resolved, so a per-frame directional update can safely reuse whatever
+    // alpha the last selection decided without recomputing anything about
+    // direction.
+    for selected in [true, false] {
+        let firstCall = TabletopUnitAppearance.quadAlpha(selected: selected)
+        let secondCall = TabletopUnitAppearance.quadAlpha(selected: selected)
+        expectNear(firstCall, secondCall, "quad alpha is a pure function of selection state alone")
+    }
+}
+
 // MARK: - Right-hand command reducer
 
 func testCommandReducerFiresOnceOnEnded() {
@@ -328,6 +461,13 @@ struct TabletopGestureStateTestRunner {
         testReleaseThenRegrabDoesNotJump()
         testTwoHandScaling()
         testTwoHandRotationFromHandPairAngle()
+        testTwoHandJoinLeftFirstDoesNotJump()
+        testTwoHandJoinRightFirstDoesNotJump()
+        testTwoHandReleaseRightContinueLeftDoesNotJump()
+        testTwoHandReleaseLeftLeavesRightHandStableDoesNotJump()
+        testUnitAppearanceQuadAlphaComposesWithSelection()
+        testUnitAppearanceBodyAlphaComposesWithSelection()
+        testUnitAppearanceIsIndependentOfDirectionalResolution()
         testCommandReducerFiresOnceOnEnded()
         testCommandReducerTappedEmptyBoard()
         testCommandReducerCancelledNeverFires()

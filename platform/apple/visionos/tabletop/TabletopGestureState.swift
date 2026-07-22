@@ -155,6 +155,11 @@ public struct TabletopBoardManipulator: Equatable {
         let activeLeft = left.flatMap { $0.phase == .active ? $0 : nil }
         let activeRight = right.flatMap { $0.phase == .active ? $0 : nil }
 
+        // Capture the mode we were in *before* this frame's phase changes
+        // are applied, so the transitions below can tell a hand joining/
+        // leaving two-hand mode apart from ordinary within-mode continuation.
+        let wasTwoHand = leftStart != nil && rightStart != nil
+
         if activeLeft == nil {
             leftStart = nil
         }
@@ -166,15 +171,40 @@ public struct TabletopBoardManipulator: Equatable {
             return transform
         }
 
-        // (Re)anchor the instant a hand newly becomes active so manipulation
-        // always starts from the board's current transform, never a stale one.
-        if activeLeft != nil, leftStart == nil {
+        let isTwoHand = activeLeft != nil && activeRight != nil
+
+        if isTwoHand, !wasTwoHand {
+            // Entering two-hand mode this frame -- regardless of which hand
+            // was already down and which just joined (left-first or
+            // right-first), re-anchor BOTH hands' start samples and the
+            // transform-at-start to right now. Otherwise two-hand math would
+            // measure against whichever hand's stale one-hand start sample
+            // is furthest away, and the board would jump the instant the
+            // second hand joins.
             leftStart = activeLeft
-            transformAtGestureStart = transform
-        }
-        if activeRight != nil, rightStart == nil {
             rightStart = activeRight
             transformAtGestureStart = transform
+        } else if wasTwoHand, !isTwoHand {
+            // Leaving two-hand mode this frame -- re-anchor the surviving
+            // hand's start sample and the transform-at-start to right now,
+            // so one-hand manipulation resumes smoothly from where two-hand
+            // math left off, regardless of which hand released.
+            transformAtGestureStart = transform
+            leftStart = activeLeft ?? leftStart
+            rightStart = activeRight ?? rightStart
+        } else {
+            // Ordinary within-mode continuation: (re)anchor a hand the
+            // instant it newly becomes active (zero-hand -> one-hand) so
+            // manipulation always starts from the board's current
+            // transform, never a stale one.
+            if activeLeft != nil, leftStart == nil {
+                leftStart = activeLeft
+                transformAtGestureStart = transform
+            }
+            if activeRight != nil, rightStart == nil {
+                rightStart = activeRight
+                transformAtGestureStart = transform
+            }
         }
 
         if let l0 = leftStart, let r0 = rightStart, let l1 = activeLeft, let r1 = activeRight {
@@ -384,5 +414,36 @@ public enum TabletopBillboardOrientation {
 public enum TabletopViewerAzimuth {
     public static func aroundBoardCenter(viewerBoardPosition: TabletopPoint3D, boardCenter: TabletopPoint3D = .zero) -> Double {
         TabletopBillboardOrientation.yawFacingViewer(unitBoardPosition: boardCenter, viewerBoardPosition: viewerBoardPosition)
+    }
+}
+
+/// The pure alpha math behind a unit billboard's appearance. The per-frame
+/// directional-frame update (which re-tints the quad to the resolved
+/// canonical hue) and the right-hand selection highlight (which dims/
+/// brightens that same quad, and the cylindrical body) both need to compose
+/// into a single material rather than each independently overwriting the
+/// other -- otherwise whichever one last touched the material wins and the
+/// other's visual state silently disappears. Centralizing the alpha
+/// resolution here keeps it framework-independent and unit testable, and
+/// keeps the two call sites (selection changes, once per frame) from ever
+/// fighting over the same material again.
+public enum TabletopUnitAppearance: Equatable {
+    public static let quadSelectedAlpha: Double = 1.0
+    public static let quadDeselectedAlpha: Double = 0.22
+
+    public static let bodySelectedAlpha: Double = 0.5
+    public static let bodyDeselectedAlpha: Double = 0.22
+
+    /// Alpha for the small directional-facing quad, given only the current
+    /// selection state -- independent of, and composable with, whatever
+    /// canonical hue the current directional-frame resolution has picked.
+    public static func quadAlpha(selected: Bool) -> Double {
+        selected ? quadSelectedAlpha : quadDeselectedAlpha
+    }
+
+    /// Alpha for the translucent cylindrical body, given only the current
+    /// selection state.
+    public static func bodyAlpha(selected: Bool) -> Double {
+        selected ? bodySelectedAlpha : bodyDeselectedAlpha
     }
 }

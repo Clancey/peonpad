@@ -122,6 +122,7 @@ public:
 	int read(void *buf, size_t len);
 	int seek(long offset, int whence);
 	long tell();
+	long size();
 	static SDL_RWops *to_SDL_RWops(std::unique_ptr<CFile> file);
 
 	void write(std::string_view);

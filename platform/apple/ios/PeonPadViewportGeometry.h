@@ -22,6 +22,14 @@ struct PeonPadViewportPoint {
 	float y;
 };
 
+struct PeonPadRendererTransform {
+	int viewportX;
+	int viewportY;
+	int viewportWidth;
+	int viewportHeight;
+	float scale;
+};
+
 struct PeonPadPointRect {
 	int x;
 	int y;
@@ -73,6 +81,12 @@ bool PeonPadCalculateViewport(int outputWidth,
                              int logicalHeight,
                              PeonPadPixelInsets insets,
                              PeonPadViewportGeometry &viewport);
+
+// Converts pixel viewport geometry into SDL renderer coordinates with exactly
+// one uniform scale. The resulting pixel bounds stay inside the safe viewport.
+bool PeonPadCalculateRendererTransform(
+	const PeonPadViewportGeometry &viewport,
+	PeonPadRendererTransform &transform);
 
 // Applies the inverse of PeonPadCalculateViewport. Points in letterbox or
 // pillarbox bars return false instead of leaking out-of-range logical input.

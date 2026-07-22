@@ -769,7 +769,7 @@ void MessagesDisplay::DrawMessages()
 			/*
 			if (MessagesCount) {
 				int textHeight = MessagesCount * (UI.MessageFont->Height() + 1);
-				Uint32 color = Video.MapRGB(TheScreen->format, 38, 38, 78);
+				Uint32 color = Video.MapRGB(TheScreen, 38, 38, 78);
 				Video.FillTransRectangleClip(color, UI.MapArea.X + 7, UI.MapArea.Y + 7,
 											 UI.MapArea.EndX - UI.MapArea.X - 16,
 											 textHeight - MessagesScrollY + 1, 0x80);

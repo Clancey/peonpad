@@ -64,9 +64,6 @@
 
 #ifdef PEONPAD_IOS
 #include "PeonPadIOSViewport.h"
-#ifdef PEONPAD_IOS_CONTROL_DOCK
-#include "PeonPadIOSControls.h"
-#endif
 #endif
 
 #ifdef USE_BEOS
@@ -117,13 +114,13 @@ uint8_t SizeChangeCounter = 0;
 
 static bool dummyRenderer = false;
 
-uint32_t SDL_CUSTOM_KEY_UP;
+uint32_t SDL_CUSTOM_KEY_UP = 0;
 
 static std::map<SDL_JoystickID, SDL_GameController *> SdlControllers;
 static ControllerDeviceRegistry SdlControllerRegistry;
 static ControllerInputState SdlControllerState;
 
-static void OpenSdlController(int deviceIndex);
+static void OpenSdlController(SDL_JoystickID device);
 
 /**
 **  Clean up SDL video resources properly
@@ -132,10 +129,26 @@ static void CleanUpVideoSdl()
 {
 	for (const auto &[instanceId, controller] : SdlControllers) {
 		(void)instanceId;
-		SDL_GameControllerClose(controller);
+		SdlCompatCloseGameController(controller);
 	}
 	SdlControllers.clear();
 	SdlControllerRegistry.Clear();
+
+	SdlCompatStopTextInput(TheWindow);
+
+	if (Video.blankCursor) {
+		Video.blankCursor.reset();
+	}
+
+	if (TheTexture) {
+		SDL_DestroyTexture(TheTexture);
+		TheTexture = nullptr;
+	}
+
+	if (TheScreen) {
+		SDL_FreeSurface(TheScreen);
+		TheScreen = nullptr;
+	}
 
 	if (TheRenderer) {
 		SDL_DestroyRenderer(TheRenderer);
@@ -147,34 +160,28 @@ static void CleanUpVideoSdl()
 		TheWindow = nullptr;
 	}
 
-	if (Video.blankCursor) {
-		Video.blankCursor.reset();
-	}
-
-	SDL_StopTextInput();
 	SDL_Quit();
 }
 
-static void OpenSdlController(int deviceIndex)
+static void OpenSdlController(SDL_JoystickID device)
 {
-	if (!SDL_IsGameController(deviceIndex)) {
-		return;
-	}
-	SDL_GameController *controller = SDL_GameControllerOpen(deviceIndex);
+	SDL_GameController *controller = SdlCompatOpenGameController(device);
 	if (!controller) {
-		ErrorPrint("Couldn't open game controller %d: %s\n",
-		           deviceIndex, SDL_GetError());
+		ErrorPrint("Couldn't open game controller %u: %s\n",
+		           static_cast<unsigned>(device), SDL_GetError());
 		return;
 	}
-	SDL_Joystick *joystick = SDL_GameControllerGetJoystick(controller);
-	const SDL_JoystickID instanceId = SDL_JoystickInstanceID(joystick);
-	if (instanceId < 0 || !SdlControllerRegistry.Connect(instanceId)) {
-		SDL_GameControllerClose(controller);
+	const SDL_JoystickID instanceId =
+		SdlCompatGameControllerInstanceId(controller);
+	if (!SdlCompatJoystickIdIsValid(instanceId)
+	    || !SdlControllerRegistry.Connect(static_cast<int>(instanceId))) {
+		SdlCompatCloseGameController(controller);
 		return;
 	}
 	SdlControllers.emplace(instanceId, controller);
-	const char *name = SDL_GameControllerName(controller);
-	DebugPrint("Opened game controller %d: %s\n", instanceId,
+	const char *name = SdlCompatGameControllerName(controller);
+	DebugPrint("Opened game controller %u: %s\n",
+	           static_cast<unsigned>(instanceId),
 	           name ? name : "unknown controller");
 }
 
@@ -185,14 +192,7 @@ static void OpenSdlController(int deviceIndex)
 static int GetRefreshRate()
 {
 	if (!RefreshRate) {
-		int displayCount = SDL_GetNumVideoDisplays();
-		SDL_DisplayMode mode;
-		for (int i = 0; i < displayCount; i++) {
-			SDL_GetDesktopDisplayMode(0, &mode);
-			if (mode.refresh_rate > RefreshRate) {
-				RefreshRate = mode.refresh_rate;
-			}
-		}
+		RefreshRate = SdlCompatMaximumDisplayRefreshRate();
 		if (!RefreshRate) {
 			RefreshRate = 60;
 		}
@@ -213,11 +213,11 @@ void SetVideoSync()
 	if (fps < CyclesPerSecond) {
 		fprintf(stdout, "WARNING: Game speed is faster than monitor refresh rate.\n");
 		FrameTicks = 1000.0 / CyclesPerSecond;
-		SDL_GL_SetSwapInterval(0); // disable vsync, so we can run faster than the refresh
+		SdlCompatSetSwapInterval(0); // disable vsync, so we can run faster than the refresh
 	} else {
 		FrameTicks = 1000.0 / fps;
-		if (SDL_GL_SetSwapInterval(-1) < 0) { // try to set adaptive vsync
-			SDL_GL_SetSwapInterval(1); // if it failed, set vsync
+		if (!SdlCompatSetSwapInterval(-1)) { // try to set adaptive vsync
+			SdlCompatSetSwapInterval(1); // if it failed, set vsync
 		}
 	}
 	SkipCycles = (static_cast<double>(fps) / CyclesPerSecond) - 1;
@@ -374,7 +374,7 @@ static void setDpiAware() {
 */
 void InitVideoSdl()
 {
-	Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
+	Uint64 flags = SDL_WINDOW_ALLOW_HIGHDPI;
 
 #ifdef PEONPAD_IOS
 	// Keep the game immersive while requiring a deliberate second swipe for
@@ -384,20 +384,16 @@ void InitVideoSdl()
 
 	if (SDL_WasInit(SDL_INIT_VIDEO) == 0) {
 		// Fix tablet input in full-screen mode
-		SDL_setenv("SDL_MOUSE_RELATIVE", "0", 1);
-		int res = SDL_Init(
-					  SDL_INIT_AUDIO | SDL_INIT_VIDEO |
-					  SDL_INIT_EVENTS | SDL_INIT_TIMER);
-		if (res < 0) {
+		if (!SdlCompatSetEnvironmentVariable(
+			    "SDL_MOUSE_RELATIVE", "0", true)) {
+			ErrorPrint("Couldn't configure SDL tablet input: %s\n",
+			           SDL_GetError());
+			exit(1);
+		}
+		if (!SdlCompatInitCore()) {
 			ErrorPrint("Couldn't initialize SDL: %s\n", SDL_GetError());
 			exit(1);
 		}
-		SDL_CUSTOM_KEY_UP = SDL_RegisterEvents(1);
-		SDL_StartTextInput();
-
-		// Clean up on exit
-		atexit(CleanUpVideoSdl);
-
 		// If debug is enabled, Stratagus disable SDL Parachute.
 		// So we need gracefully handle segfaults and aborts.
 #if defined(DEBUG) && !defined(USE_WIN32)
@@ -413,14 +409,23 @@ void InitVideoSdl()
 		signal(SIGABRT, +cleanExit);
 #endif
 	}
-	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0
-	    && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
+	if (SDL_CUSTOM_KEY_UP == 0
+	    && !SdlCompatRegisterUserEvent(&SDL_CUSTOM_KEY_UP)) {
+		ErrorPrint("Couldn't register SDL user event: %s\n", SDL_GetError());
+		exit(1);
+	}
+	static const bool cleanupRegistered = [] {
+		atexit(CleanUpVideoSdl);
+		return true;
+	}();
+	(void)cleanupRegistered;
+	if (!SdlCompatInitGameControllers()) {
 		ErrorPrint("Couldn't initialize SDL game controllers: %s\n",
 		           SDL_GetError());
 	} else {
-		SDL_GameControllerEventState(SDL_ENABLE);
-		for (int deviceIndex = 0; deviceIndex < SDL_NumJoysticks(); ++deviceIndex) {
-			OpenSdlController(deviceIndex);
+		for (const SDL_JoystickID device :
+		     SdlCompatGetGameControllerDevices()) {
+			OpenSdlController(device);
 		}
 	}
 
@@ -466,8 +471,8 @@ void InitVideoSdl()
 		ss >> y;     // Y
 		printf("[Window Pos] %d,%d\n", x, y);
 	}
-	TheWindow = SDL_CreateWindow(win_title, x, y,
-	                             Video.WindowWidth, Video.WindowHeight, flags);
+	TheWindow = SdlCompatCreateWindow(
+		win_title, x, y, Video.WindowWidth, Video.WindowHeight, flags);
 	if (TheWindow == nullptr) {
 		ErrorPrint("Couldn't set %dx%dx%d video mode: %s\n",
 		           Video.Width,
@@ -481,30 +486,35 @@ void InitVideoSdl()
 #else
 	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
 #endif
-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-	int rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
-	if (!Parameters::Instance.benchmark) {
-		rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
-	}
 	if (!TheRenderer) {
-		TheRenderer = SDL_CreateRenderer(TheWindow, -1, rendererFlags);
+		TheRenderer = SdlCompatCreateRenderer(
+			TheWindow, !Parameters::Instance.benchmark);
 	}
 	if (!TheRenderer) {
 		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
 		exit(1);
 	}
-	SDL_RendererInfo rendererInfo;
-	if (!SDL_GetRendererInfo(TheRenderer, &rendererInfo)) {
-		printf("[Renderer] %s\n", rendererInfo.name);
-		if (strlen(rendererInfo.name) == 0) {
+	const char *rendererName = SdlCompatRendererName(TheRenderer);
+	if (rendererName != nullptr) {
+		printf("[Renderer] %s\n", rendererName);
+		if (strlen(rendererName) == 0) {
 			dummyRenderer = true;
 		}
-		if (starts_with(rendererInfo.name, "opengl")) {
+		if (starts_with(rendererName, "opengl")) {
 			LoadShaderExtensions();
 		}
 	}
-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
-	Video.ResizeScreen(Video.Width, Video.Height);
+	if (!SdlCompatStartTextInput(TheWindow)) {
+		ErrorPrint("Couldn't start SDL text input: %s\n", SDL_GetError());
+		exit(1);
+	}
+	if (!SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255)) {
+		ErrorPrint("Couldn't set renderer draw color: %s\n", SDL_GetError());
+		exit(1);
+	}
+	if (!Video.ResizeScreen(Video.Width, Video.Height)) {
+		exit(1);
+	}
 #ifdef PEONPAD_IOS
 	PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
 	                                Video.Width,
@@ -571,33 +581,39 @@ void InitVideoSdl()
 			}
 		}
 		if (icon) {
-			SDL_SetWindowIcon(TheWindow, icon);
+			if (!SdlCompatSetWindowIcon(TheWindow, icon)) {
+				ErrorPrint("Unable to set window icon: %s\n", SDL_GetError());
+			}
 		}
 #endif
 	Video.FullScreen = (SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
-	Video.Depth = TheScreen->format->BitsPerPixel;
+	Video.Depth = SdlCompatGetPixelFormatDetails(TheScreen).BitsPerPixel;
 
 	// Must not allow SDL to switch to relative mouse coordinates when going
 	// fullscreen. So we don't hide the cursor, but instead set a transparent
 	// 1px cursor
 	Uint8 emptyCursor[] = {'\0'};
 	Video.blankCursor.reset(SDL_CreateCursor(emptyCursor, emptyCursor, 1, 1, 0, 0));
-	SDL_SetCursor(Video.blankCursor.get());
+	if (!Video.blankCursor
+	    || !SdlCompatSetCursor(Video.blankCursor.get())) {
+		ErrorPrint("Unable to create blank cursor: %s\n", SDL_GetError());
+		exit(1);
+	}
 
 	InitKey2Str();
 
-	ColorBlack = Video.MapRGB(TheScreen->format, 0, 0, 0);
-	ColorDarkGreen = Video.MapRGB(TheScreen->format, 48, 100, 4);
-	ColorLightBlue = Video.MapRGB(TheScreen->format, 52, 113, 166);
-	ColorBlue = Video.MapRGB(TheScreen->format, 0, 0, 252);
-	ColorOrange = Video.MapRGB(TheScreen->format, 248, 140, 20);
-	ColorWhite = Video.MapRGB(TheScreen->format, 252, 248, 240);
-	ColorLightGray = Video.MapRGB(TheScreen->format, 192, 192, 192);
-	ColorGray = Video.MapRGB(TheScreen->format, 128, 128, 128);
-	ColorDarkGray = Video.MapRGB(TheScreen->format, 64, 64, 64);
-	ColorRed = Video.MapRGB(TheScreen->format, 252, 0, 0);
-	ColorGreen = Video.MapRGB(TheScreen->format, 0, 252, 0);
-	ColorYellow = Video.MapRGB(TheScreen->format, 252, 252, 0);
+	ColorBlack = Video.MapRGB(TheScreen, 0, 0, 0);
+	ColorDarkGreen = Video.MapRGB(TheScreen, 48, 100, 4);
+	ColorLightBlue = Video.MapRGB(TheScreen, 52, 113, 166);
+	ColorBlue = Video.MapRGB(TheScreen, 0, 0, 252);
+	ColorOrange = Video.MapRGB(TheScreen, 248, 140, 20);
+	ColorWhite = Video.MapRGB(TheScreen, 252, 248, 240);
+	ColorLightGray = Video.MapRGB(TheScreen, 192, 192, 192);
+	ColorGray = Video.MapRGB(TheScreen, 128, 128, 128);
+	ColorDarkGray = Video.MapRGB(TheScreen, 64, 64, 64);
+	ColorRed = Video.MapRGB(TheScreen, 252, 0, 0);
+	ColorGreen = Video.MapRGB(TheScreen, 0, 252, 0);
+	ColorYellow = Video.MapRGB(TheScreen, 252, 252, 0);
 
 	UI.MouseWarpPos.x = UI.MouseWarpPos.y = -1;
 }
@@ -725,7 +741,7 @@ static void RemoveSdlController(const EventCallback &callbacks,
 	if (wasActive) {
 		CancelSdlControllerInput(callbacks, ticks);
 	}
-	SDL_GameControllerClose(controller->second);
+	SdlCompatCloseGameController(controller->second);
 	SdlControllers.erase(controller);
 	SdlControllerRegistry.Disconnect(instanceId);
 
@@ -780,6 +796,77 @@ static void PeonPadCancelTouches(const EventCallback &callbacks, unsigned ticks)
 }
 #endif
 
+static bool HandleSdlWindowEvent(const EventCallback &callbacks,
+                                 SDL_Event &event)
+{
+	if (!SdlCompatIsWindowEvent(event)) {
+		return false;
+	}
+
+	const Uint32 windowEvent = SdlCompatWindowEventType(event);
+	switch (windowEvent) {
+		case SDL_WINDOWEVENT_SIZE_CHANGED:
+			SizeChangeCounter++;
+#ifdef PEONPAD_IOS
+			PeonPadIOSApplySafeAreaViewport(
+				TheWindow, TheRenderer, Video.Width,
+				static_cast<int>(Video.Height * Video.VerticalPixelSize));
+#endif
+			break;
+
+		case SDL_WINDOWEVENT_ENTER:
+		case SDL_WINDOWEVENT_LEAVE:
+		{
+			static bool inMainWindow = true;
+			if (inMainWindow && windowEvent == SDL_WINDOWEVENT_LEAVE) {
+				RouteSdlInput(
+					callbacks,
+					{InputIntentKind::PointerExit, InputIntentPhase::Cancel,
+					 {}, {}, KeyModifiers, SdlCompatTicks()});
+			}
+			inMainWindow = windowEvent == SDL_WINDOWEVENT_ENTER;
+			break;
+		}
+
+		case SDL_WINDOWEVENT_FOCUS_GAINED:
+		case SDL_WINDOWEVENT_FOCUS_LOST:
+		{
+			const SdlFocusEventPolicy focusPolicy =
+				GetSdlFocusEventPolicy(
+					windowEvent, IsNetworkGame(), Preference.PauseOnLeave);
+			if (focusPolicy.CancelInput) {
+				CancelSdlPointerInput(callbacks, SdlCompatTicks());
+				CancelSdlControllerInput(callbacks, SdlCompatTicks());
+#ifdef PEONPAD_IOS
+				PeonPadRouteTouchIntents(
+					callbacks,
+					PeonPadTouchInput.Cancel(SdlCompatTicks(), KeyModifiers));
+#endif
+			}
+			if (focusPolicy.ManagePause) {
+				static bool togglePauseOnFocus = false;
+				if (IsSDLWindowVisible
+				    && windowEvent == SDL_WINDOWEVENT_FOCUS_LOST) {
+					IsSDLWindowVisible = false;
+					if (!GamePaused) {
+						togglePauseOnFocus = true;
+						GamePaused = true;
+					}
+				} else if (!IsSDLWindowVisible
+				           && windowEvent == SDL_WINDOWEVENT_FOCUS_GAINED) {
+					IsSDLWindowVisible = true;
+					if (GamePaused && togglePauseOnFocus) {
+						togglePauseOnFocus = false;
+						GamePaused = false;
+					}
+				}
+			}
+			break;
+		}
+	}
+	return true;
+}
+
 /**
 **  Handle interactive input event.
 **
@@ -790,34 +877,58 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 {
 	unsigned int keysym = 0;
 
+	if (!SdlCompatConvertEventToRenderCoordinates(TheRenderer, &event)) {
+		ErrorPrint("Unable to convert SDL event coordinates: %s\n",
+		           SDL_GetError());
+		return;
+	}
+
+	if (HandleSdlWindowEvent(callbacks, event)) {
+		if (&callbacks == GetCallbacks()) {
+			handleInput(&event);
+		}
+		return;
+	}
+
+	const int logicalHeight = static_cast<int>(
+		Video.Height * Video.VerticalPixelSize);
+	if (SdlCompatPointerPressIsOutside(
+		    event, Video.Width, logicalHeight)) {
+		return;
+	}
+
 	switch (event.type) {
 		case SDL_CONTROLLERDEVICEADDED:
 			OpenSdlController(event.cdevice.which);
 			break;
 
 		case SDL_CONTROLLERDEVICEREMOVED:
-			RemoveSdlController(callbacks, event.cdevice.which, SDL_GetTicks());
+			RemoveSdlController(callbacks, event.cdevice.which, SdlCompatTicks());
 			break;
 
 		case SDL_CONTROLLERAXISMOTION:
-			if (ActivateSdlController(callbacks, event.caxis.which,
-			                         SDL_GetTicks(), false)) {
+			if (ActivateSdlController(
+				    callbacks, SdlCompatControllerAxisEvent(event).which,
+				    SdlCompatTicks(), false)) {
 				RouteSdlControllerIntents(
 					callbacks,
 					AdaptSdlControllerAxisEvent(
-						SdlControllerState, event.caxis, SDL_GetTicks()));
+						SdlControllerState,
+						SdlCompatControllerAxisEvent(event), SdlCompatTicks()));
 			}
 			break;
 
 		case SDL_CONTROLLERBUTTONDOWN:
 		case SDL_CONTROLLERBUTTONUP:
 			if (ActivateSdlController(
-				    callbacks, event.cbutton.which, SDL_GetTicks(),
+				    callbacks, SdlCompatControllerButtonEvent(event).which,
+				    SdlCompatTicks(),
 				    event.type == SDL_CONTROLLERBUTTONDOWN)) {
 				RouteSdlControllerIntents(
 					callbacks,
 					AdaptSdlControllerButtonEvent(
-						SdlControllerState, event.cbutton, SDL_GetTicks()));
+						SdlControllerState,
+						SdlCompatControllerButtonEvent(event), SdlCompatTicks()));
 			}
 			break;
 
@@ -831,69 +942,64 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			break;
 
 		case SDL_MOUSEBUTTONDOWN:
+		{
 #ifdef PEONPAD_IOS
 			if (event.button.which == SDL_TOUCH_MOUSEID
 			    && PeonPadTouchInput.SuppressPointerEvents()) {
 				break;
 			}
 #endif
-			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
-			{
-				unsigned button = event.button.button;
-				int modifiers = KeyModifiers;
-#ifdef PEONPAD_IOS_CONTROL_DOCK
-				button = PeonPadIOSMapPointerButton(button, true);
-				if (PeonPadIOSUseAdditiveModifier(true)) {
-					modifiers |= InputModifierAdditiveSelection;
-				}
-#endif
+			const int buttonDownX =
+				static_cast<int>(std::floor(event.button.x + 0.5f));
+			const int buttonDownY = static_cast<int>(
+				std::floor(event.button.y / Video.VerticalPixelSize + 0.5f));
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
-			               {event.button.x, event.button.y}, {}, modifiers,
-			               SDL_GetTicks(), button, 0,
+			               {buttonDownX, buttonDownY}, {}, KeyModifiers,
+			               SdlCompatTicks(), event.button.button, 0,
 			               SdlPointerSource(event.button.which)});
-			}
 			break;
+		}
 
 		case SDL_MOUSEBUTTONUP:
+		{
 #ifdef PEONPAD_IOS
 			if (event.button.which == SDL_TOUCH_MOUSEID
 			    && PeonPadTouchInput.SuppressPointerEvents()) {
 				break;
 			}
 #endif
-			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
-			{
-				unsigned button = event.button.button;
-				int modifiers = KeyModifiers;
-#ifdef PEONPAD_IOS_CONTROL_DOCK
-				button = PeonPadIOSMapPointerButton(button, false);
-				if (PeonPadIOSUseAdditiveModifier(false)) {
-					modifiers |= InputModifierAdditiveSelection;
-				}
-#endif
+			const int buttonUpX =
+				static_cast<int>(std::floor(event.button.x + 0.5f));
+			const int buttonUpY = static_cast<int>(
+				std::floor(event.button.y / Video.VerticalPixelSize + 0.5f));
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
-			               {event.button.x, event.button.y}, {}, modifiers,
-			               SDL_GetTicks(), button, 0,
+			               {buttonUpX, buttonUpY}, {}, KeyModifiers,
+			               SdlCompatTicks(), event.button.button, 0,
 			               SdlPointerSource(event.button.which)});
-			}
 			break;
+		}
 
 		case SDL_MOUSEMOTION:
+		{
 #ifdef PEONPAD_IOS
 			if (event.motion.which == SDL_TOUCH_MOUSEID
 			    && PeonPadTouchInput.SuppressPointerEvents()) {
 				break;
 			}
 #endif
-			event.motion.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+			const int motionX =
+				static_cast<int>(std::floor(event.motion.x + 0.5f));
+			const int motionY = static_cast<int>(
+				std::floor(event.motion.y / Video.VerticalPixelSize + 0.5f));
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
-			               {event.motion.x, event.motion.y}, {}, KeyModifiers,
-			               SDL_GetTicks(), 0, 0,
+			               {motionX, motionY}, {}, KeyModifiers,
+			               SdlCompatTicks(), 0, 0,
 			               SdlPointerSource(event.motion.which)});
 			break;
+		}
 
 #ifdef PEONPAD_IOS
 		case SDL_FINGERDOWN:
@@ -901,29 +1007,33 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 		case SDL_FINGERUP:
 		case SDL_FINGERCANCEL:
 			if (&callbacks != &GameCallbacks) {
-				PeonPadCancelTouches(callbacks, SDL_GetTicks());
+				PeonPadCancelTouches(callbacks, SdlCompatTicks());
 				break;
 			}
 			PeonPadRouteTouchIntents(
 				callbacks,
 				AdaptSdlTouchEvent(PeonPadTouchInput, event.tfinger,
-				                   Video.Width, Video.Height,
-				                   SDL_GetTicks(), KeyModifiers));
+				                   Video.Width, logicalHeight,
+				                   SdlCompatTicks(), KeyModifiers));
 			if (event.type == SDL_FINGERCANCEL) {
 				CancelSdlPointerInputSource(
-					callbacks, SDL_GetTicks(), InputIntentSource::Touch);
+					callbacks, SdlCompatTicks(), InputIntentSource::Touch);
 			}
 			break;
 
 		case SDL_APP_WILLENTERBACKGROUND:
 		case SDL_APP_DIDENTERBACKGROUND:
 		case SDL_APP_TERMINATING:
-			PeonPadCancelTouches(callbacks, SDL_GetTicks());
-			CancelSdlPointerInput(callbacks, SDL_GetTicks());
-			CancelSdlControllerInput(callbacks, SDL_GetTicks());
-#ifdef PEONPAD_IOS_CONTROL_DOCK
-			PeonPadIOSResetTouchControls();
-#endif
+			PeonPadCancelTouches(callbacks, SdlCompatTicks());
+			CancelSdlPointerInput(callbacks, SdlCompatTicks());
+			CancelSdlControllerInput(callbacks, SdlCompatTicks());
+			break;
+
+		case SDL_APP_WILLENTERFOREGROUND:
+		case SDL_APP_DIDENTERFOREGROUND:
+			PeonPadIOSApplySafeAreaViewport(
+				TheWindow, TheRenderer, Video.Width,
+				static_cast<int>(Video.Height * Video.VerticalPixelSize));
 			break;
 #endif
 
@@ -933,102 +1043,40 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				SDL_Event event;
 				SDL_zero(event);
 				event.type = SDL_KEYDOWN;
-				event.key.keysym.sym = SDLK_LCTRL;
+				SdlCompatSetEventKeycode(event, SDLK_LCTRL);
 				SDL_PushEvent(&event);
 				SDL_zero(event);
 				event.type = SDL_KEYDOWN;
-				event.key.keysym.sym = SDLK_LALT;
+				SdlCompatSetEventKeycode(event, SDLK_LALT);
 				SDL_PushEvent(&event);
 				SDL_zero(event);
 				event.type = SDL_KEYDOWN;
-				event.key.keysym.sym = key;
+				SdlCompatSetEventKeycode(event, key);
 				SDL_PushEvent(&event);
 				SDL_zero(event);
 				event.type = SDL_KEYUP;
-				event.key.keysym.sym = key;
+				SdlCompatSetEventKeycode(event, key);
 				SDL_PushEvent(&event);
 				SDL_zero(event);
 				event.type = SDL_KEYUP;
-				event.key.keysym.sym = SDLK_LALT;
+				SdlCompatSetEventKeycode(event, SDLK_LALT);
 				SDL_PushEvent(&event);
 				SDL_zero(event);
 				event.type = SDL_KEYUP;
-				event.key.keysym.sym = SDLK_LCTRL;
+				SdlCompatSetEventKeycode(event, SDLK_LCTRL);
 				SDL_PushEvent(&event);
-			}
-			break;
-
-		case SDL_WINDOWEVENT:
-			switch (event.window.event) {
-				case SDL_WINDOWEVENT_SIZE_CHANGED:
-					SizeChangeCounter++;
-#ifdef PEONPAD_IOS
-					PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
-					                                Video.Width,
-					                                static_cast<int>(Video.Height * Video.VerticalPixelSize));
-#endif
-					break;
-
-				case SDL_WINDOWEVENT_ENTER:
-				case SDL_WINDOWEVENT_LEAVE:
-				{
-					static bool InMainWindow = true;
-
-					if (InMainWindow && (event.window.event == SDL_WINDOWEVENT_LEAVE)) {
-						RouteSdlInput(callbacks,
-						              {InputIntentKind::PointerExit, InputIntentPhase::Cancel,
-						               {}, {}, KeyModifiers, SDL_GetTicks()});
-					}
-					InMainWindow = (event.window.event == SDL_WINDOWEVENT_ENTER);
-				}
-				break;
-
-				case SDL_WINDOWEVENT_FOCUS_GAINED:
-				case SDL_WINDOWEVENT_FOCUS_LOST:
-				{
-				const SdlFocusEventPolicy focusPolicy =
-					GetSdlFocusEventPolicy(event.window.event,
-					                       IsNetworkGame(), Preference.PauseOnLeave);
-				if (focusPolicy.CancelInput) {
-					CancelSdlPointerInput(callbacks, SDL_GetTicks());
-					CancelSdlControllerInput(callbacks, SDL_GetTicks());
-#ifdef PEONPAD_IOS
-					PeonPadRouteTouchIntents(
-						callbacks,
-						PeonPadTouchInput.Cancel(SDL_GetTicks(), KeyModifiers));
-#endif
-				}
-				if (focusPolicy.ManagePause) {
-					static bool DoTogglePause = false;
-
-					if (IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)) {
-						IsSDLWindowVisible = false;
-						if (!GamePaused) {
-							DoTogglePause = !GamePaused;
-							GamePaused = true;
-						}
-					} else if (!IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)) {
-						IsSDLWindowVisible = true;
-						if (GamePaused && DoTogglePause) {
-							DoTogglePause = false;
-							GamePaused = false;
-						}
-					}
-				}
-				}
-				break;
 			}
 			break;
 
 		case SDL_TEXTINPUT:
 		{
-			char *text = event.text.text;
+			const char *text = event.text.text;
 			if (isTextInput((uint8_t) text[0])) {
 				// we only accept US-ascii chars for now
 				char lastKey = text[0];
 				RouteSdlInput(callbacks,
 				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
-				               KeyModifiers, SDL_GetTicks(),
+				               KeyModifiers, SdlCompatTicks(),
 				               static_cast<unsigned char>(lastKey),
 				               static_cast<unsigned char>(lastKey)});
 				// fabricate a keyup event for later
@@ -1042,7 +1090,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 		}
 
 		case SDL_KEYDOWN:
-			keysym = event.key.keysym.sym;
+			keysym = SdlCompatEventKeycode(event);
 		#ifdef PEONPAD_IOS
 			if (keysym == SDLK_BACKQUOTE) {
 				keysym = SDLK_ESCAPE;
@@ -1054,13 +1102,13 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				// only report non-printing keys here, the characters will be reported with the textinput event
 				RouteSdlInput(callbacks,
 				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
-				               KeyModifiers, SDL_GetTicks(), keysym,
+				               KeyModifiers, SdlCompatTicks(), keysym,
 				               keysym < 128 ? keysym : 0});
 			}
 			break;
 
 		case SDL_KEYUP:
-			keysym = event.key.keysym.sym;
+			keysym = SdlCompatEventKeycode(event);
 		#ifdef PEONPAD_IOS
 			if (keysym == SDLK_BACKQUOTE) {
 				keysym = SDLK_ESCAPE;
@@ -1072,7 +1120,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				// only report non-printing keys here, the characters will be reported with the textinput event
 				RouteSdlInput(callbacks,
 				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
-				               KeyModifiers, SDL_GetTicks(), keysym,
+				               KeyModifiers, SdlCompatTicks(), keysym,
 				               keysym < 128 ? keysym : 0});
 			}
 			break;
@@ -1088,7 +1136,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 				char key = static_cast<char>(event.user.code);
 				RouteSdlInput(callbacks,
 				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
-				               KeyModifiers, SDL_GetTicks(),
+				               KeyModifiers, SdlCompatTicks(),
 				               static_cast<unsigned char>(key),
 				               static_cast<unsigned char>(key)});
 			}
@@ -1107,13 +1155,13 @@ void SetCallbacks(const EventCallback *callbacks)
 {
 	if (Callbacks != callbacks) {
 		if (Callbacks) {
-			CancelSdlControllerInput(*Callbacks, SDL_GetTicks());
+			CancelSdlControllerInput(*Callbacks, SdlCompatTicks());
 		}
 		SdlControllerState.SetContext(ControllerContextForCallbacks(callbacks));
 	}
 #ifdef PEONPAD_IOS
 	if (Callbacks && Callbacks != callbacks) {
-		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
+		PeonPadCancelTouches(*Callbacks, SdlCompatTicks());
 	}
 #endif
 	Callbacks = callbacks;
@@ -1143,7 +1191,7 @@ void WaitEventsOneFrame()
 		return;
 	}
 
-	Uint32 ticks = SDL_GetTicks();
+	Uint32 ticks = SdlCompatTicks();
 	if (ticks > NextFrameTicks) { // We are too slow :(
 		++SlowFrameCounter;
 	}
@@ -1163,10 +1211,10 @@ void WaitEventsOneFrame()
 
 	for (;;) {
 		// Time of frame over? This makes the CPU happy. :(
-		ticks = SDL_GetTicks();
+		ticks = SdlCompatTicks();
 		if (!interrupts && ticks < NextFrameTicks) {
 			SDL_Delay(NextFrameTicks - ticks);
-			ticks = SDL_GetTicks();
+			ticks = SdlCompatTicks();
 		}
 		while (ticks >= (unsigned long)(NextFrameTicks)) {
 			++interrupts;
@@ -1213,26 +1261,34 @@ void WaitEventsOneFrame()
 
 static Uint32 LastTick = 0;
 
-static void RenderBenchmarkOverlay()
+static bool RenderBenchmarkOverlay()
 {
 	int RefreshRate = GetRefreshRate();
 	// show a bar representing fps, where the entire bar is the max refresh rate of attached displays
-	Uint32 nextTick = SDL_GetTicks();
+	Uint32 nextTick = SdlCompatTicks();
 	Uint32 frameTime = nextTick - LastTick;
 	int fps = std::min(RefreshRate, static_cast<int>(frameTime > 0 ? (1000.0 / frameTime) : 0));
 	LastTick = nextTick;
 
 	// draw the full bar
-	SDL_SetRenderDrawColor(TheRenderer, 255, 0, 0, 255);
+	if (!SdlCompatSetRenderDrawColor(TheRenderer, 255, 0, 0, 255)) {
+		return false;
+	}
 	SDL_Rect frame = { Video.Width - 10, 2, 8, RefreshRate };
-	SDL_RenderDrawRect(TheRenderer, &frame);
+	if (!SdlCompatRenderDrawRect(TheRenderer, &frame)) {
+		return false;
+	}
 
 	// draw the inner fps gage
-	SDL_SetRenderDrawColor(TheRenderer, 0, 255, 0, 255);
+	if (!SdlCompatSetRenderDrawColor(TheRenderer, 0, 255, 0, 255)) {
+		return false;
+	}
 	SDL_Rect bar = { Video.Width - 8, 2 + RefreshRate - fps, 4, fps };
-	SDL_RenderFillRect(TheRenderer, &bar);
+	if (!SdlCompatRenderFillRect(TheRenderer, &bar)) {
+		return false;
+	}
 
-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
+	return SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
 }
 
 void RealizeVideoMemory()
@@ -1246,17 +1302,35 @@ void RealizeVideoMemory()
 	}
 	if (NumRects) {
 		//SDL_UpdateWindowSurfaceRects(TheWindow, Rects, NumRects);
-		SDL_UpdateTexture(TheTexture, nullptr, TheScreen->pixels, TheScreen->pitch);
+		if (!SdlCompatUpdateTexture(
+			    TheTexture, nullptr, TheScreen->pixels, TheScreen->pitch)) {
+			ErrorPrint("Unable to update screen texture: %s\n", SDL_GetError());
+			return;
+		}
 		if (!RenderWithShader(TheRenderer, TheWindow, TheTexture)) {
-			SDL_RenderClear(TheRenderer);
+			if (!SdlCompatRenderClear(TheRenderer)) {
+				ErrorPrint("Unable to clear renderer: %s\n", SDL_GetError());
+				return;
+			}
 			//for (int i = 0; i < NumRects; i++)
 			//    SDL_UpdateTexture(TheTexture, &Rects[i], TheScreen->pixels, TheScreen->pitch);
-			SDL_RenderCopy(TheRenderer, TheTexture, nullptr, nullptr);
+			if (!SdlCompatRenderCopy(TheRenderer, TheTexture, nullptr, nullptr)) {
+				ErrorPrint("Unable to render screen texture: %s\n",
+				           SDL_GetError());
+				return;
+			}
 		}
 		if (Parameters::Instance.benchmark) {
-			RenderBenchmarkOverlay();
+			if (!RenderBenchmarkOverlay()) {
+				ErrorPrint("Unable to render benchmark overlay: %s\n",
+				           SDL_GetError());
+				return;
+			}
 		}
-		SDL_RenderPresent(TheRenderer);
+		if (!SdlCompatRenderPresent(TheRenderer)) {
+			ErrorPrint("Unable to present renderer: %s\n", SDL_GetError());
+			return;
+		}
 		NumRects = 0;
 	}
 	if (!Preference.HardwareCursor) {
@@ -1317,7 +1391,7 @@ int Str2SdlKey(const char *str)
 */
 bool SdlGetGrabMouse()
 {
-	return SDL_GetWindowGrab(TheWindow);
+	return SdlCompatGetWindowMouseGrab(TheWindow);
 }
 
 /**
@@ -1330,9 +1404,9 @@ void ToggleGrabMouse(int mode)
 	bool grabbed = SdlGetGrabMouse();
 
 	if (mode <= 0 && grabbed) {
-		SDL_SetWindowGrab(TheWindow, SDL_FALSE);
+		SdlCompatSetWindowMouseGrab(TheWindow, false);
 	} else if (mode >= 0 && !grabbed) {
-		SDL_SetWindowGrab(TheWindow, SDL_TRUE);
+		SdlCompatSetWindowMouseGrab(TheWindow, true);
 	}
 }
 
@@ -1344,13 +1418,17 @@ void ToggleFullScreen()
 	if (!TheWindow) { // don't bother if there's no surface.
 		return;
 	}
-	const Uint32 flags = SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP;
-	SDL_SetWindowFullscreen(TheWindow, flags ^ SDL_WINDOW_FULLSCREEN_DESKTOP);
+	const bool fullscreen =
+		(SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+	if (!SdlCompatSetWindowFullscreen(TheWindow, !fullscreen)) {
+		ErrorPrint("Unable to toggle fullscreen: %s\n", SDL_GetError());
+		return;
+	}
 
 #ifdef USE_WIN32
 	Invalidate(); // Update display
 #endif
-	Video.FullScreen = (flags ^ SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+	Video.FullScreen = !fullscreen;
 }
 
 //@}

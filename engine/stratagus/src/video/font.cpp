@@ -178,7 +178,8 @@ static void VideoDrawChar(const CGraphic &g,
 {
 	SDL_Rect srect = {Sint16(gx), Sint16(gy), Uint16(w), Uint16(h)};
 	SDL_Rect drect = {Sint16(x), Sint16(y), 0, 0};
-	SDL_SetPaletteColors(g.getSurface()->format->palette, fc.Colors.data(), 0, fc.Colors.size());
+	SDL_SetPaletteColors(SdlCompatGetSurfacePalette(g.getSurface()),
+	                     fc.Colors.data(), 0, fc.Colors.size());
 	SDL_BlitSurface(g.getSurface(), &srect, TheScreen, &drect);
 }
 
@@ -494,7 +495,7 @@ int convertSDLKeyCharacterToGuichanKey(int key)
 	} input;
 	SDL_Event event{};
 	event.type = SDL_KEYDOWN;
-	event.key.keysym.sym = (SDL_Keycode) key;
+	SdlCompatSetEventKeycode(event, static_cast<SDL_Keycode>(key));
 	auto ret = input.convertSDLEventToGuichanKeyValue(event);
 	return ret.getValue() == -1 ? key : ret.getValue();
 }

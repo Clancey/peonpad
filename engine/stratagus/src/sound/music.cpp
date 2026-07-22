@@ -98,6 +98,9 @@ static void MusicFinishedCallback()
 	if (SDL_PeepEvents(&event, 1, SDL_ADDEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) <= 0) {
 		// if we failed to enqueue the event, clear the flag again
 		MusicFinishedEventQueued.clear();
+		SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+		             "Unable to queue music-finished event: %s",
+		             SDL_GetError());
 	}
 }
 

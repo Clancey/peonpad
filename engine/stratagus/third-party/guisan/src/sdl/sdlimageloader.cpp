@@ -6,11 +6,11 @@
  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
  *
- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
  *
  *                                                         Js_./
  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
  *                                                 _Qhm`] _f "'c  1!5m
  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
  *                                               .)j(] .d_/ '-(  P .   S
@@ -64,6 +64,7 @@
 
 #include "guisan/exception.hpp"
 #include "guisan/sdl/sdlimageloader.hpp"
+#include "sdl_compat.h"
 
 namespace gcn
 {
@@ -128,19 +129,8 @@ namespace gcn
         amask = 0xff000000;
 #endif
 
-        SDL_Surface *colorSurface = SDL_CreateRGBSurface(SDL_SWSURFACE,
-                0, 0, 32,
-                rmask, gmask, bmask, amask);
-
-        SDL_Surface *tmp = nullptr;
-
-        if (colorSurface != nullptr)
-        {
-            tmp = SDL_ConvertSurface(surface, colorSurface->format,
-                                     SDL_SWSURFACE);
-            SDL_FreeSurface(colorSurface);
-        }
-
-        return tmp;
+        const Uint32 format =
+            SdlCompatPixelFormatForMasks(32, rmask, gmask, bmask, amask);
+        return SdlCompatConvertSurface(surface, format);
     }
 }

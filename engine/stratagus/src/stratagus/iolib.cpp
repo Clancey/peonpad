@@ -45,9 +45,12 @@
 
 #include <SDL.h>
 
+#include <array>
 #include <cstdarg>
 #include <cstdio>
+#include <limits>
 #include <map>
+#include <string>
 #include <unordered_map>
 
 #ifdef USE_ZLIB
@@ -80,13 +83,26 @@ public:
 	int read(void *buf, size_t len);
 	int seek(long offset, int whence);
 	long tell();
+	long size();
 	int write(const void *buf, size_t len);
 
 private:
+#ifdef USE_ZLIB
+	long gzipSize();
+#endif
+#ifdef USE_BZ2LIB
+	bool reopenBzipAt(long position);
+	long bzipSize();
+#endif
+
 	ClfType cl_type = ClfType::Invalid; /// type of CFile
+	std::string cl_name;
+	long cl_flags = 0;
+	long cl_position = 0;
+	long cl_size = -1;
 	FILE *cl_plain = nullptr;  /// standard file pointer
 #ifdef USE_ZLIB
-	gzFile cl_gz;    /// gzip file pointer
+	gzFile cl_gz = nullptr;    /// gzip file pointer
 #endif // !USE_ZLIB
 #ifdef USE_BZ2LIB
 	BZFILE *cl_bz = nullptr; /// bzip2 file pointer
@@ -155,6 +171,11 @@ long CFile::tell()
 	return pimpl->tell();
 }
 
+long CFile::size()
+{
+	return pimpl->size();
+}
+
 /**
 **  CLprintf Library file write
 **
@@ -165,20 +186,141 @@ void CFile::write(std::string_view data)
 	pimpl->write(data.data(), data.size());
 }
 
+#ifdef PEONPAD_USE_SDL3
+
+static Sint64 SDLCALL sdl_size(void *userdata)
+{
+	CFile *self = static_cast<CFile *>(userdata);
+	const long size = self->tell();
+	const long result = self->size();
+	if (result < 0) {
+		SDL_SetError("Unable to determine CFile stream size");
+		return -1;
+	}
+	if (self->tell() != size) {
+		SDL_SetError("CFile size query changed the stream position");
+		return -1;
+	}
+	return result;
+}
+
+static Sint64 SDLCALL
+sdl_seek(void *userdata, Sint64 offset, SDL_IOWhence whence)
+{
+	if (offset < std::numeric_limits<long>::min()
+	    || offset > std::numeric_limits<long>::max()) {
+		SDL_SetError("CFile seek offset is outside the supported range");
+		return -1;
+	}
+
+	int origin = SEEK_SET;
+	switch (whence) {
+		case SDL_IO_SEEK_SET:
+			origin = SEEK_SET;
+			break;
+		case SDL_IO_SEEK_CUR:
+			origin = SEEK_CUR;
+			break;
+		case SDL_IO_SEEK_END:
+			origin = SEEK_END;
+			break;
+		default:
+			SDL_SetError("Invalid CFile seek origin");
+			return -1;
+	}
+
+	CFile *self = static_cast<CFile *>(userdata);
+	if (self->seek(static_cast<long>(offset), origin) != 0) {
+		SDL_SetError("Unable to seek CFile stream");
+		return -1;
+	}
+	return self->tell();
+}
+
+static size_t SDLCALL
+sdl_read(void *userdata, void *ptr, size_t size, SDL_IOStatus *status)
+{
+	CFile *self = static_cast<CFile *>(userdata);
+	const size_t request =
+		std::min(size, static_cast<size_t>(std::numeric_limits<int>::max()));
+	const int bytesRead = self->read(ptr, request);
+	if (bytesRead < 0) {
+		*status = SDL_IO_STATUS_ERROR;
+		SDL_SetError("Unable to read CFile stream");
+		return 0;
+	}
+	if (static_cast<size_t>(bytesRead) < request) {
+		*status = SDL_IO_STATUS_EOF;
+	}
+	return static_cast<size_t>(bytesRead);
+}
+
+static size_t SDLCALL
+sdl_write(void *, const void *, size_t, SDL_IOStatus *status)
+{
+	*status = SDL_IO_STATUS_READONLY;
+	SDL_SetError("CFile SDL stream is read-only");
+	return 0;
+}
+
+static bool SDLCALL sdl_flush(void *, SDL_IOStatus *)
+{
+	return true;
+}
+
+static bool SDLCALL sdl_close(void *userdata)
+{
+	std::unique_ptr<CFile> self{static_cast<CFile *>(userdata)};
+	if (self->close() != 0) {
+		SDL_SetError("Unable to close CFile stream");
+		return false;
+	}
+	return true;
+}
+
+SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
+{
+	if (!file) {
+		SDL_SetError("CFile stream requires an owner");
+		return nullptr;
+	}
+	SDL_IOStreamInterface interface;
+	SDL_INIT_INTERFACE(&interface);
+	interface.size = sdl_size;
+	interface.seek = sdl_seek;
+	interface.read = sdl_read;
+	interface.write = sdl_write;
+	interface.flush = sdl_flush;
+	interface.close = sdl_close;
+
+	SDL_IOStream *stream = SDL_OpenIO(&interface, file.get());
+	if (stream != nullptr) {
+		file.release();
+	}
+	return stream;
+}
+
+#else
+
 static Sint64 sdl_size(SDL_RWops *context)
 {
 	CFile *self = reinterpret_cast<CFile*>(context->hidden.unknown.data1);
-	long currentPosition = self->tell();
-	self->seek(0, SEEK_END);
-	long size = self->tell();
-	self->seek(currentPosition, SEEK_SET);
-	return size;
+	const long position = self->tell();
+	const long result = self->size();
+	if (result < 0 || self->tell() != position) {
+		SDL_SetError("Unable to determine CFile stream size");
+		return -1;
+	}
+	return result;
 }
 
 static Sint64 sdl_seek(SDL_RWops *context, Sint64 offset, int whence)
 {
 	CFile *self = reinterpret_cast<CFile*>(context->hidden.unknown.data1);
-	return self->seek(offset, whence);
+	if (self->seek(offset, whence) != 0) {
+		return -1;
+	}
+	return self->tell();
 }
 
 static size_t sdl_read(SDL_RWops *context, void *ptr, size_t size, size_t maxnum)
@@ -187,9 +329,8 @@ static size_t sdl_read(SDL_RWops *context, void *ptr, size_t size, size_t maxnum
 	return self->read(ptr, size * maxnum) / size;
 }
 
-static size_t sdl_write(SDL_RWops *context, const void *ptr, size_t size, size_t num)
+static size_t sdl_write(SDL_RWops *, const void *, size_t, size_t)
 {
-	// Should not be called.
 	return 0;
 }
 
@@ -203,7 +344,14 @@ static int sdl_close(SDL_RWops *context)
 
 SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
 {
+	if (!file) {
+		SDL_SetError("CFile stream requires an owner");
+		return nullptr;
+	}
 	SDL_RWops *ops = SDL_AllocRW();
+	if (ops == nullptr) {
+		return nullptr;
+	}
 	ops->type = SDL_RWOPS_UNKNOWN;
 	ops->hidden.unknown.data1 = file.release();
 	ops->size = sdl_size;
@@ -213,6 +361,8 @@ SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
 	ops->close = sdl_close;
 	return ops;
 }
+
+#endif
 
 //
 //  Implementation.
@@ -252,28 +402,6 @@ static int gzseek(CFile *file, unsigned offset, int whence)
 
 #endif // USE_ZLIB
 
-#ifdef USE_BZ2LIB
-
-/**
-**  Seek on compressed input. (I hope newer libs support it directly)
-**
-**  @param file    File handle
-**  @param offset  Seek position
-**  @param whence  How to seek
-*/
-static void bzseek(BZFILE *file, unsigned offset, int)
-{
-	char buf[32];
-
-	while (offset > sizeof(buf)) {
-		BZ2_bzread(file, buf, sizeof(buf));
-		offset -= sizeof(buf);
-	}
-	BZ2_bzread(file, buf, offset);
-}
-
-#endif // USE_BZ2LIB
-
 int CFile::PImpl::open(const char *name, long openflags)
 {
 	const char *openstring;
@@ -291,17 +419,23 @@ int CFile::PImpl::open(const char *name, long openflags)
 	}
 
 	cl_type = ClfType::Invalid;
+	cl_name.clear();
+	cl_flags = openflags;
+	cl_position = 0;
+	cl_size = -1;
 
 	if (openflags & CL_OPEN_WRITE) {
 #ifdef USE_BZ2LIB
 		if ((openflags & CL_WRITE_BZ2)
-			&& (cl_bz = BZ2_bzopen((std::string(name) + ".bz2").c_str(), openstring))) {
+		    && (cl_name = std::string(name) + ".bz2",
+		        cl_bz = BZ2_bzopen(cl_name.c_str(), openstring))) {
 			cl_type = ClfType::Bzip2;
 		} else
 #endif
 #ifdef USE_ZLIB
 			if ((openflags & CL_WRITE_GZ)
-		        && (cl_gz = gzopen((std::string(name) + ".gz").c_str(), openstring)))
+			    && (cl_name = std::string(name) + ".gz",
+			        cl_gz = gzopen(cl_name.c_str(), openstring)))
 		{
 				cl_type = ClfType::Gzip;
 			} else
@@ -312,12 +446,14 @@ int CFile::PImpl::open(const char *name, long openflags)
 	} else {
 		if (!(cl_plain = fopen(name, openstring))) { // try plain first
 #ifdef USE_ZLIB
-			if ((cl_gz = gzopen((std::string(name) + ".gz").c_str(), "rb"))) {
+			if ((cl_name = std::string(name) + ".gz",
+			     cl_gz = gzopen(cl_name.c_str(), "rb"))) {
 				cl_type = ClfType::Gzip;
 			} else
 #endif
 #ifdef USE_BZ2LIB
-				if ((cl_bz = BZ2_bzopen((std::string(name) + ".bz2").c_str(), "rb"))) {
+				if ((cl_name = std::string(name) + ".bz2",
+				     cl_bz = BZ2_bzopen(cl_name.c_str(), "rb"))) {
 					cl_type = ClfType::Bzip2;
 				} else
 #endif
@@ -331,7 +467,8 @@ int CFile::PImpl::open(const char *name, long openflags)
 #ifdef USE_BZ2LIB
 				if (buf[0] == 'B' && buf[1] == 'Z') {
 					fclose(cl_plain);
-					if ((cl_bz = BZ2_bzopen(name, "rb"))) {
+					cl_name = name;
+					if ((cl_bz = BZ2_bzopen(cl_name.c_str(), "rb"))) {
 						cl_type = ClfType::Bzip2;
 					} else {
 						if (!(cl_plain = fopen(name, "rb"))) {
@@ -343,7 +480,8 @@ int CFile::PImpl::open(const char *name, long openflags)
 #ifdef USE_ZLIB
 				if (buf[0] == 0x1f) { // don't check for buf[1] == 0x8b, so that old compress also works!
 					fclose(cl_plain);
-					if ((cl_gz = gzopen(name, "rb"))) {
+					cl_name = name;
+					if ((cl_gz = gzopen(cl_name.c_str(), "rb"))) {
 						cl_type = ClfType::Gzip;
 					} else {
 						if (!(cl_plain = fopen(name, "rb"))) {
@@ -378,11 +516,13 @@ int CFile::PImpl::close()
 #ifdef USE_ZLIB
 		if (tp == ClfType::Gzip) {
 			ret = gzclose(cl_gz);
+			cl_gz = nullptr;
 		}
 #endif // USE_ZLIB
 #ifdef USE_BZ2LIB
 		if (tp == ClfType::Bzip2) {
 			BZ2_bzclose(cl_bz);
+			cl_bz = nullptr;
 			ret = 0;
 		}
 #endif // USE_BZ2LIB
@@ -390,6 +530,10 @@ int CFile::PImpl::close()
 		errno = EBADF;
 	}
 	cl_type = ClfType::Invalid;
+	cl_name.clear();
+	cl_flags = 0;
+	cl_position = 0;
+	cl_size = -1;
 	return ret;
 }
 
@@ -404,11 +548,22 @@ int CFile::PImpl::read(void *buf, size_t len)
 #ifdef USE_ZLIB
 		if (cl_type == ClfType::Gzip) {
 			ret = gzread(cl_gz, buf, len);
+			if (len != 0 && ret == 0 && gzeof(cl_gz)) {
+				const long position = tell();
+				if (position >= 0) {
+					cl_size = position;
+				}
+			}
 		}
 #endif // USE_ZLIB
 #ifdef USE_BZ2LIB
 		if (cl_type == ClfType::Bzip2) {
 			ret = BZ2_bzread(cl_bz, buf, len);
+			if (ret > 0) {
+				cl_position += ret;
+			} else if (len != 0 && ret == 0) {
+				cl_size = cl_position;
+			}
 		}
 #endif // USE_BZ2LIB
 	} else {
@@ -442,6 +597,7 @@ int CFile::PImpl::write(const void *buf, size_t size)
 {
 	ClfType tp = cl_type;
 	int ret = -1;
+	cl_size = -1;
 
 	if (tp != ClfType::Invalid) {
 		if (tp == ClfType::Plain) {
@@ -455,6 +611,9 @@ int CFile::PImpl::write(const void *buf, size_t size)
 #ifdef USE_BZ2LIB
 		if (tp == ClfType::Bzip2) {
 			ret = BZ2_bzwrite(cl_bz, const_cast<void *>(buf), size);
+			if (ret > 0) {
+				cl_position += ret;
+			}
 		}
 #endif // USE_BZ2LIB
 	} else {
@@ -465,55 +624,268 @@ int CFile::PImpl::write(const void *buf, size_t size)
 
 int CFile::PImpl::seek(long offset, int whence)
 {
-	int ret = -1;
-	ClfType tp = cl_type;
-
-	if (tp != ClfType::Invalid) {
-		if (tp == ClfType::Plain) {
-			ret = fseek(cl_plain, offset, whence);
-		}
+	switch (cl_type) {
+		case ClfType::Plain:
+			return fseek(cl_plain, offset, whence) == 0 ? 0 : -1;
+		case ClfType::Gzip:
 #ifdef USE_ZLIB
-		if (tp == ClfType::Gzip) {
-			ret = gzseek(cl_gz, offset, whence);
+		{
+			const long current = tell();
+			if (current < 0) {
+				return -1;
+			}
+			long base = 0;
+			switch (whence) {
+				case SEEK_SET:
+					break;
+				case SEEK_CUR:
+					base = current;
+					break;
+				case SEEK_END:
+					base = gzipSize();
+					if (base < 0) {
+						return -1;
+					}
+					break;
+				default:
+					return -1;
+			}
+			if ((offset > 0
+			     && base > std::numeric_limits<long>::max() - offset)
+			    || (offset < 0
+			        && base < std::numeric_limits<long>::min() - offset)) {
+				return -1;
+			}
+			const long target = base + offset;
+			if (target < 0) {
+				return -1;
+			}
+			gzclearerr(cl_gz);
+			const z_off_t result = gzseek(cl_gz, target, SEEK_SET);
+			if (result != target) {
+				gzclearerr(cl_gz);
+				gzseek(cl_gz, current, SEEK_SET);
+				return -1;
+			}
+			return 0;
 		}
-#endif // USE_ZLIB
+#else
+			return -1;
+#endif
+		case ClfType::Bzip2:
 #ifdef USE_BZ2LIB
-		if (tp == ClfType::Bzip2) {
-			bzseek(cl_bz, offset, whence);
-			ret = 0;
+		{
+			const long current = cl_position;
+			long base = 0;
+			switch (whence) {
+				case SEEK_SET:
+					break;
+				case SEEK_CUR:
+					base = current;
+					break;
+				case SEEK_END:
+					base = bzipSize();
+					if (base < 0) {
+						return -1;
+					}
+					break;
+				default:
+					return -1;
+			}
+			if ((offset > 0
+			     && base > std::numeric_limits<long>::max() - offset)
+			    || (offset < 0
+			        && base < std::numeric_limits<long>::min() - offset)) {
+				return -1;
+			}
+			const long target = base + offset;
+			if (target < 0) {
+				return -1;
+			}
+			if (target == current) {
+				return 0;
+			}
+			if (reopenBzipAt(target)) {
+				return 0;
+			}
+			reopenBzipAt(current);
+			return -1;
 		}
-#endif // USE_BZ2LIB
-	} else {
-		errno = EBADF;
+#else
+			return -1;
+#endif
+		case ClfType::Invalid:
+			errno = EBADF;
+			return -1;
 	}
-	return ret;
+	return -1;
 }
 
 long CFile::PImpl::tell()
 {
-	int ret = -1;
-	ClfType tp = cl_type;
-
-	if (tp != ClfType::Invalid) {
-		if (tp == ClfType::Plain) {
-			ret = ftell(cl_plain);
-		}
+	switch (cl_type) {
+		case ClfType::Plain:
+			return ftell(cl_plain);
+		case ClfType::Gzip:
 #ifdef USE_ZLIB
-		if (tp == ClfType::Gzip) {
-			ret = gztell(cl_gz);
-		}
-#endif // USE_ZLIB
+			return static_cast<long>(gztell(cl_gz));
+#else
+			return -1;
+#endif
+		case ClfType::Bzip2:
 #ifdef USE_BZ2LIB
-		if (tp == ClfType::Bzip2) {
-			// FIXME: need to implement this
-			ret = -1;
-		}
-#endif // USE_BZ2LIB
-	} else {
-		errno = EBADF;
+			return cl_position;
+#else
+			return -1;
+#endif
+		case ClfType::Invalid:
+			errno = EBADF;
+			return -1;
 	}
-	return ret;
+	return -1;
 }
+
+long CFile::PImpl::size()
+{
+	switch (cl_type) {
+		case ClfType::Plain:
+		{
+			const long original = ftell(cl_plain);
+			if (original < 0 || fseek(cl_plain, 0, SEEK_END) != 0) {
+				return -1;
+			}
+			const long result = ftell(cl_plain);
+			if (fseek(cl_plain, original, SEEK_SET) != 0) {
+				return -1;
+			}
+			return result;
+		}
+		case ClfType::Gzip:
+#ifdef USE_ZLIB
+			return gzipSize();
+#else
+			return -1;
+#endif
+		case ClfType::Bzip2:
+#ifdef USE_BZ2LIB
+			return bzipSize();
+#else
+			return -1;
+#endif
+		case ClfType::Invalid:
+			errno = EBADF;
+			return -1;
+	}
+	return -1;
+}
+
+#ifdef USE_ZLIB
+long CFile::PImpl::gzipSize()
+{
+	if (cl_size >= 0) {
+		return cl_size;
+	}
+	if ((cl_flags & CL_OPEN_READ) == 0) {
+		return -1;
+	}
+	const long original = tell();
+	if (original < 0) {
+		return -1;
+	}
+	gzclearerr(cl_gz);
+	if (gzseek(cl_gz, 0, SEEK_SET) != 0) {
+		return -1;
+	}
+
+	std::array<unsigned char, 64 * 1024> buffer{};
+	long total = 0;
+	for (;;) {
+		const int result =
+			gzread(cl_gz, buffer.data(),
+			       static_cast<unsigned int>(buffer.size()));
+		if (result < 0
+		    || total > std::numeric_limits<long>::max() - result) {
+			gzclearerr(cl_gz);
+			gzseek(cl_gz, original, SEEK_SET);
+			return -1;
+		}
+		if (result == 0) {
+			break;
+		}
+		total += result;
+	}
+	cl_size = total;
+	gzclearerr(cl_gz);
+	if (gzseek(cl_gz, original, SEEK_SET) != original) {
+		return -1;
+	}
+	return cl_size;
+}
+#endif
+
+#ifdef USE_BZ2LIB
+bool CFile::PImpl::reopenBzipAt(long position)
+{
+	if ((cl_flags & CL_OPEN_READ) == 0 || position < 0) {
+		return false;
+	}
+	if (cl_bz != nullptr) {
+		BZ2_bzclose(cl_bz);
+	}
+	cl_bz = BZ2_bzopen(cl_name.c_str(), "rb");
+	cl_position = 0;
+	if (cl_bz == nullptr) {
+		return false;
+	}
+
+	std::array<unsigned char, 64 * 1024> buffer{};
+	while (cl_position < position) {
+		const long remaining = position - cl_position;
+		const int request = static_cast<int>(std::min<long>(
+			remaining, static_cast<long>(buffer.size())));
+		const int result = BZ2_bzread(cl_bz, buffer.data(), request);
+		if (result <= 0) {
+			return false;
+		}
+		cl_position += result;
+	}
+	return true;
+}
+
+long CFile::PImpl::bzipSize()
+{
+	if (cl_size >= 0) {
+		return cl_size;
+	}
+	if ((cl_flags & CL_OPEN_READ) == 0) {
+		return -1;
+	}
+	const long original = cl_position;
+	if (!reopenBzipAt(0)) {
+		return -1;
+	}
+
+	std::array<unsigned char, 64 * 1024> buffer{};
+	for (;;) {
+		const int result =
+			BZ2_bzread(cl_bz, buffer.data(), static_cast<int>(buffer.size()));
+		if (result < 0
+		    || cl_position > std::numeric_limits<long>::max() - result) {
+			reopenBzipAt(original);
+			return -1;
+		}
+		if (result == 0) {
+			break;
+		}
+		cl_position += result;
+	}
+	cl_size = cl_position;
+	if (!reopenBzipAt(original)) {
+		return -1;
+	}
+	return cl_size;
+}
+#endif
 
 
 /**

@@ -1,0 +1,6 @@
+#ifndef PEONPAD_SDL3_COMPAT_SDL_SYSWM_H
+#define PEONPAD_SDL3_COMPAT_SDL_SYSWM_H
+
+#include "SDL.h"
+
+#endif

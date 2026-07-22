@@ -111,6 +111,16 @@ verify_staged_input() {
   else
     fail "$label tracked source snapshot mismatch: expected $expected_revision, got ${actual_revision:-none}"
   fi
+
+  expected_tree_sha=$(manifest_value "$section" staged_tree_sha256)
+  if [ -n "$expected_tree_sha" ]; then
+    if actual_tree_sha=$("$SCRIPT_DIR/tracked-tree-sha256.sh" "$directory") &&
+        [ "$actual_tree_sha" = "$expected_tree_sha" ]; then
+      pass "$label tracked tree digest matches $expected_tree_sha"
+    else
+      fail "$label tracked tree digest mismatch: expected $expected_tree_sha, got ${actual_tree_sha:-unavailable}"
+    fi
+  fi
 }
 
 if [ "$MODE" = maintainer ]; then

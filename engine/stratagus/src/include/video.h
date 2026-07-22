@@ -36,6 +36,7 @@
 #include "color.h"
 #include "filesystem.h"
 #include "sdl2_helper.h"
+#include "sdl_compat.h"
 #include "shaders.h"
 #include "stratagus.h"
 #include "vec2i.h"
@@ -363,26 +364,30 @@ public:
 	void FillCircleClip(Uint32 color, const PixelPos &screenPos, int radius);
 	void FillTransCircleClip(Uint32 color, int x, int y, int radius, unsigned char alpha);
 
-	Uint32 MapRGB(SDL_PixelFormat *f, Uint8 r, Uint8 g, Uint8 b) { return SDL_MapRGB(f, r, g, b); }
-	Uint32 MapRGB(SDL_PixelFormat *f, const CColor &color)
+	Uint32 MapRGB(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b)
 	{
-		return MapRGB(f, color.R, color.G, color.B);
+		return SdlCompatMapRGB(surface, r, g, b);
 	}
-	Uint32 MapRGBA(SDL_PixelFormat *f, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
+	Uint32 MapRGB(SDL_Surface *surface, const CColor &color)
 	{
-		return SDL_MapRGBA(f, r, g, b, a);
+		return MapRGB(surface, color.R, color.G, color.B);
 	}
-	Uint32 MapRGBA(SDL_PixelFormat *f, const CColor &color)
+	Uint32 MapRGBA(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
 	{
-		return MapRGBA(f, color.R, color.G, color.B, color.A);
+		return SdlCompatMapRGBA(surface, r, g, b, a);
 	}
-	void GetRGB(Uint32 c, SDL_PixelFormat *f, Uint8 *r, Uint8 *g, Uint8 *b)
+	Uint32 MapRGBA(SDL_Surface *surface, const CColor &color)
 	{
-		SDL_GetRGB(c, f, r, g, b);
+		return MapRGBA(surface, color.R, color.G, color.B, color.A);
 	}
-	void GetRGBA(Uint32 c, SDL_PixelFormat *f, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
+	void GetRGB(Uint32 c, SDL_Surface *surface, Uint8 *r, Uint8 *g, Uint8 *b)
 	{
-		SDL_GetRGBA(c, f, r, g, b, a);
+		SdlCompatGetRGB(surface, c, r, g, b);
+	}
+	void GetRGBA(Uint32 c, SDL_Surface *surface,
+	             Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
+	{
+		SdlCompatGetRGBA(surface, c, r, g, b, a);
 	}
 
 	int Width = 0;

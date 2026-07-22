@@ -1,6 +1,6 @@
 # PeonPad build status
 
-Status updated: 2026-07-15
+Status updated: 2026-07-19
 
 Remote-to-local handoff updated: 2026-07-11
 
@@ -51,12 +51,19 @@ fields reactivate UIKit's software keyboard when tapped. SDL's separate
 hardware keyboard, mouse, and trackpad paths remain enabled for Magic Keyboard
 and external pointer testing.
 
-The next stacked layer now has an opt-in direct SDL3 foundation. SDL 3.4.12,
-SDL_image 3.4.4, and SDL_mixer 3.2.4 are immutable local inputs; the default
-Stratagus application remains on SDL2. The public foundation payload runs both
-software and Metal renderers on macOS and links the full SDL3-family stack for
-iOS Simulator and native xrsimulator. This is dependency/API evidence, not a
-ported gameplay build or native visionOS shell. See
+The opt-in direct SDL3 lane now builds the complete staged Stratagus engine
+against the immutable SDL 3.4.12, SDL_image 3.4.4, and SDL_mixer 3.2.4
+archives. The port covers lifecycle/events, renderers, surfaces and palettes,
+SDL IO/image ownership, the SDL_mixer 3 object model, controllers, Guisan,
+OpenGL/YUV movies, and all SDL-dependent engine/tool call sites through small
+typed compatibility boundaries. SDL2 remains the default and accepted
+fallback.
+
+Clean July 19 Release evidence includes full arm64 macOS SDL3 and SDL2
+Stratagus/Wargus/tool builds, 74 SDL3 tests and four SDL2 compatibility tests,
+software and Metal foundation runtime, and complete iOS Simulator,
+xrsimulator, and unsigned xros all-target SDL3 engine builds. This is full
+engine source and link parity, not packaged native visionOS gameplay. See
 [sdl3-foundation.md](sdl3-foundation.md).
 
 The SDL3 foundation now owns a native visionOS 2.0+ smoke-shell application

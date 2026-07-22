@@ -135,9 +135,9 @@ void DrawUIButton(ButtonStyle *style, unsigned flags, int x, int y,
 				color.B = (p->BorderColorRGB.B > 0) << ((shift - 0x10) / 2);
 			}
 		}
-		p->BorderColor = Video.MapRGB(TheScreen->format, color);
+		p->BorderColor = Video.MapRGB(TheScreen, color);
 	} else {
-		p->BorderColor = Video.MapRGB(TheScreen->format, p->BorderColorRGB);
+		p->BorderColor = Video.MapRGB(TheScreen, p->BorderColorRGB);
 	}
 	if (p->BorderSize) {
 		for (int i = 0; i < p->BorderSize; ++i) {

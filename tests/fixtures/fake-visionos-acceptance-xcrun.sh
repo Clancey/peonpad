@@ -77,6 +77,14 @@ case "$2" in
       negative-readiness)
         print "PeonPad renderer is not ready" >> "$STDERR_FILE"
         ;;
+      simulator-objc-noise)
+        print "objc[$PID]: Class SimulatorAccessibilityClass is implemented in both /Library/Developer/CoreSimulator/Volumes/xrOS/RuntimeRoot/System/Library/PrivateFrameworks/First.framework/First (0x1000) and /Library/Developer/CoreSimulator/Volumes/xrOS/RuntimeRoot/System/Library/PrivateFrameworks/Second.framework/Second (0x2000). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed." >> "$STDERR_FILE"
+        print "PEONPAD_VISIONOS_READY=1" >> "$STDERR_FILE"
+        ;;
+      simulator-objc-near-miss)
+        print "objc[$PID]: Class PeonPadRenderer is implemented in both /Library/Developer/CoreSimulator/Volumes/xrOS/RuntimeRoot/System/Library/PrivateFrameworks/First.framework/First (0x1000) and /tmp/PeonPadRenderer (0x2000). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed." >> "$STDERR_FILE"
+        print "PEONPAD_VISIONOS_READY=1" >> "$STDERR_FILE"
+        ;;
       startup-ready-only) ;;
       *)
         print "PEONPAD_VISIONOS_READY=1" >> "$STDERR_FILE"

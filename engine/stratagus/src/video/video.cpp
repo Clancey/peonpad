@@ -264,27 +264,38 @@ bool CVideo::ResizeScreen(int w, int h)
 		&& Height == WindowHeight) {
 		// if initially window was the same size as res, keep it that way, unless we've resized
 		int ww, wh;
-		SDL_GetWindowSize(TheWindow, &ww, &wh);
+		if (!SdlCompatGetWindowSize(TheWindow, &ww, &wh)) {
+			ErrorPrint("Unable to query window size: %s\n", SDL_GetError());
+			return false;
+		}
 		if (ww == Width && wh == Height) {
 			WindowWidth = w;
 			WindowHeight = h;
-			SDL_SetWindowSize(TheWindow, w, h);
+			if (!SdlCompatSetWindowSize(TheWindow, w, h)) {
+				ErrorPrint("Unable to resize window: %s\n", SDL_GetError());
+				return false;
+			}
 		}
 	}
 	Width = w;
 	Height = h;
 
-	SDL_RenderSetLogicalSize(TheRenderer, w, h * VerticalPixelSize);
+	if (!SdlCompatSetRenderLogicalSize(
+		    TheRenderer, w, h * VerticalPixelSize)) {
+		ErrorPrint("Unable to set renderer logical size: %s\n", SDL_GetError());
+		return false;
+	}
 
 	// new surface
 	if (TheScreen) {
 		SDL_FreeSurface(TheScreen);
 	}
-	TheScreen = SDL_CreateRGBSurface(0, w, h, 32,
-									 RMASK,
-									 GMASK,
-									 BMASK,
-									 0); // AMASK);
+	TheScreen =
+		SdlCompatCreateSurface(w, h, 32, RMASK, GMASK, BMASK, 0);
+	if (TheScreen == nullptr) {
+		ErrorPrint("Unable to create screen surface: %s\n", SDL_GetError());
+		return false;
+	}
 	Assert(SDL_MUSTLOCK(TheScreen) == 0);
 
 	if (Gui) {
@@ -301,6 +312,15 @@ bool CVideo::ResizeScreen(int w, int h)
 	                               SDL_PIXELFORMAT_ARGB8888,
 	                               SDL_TEXTUREACCESS_STREAMING,
 	                               w, h);
+	if (TheTexture == nullptr) {
+		ErrorPrint("Unable to create screen texture: %s\n", SDL_GetError());
+		return false;
+	}
+	if (!SdlCompatSetTextureNearest(TheTexture)) {
+		ErrorPrint("Unable to set screen texture scale mode: %s\n",
+		           SDL_GetError());
+		return false;
+	}
 
 	SetClipping(0, 0, w - 1, h - 1);
 
@@ -434,7 +454,8 @@ void BlitSurfaceAlphaBlending_32bpp(const SDL_Surface *srcSurface, const SDL_Rec
 */
 void VideoPaletteListAdd(SDL_Surface *surface)
 {
-	if (surface == nullptr || surface->format == nullptr || surface->format->BytesPerPixel != 1) {
+	if (!SdlCompatSurfaceHasFormat(surface)
+	    || SdlCompatGetPixelFormatDetails(surface).BytesPerPixel != 1) {
 		return;
 	}
 	CColorCycling &colorCycling = CColorCycling::GetInstance();
@@ -488,7 +509,9 @@ void SetColorCycleAll(bool value)
 */
 void ColorCycleSurface(SDL_Surface &surface)
 {
-	SDL_Color *palcolors = surface.format->palette->colors;
+	SDL_Palette *const palette = SdlCompatGetSurfacePalette(&surface);
+	Assert(palette != nullptr);
+	SDL_Color *palcolors = palette->colors;
 	SDL_Color colors[256];
 	CColorCycling &colorCycling = CColorCycling::GetInstance();
 
@@ -497,7 +520,7 @@ void ColorCycleSurface(SDL_Surface &surface)
 		memcpy(colors + range.begin, palcolors + range.begin + 1, (range.end - range.begin) * sizeof(SDL_Color));
 		colors[range.end] = palcolors[range.begin];
 	}
-	SDL_SetPaletteColors(surface.format->palette, colors, 0, 256);
+	SDL_SetPaletteColors(palette, colors, 0, 256);
 }
 
 /**
@@ -507,7 +530,9 @@ void ColorCycleSurface(SDL_Surface &surface)
 static void ColorCycleSurface_Reverse(SDL_Surface &surface, unsigned int count)
 {
 	for (unsigned int i = 0; i != count; ++i) {
-		SDL_Color *palcolors = surface.format->palette->colors;
+		SDL_Palette *const palette = SdlCompatGetSurfacePalette(&surface);
+		Assert(palette != nullptr);
+		SDL_Color *palcolors = palette->colors;
 		SDL_Color colors[256];
 		CColorCycling &colorCycling = CColorCycling::GetInstance();
 
@@ -516,7 +541,7 @@ static void ColorCycleSurface_Reverse(SDL_Surface &surface, unsigned int count)
 			memcpy(colors + range.begin + 1, palcolors + range.begin, (range.end - range.begin) * sizeof(SDL_Color));
 			colors[range.begin] = palcolors[range.end];
 		}
-		SDL_SetPaletteColors(surface.format->palette, colors, 0, 256);
+		SDL_SetPaletteColors(palette, colors, 0, 256);
 	}
 }
 
@@ -536,7 +561,8 @@ void ColorCycle()
 		for (SDL_Surface *surface : colorCycling.PaletteList) {
 			ColorCycleSurface(*surface);
 		}
-	} else if (Map.TileGraphic->getSurface()->format->BytesPerPixel == 1) {
+	} else if (SdlCompatGetPixelFormatDetails(
+		           Map.TileGraphic->getSurface()).BytesPerPixel == 1) {
 		++colorCycling.cycleCount;
 		ColorCycleSurface(*Map.TileGraphic->getSurface());
 	}
@@ -549,7 +575,8 @@ void RestoreColorCyclingSurface()
 		for (SDL_Surface *surface : colorCycling.PaletteList) {
 			ColorCycleSurface_Reverse(*surface, colorCycling.cycleCount);
 		}
-	} else if (Map.TileGraphic->getSurface()->format->BytesPerPixel == 1) {
+	} else if (SdlCompatGetPixelFormatDetails(
+		           Map.TileGraphic->getSurface()).BytesPerPixel == 1) {
 		ColorCycleSurface_Reverse(*Map.TileGraphic->getSurface(), colorCycling.cycleCount);
 	}
 	colorCycling.cycleCount = 0;

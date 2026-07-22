@@ -48,6 +48,7 @@ int main(int argc, char **)
 	assert(context[0].Code == InputContextButton);
 	assert(context[0].Source == InputIntentSource::Controller);
 
+	// SDL3 touch coordinates are normalized to [0.0, 1.0].
 	TouchInputState touch;
 	SDL_TouchFingerEvent finger{};
 	finger.type = SDL_EVENT_FINGER_DOWN;
@@ -79,6 +80,23 @@ int main(int argc, char **)
 	assert(touch.ContactCount() == 0);
 	assert(!touch.IsPanning());
 	assert(!touch.SuppressPointerEvents());
+
+	// Negative normalized coordinate: rejected.
+	finger.type = SDL_EVENT_FINGER_DOWN;
+	finger.fingerID = 10;
+	finger.x = -1.0f;
+	finger.y = 0.5f;
+	assert(PeonPadAdaptSDL3TouchEvent(
+		       touch, finger, 640, 480, 16, 0).empty());
+	assert(touch.ContactCount() == 0);
+
+	// Positive out-of-range normalized coordinate (>= 1.0): rejected.
+	finger.fingerID = 11;
+	finger.x = 1.5f;
+	finger.y = 0.5f;
+	assert(PeonPadAdaptSDL3TouchEvent(
+		       touch, finger, 640, 480, 17, 0).empty());
+	assert(touch.ContactCount() == 0);
 
 	const PeonPadSDL3FocusEventPolicy focus =
 		PeonPadGetSDL3FocusEventPolicy(

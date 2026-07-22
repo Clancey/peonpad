@@ -73,7 +73,7 @@ void SaveMapPNG(const char *name)
 	const size_t imageWidth = Map.Info.MapWidth * PixelTileSize.x;
 	const size_t imageHeight = Map.Info.MapHeight * PixelTileSize.y;
 
-	SDL_Surface *mapImage = SDL_CreateRGBSurface(SDL_SWSURFACE,
+	SDL_Surface *mapImage = SdlCompatCreateSurface(
 		imageWidth, imageHeight, 32, RMASK, GMASK, BMASK, 0);
 
 	for (int i = 0; i < Map.Info.MapHeight; ++i) {

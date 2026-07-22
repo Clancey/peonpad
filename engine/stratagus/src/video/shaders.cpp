@@ -34,6 +34,7 @@
 #include "iolib.h"
 #include "parameters.h"
 #include "script.h"
+#include "sdl_gl_compat.h"
 #include "video.h"
 
 #include <SDL_opengl.h>
@@ -286,10 +287,18 @@ bool RenderWithShader(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* back
 static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* backBuffer) {
 	GLint oldProgramId;
 	// Detach the texture
-	SDL_SetRenderTarget(renderer, nullptr);
-	SDL_RenderClear(renderer);
+	if (!SdlCompatSetRenderTarget(renderer, nullptr)
+	    || !SdlCompatRenderClear(renderer)) {
+		ErrorPrint("Unable to prepare shader render path: %s\n", SDL_GetError());
+		return false;
+	}
+	SdlCompatOpenGlTextureBinding textureBinding;
+	if (!SdlCompatBindOpenGlTexture(
+		    renderer, backBuffer, &textureBinding)) {
+		ErrorPrint("Unable to bind shader texture: %s\n", SDL_GetError());
+		return false;
+	}
 
-	SDL_GL_BindTexture(backBuffer, nullptr, nullptr);
 	if (LastShaderIndex != currentShaderIdx) {
 		LastShaderIndex = currentShaderIdx;
 		// force to recalculate everything based on size, too
@@ -333,7 +342,14 @@ static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SD
 		LastVideoVerticalPixelSize = Video.VerticalPixelSize;
 
 		// Window coordinates
-		SDL_GL_GetDrawableSize(win, &DrawableWidth, &DrawableHeight);
+		if (!SdlCompatGetWindowDrawableSize(
+			    win, &DrawableWidth, &DrawableHeight)
+		    || DrawableWidth <= 0 || DrawableHeight <= 0) {
+			ErrorPrint("Unable to query shader drawable size: %s\n",
+			           SDL_GetError());
+			SdlCompatUnbindOpenGlTexture(&textureBinding);
+			return false;
+		}
 
 		// letterboxing
 		double xScale = (double)DrawableWidth / LastVideoWidth;
@@ -407,6 +423,10 @@ static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SD
 		glUseProgram(oldProgramId);
 	}
 
+	if (!SdlCompatUnbindOpenGlTexture(&textureBinding)) {
+		ErrorPrint("Unable to release shader texture: %s\n", SDL_GetError());
+		return false;
+	}
 	return true;
 }
 

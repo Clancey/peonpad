@@ -6,11 +6,11 @@
  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
  *
- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
  *
  *                                                         Js_./
  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
  *                                                 _Qhm`] _f "'c  1!5m
  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
  *                                               .)j(] .d_/ '-(  P .   S
@@ -62,6 +62,7 @@
 
 #include "guisan/exception.hpp"
 #include "guisan/sdl/sdlpixel.hpp"
+#include "sdl_compat.h"
 
 namespace gcn
 {
@@ -149,7 +150,7 @@ namespace gcn
 
         for (i = 0; i < mSurface->w * mSurface->h; ++i)
         {
-            if (((unsigned int*)mSurface->pixels)[i] == SDL_MapRGB(mSurface->format, 255, 0, 255))
+            if (((unsigned int*)mSurface->pixels)[i] == SdlCompatMapRGB(mSurface, 255, 0, 255))
             {
                 hasPink = true;
                 break;
@@ -160,8 +161,8 @@ namespace gcn
         {
             Uint8 r, g, b, a;
 
-            SDL_GetRGBA(((unsigned int*)mSurface->pixels)[i], mSurface->format,
-                        &r, &g, &b, &a);
+            SdlCompatGetRGBA(mSurface, ((unsigned int*)mSurface->pixels)[i],
+                             &r, &g, &b, &a);
 
             if (a != 255)
             {
@@ -170,7 +171,7 @@ namespace gcn
             }
         }
 
-        SDL_Surface* tmp = SDL_ConvertSurfaceFormat(mSurface, surfaceMask, 0);
+        SDL_Surface* tmp = SdlCompatConvertSurface(mSurface, surfaceMask);
         SDL_FreeSurface(mSurface);
         mSurface = nullptr;
 
@@ -182,7 +183,7 @@ namespace gcn
         if (hasPink)
         {
             SDL_SetColorKey(tmp, SDL_TRUE,
-                            SDL_MapRGB(tmp->format,255,0,255));
+                            SdlCompatMapRGB(tmp,255,0,255));
         }
 
         if (surfaceMask == SDL_PIXELFORMAT_RGBA8888)

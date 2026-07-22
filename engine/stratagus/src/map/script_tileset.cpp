@@ -1067,13 +1067,16 @@ void CTilesetGraphicGenerator::removeColors(lua_State *luaStack, sequence_of_ima
 	for (auto &image : images) {
 		/// Do remove colors
 		SDL_Surface *const imgSurface { image.get() };
+		const int bytesPerPixel =
+			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
 		const size_t pixelsNum = imgSurface->w * imgSurface->h;
 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
-			void *const pixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
-			if (checkPixel(pixelPos, colors, imgSurface->format->BytesPerPixel)) {
-				if (!except) removePixel(pixelPos, colorKey, imgSurface->format->BytesPerPixel);
+			void *const pixelPos = reinterpret_cast<void *>(
+				uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
+			if (checkPixel(pixelPos, colors, bytesPerPixel)) {
+				if (!except) removePixel(pixelPos, colorKey, bytesPerPixel);
 			} else if (except) {
-				removePixel(pixelPos, colorKey, imgSurface->format->BytesPerPixel);
+				removePixel(pixelPos, colorKey, bytesPerPixel);
 			}
 		}
 	}
@@ -1097,11 +1100,14 @@ void CTilesetGraphicGenerator::shiftIndexedColors(lua_State *luaStack, sequence_
 	for (auto &image : images) {
 		/// Do shift colors
 		SDL_Surface *const imgSurface { image.get() };
+		const int bytesPerPixel =
+			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
 		const size_t pixelsNum = imgSurface->w * imgSurface->h;
 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
-			void *const pixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
-			if (checkPixel(pixelPos, colors, imgSurface->format->BytesPerPixel)) {
-				shiftIndexedColor(pixelPos, shift, imgSurface->format->BytesPerPixel);
+			void *const pixelPos = reinterpret_cast<void *>(
+				uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
+			if (checkPixel(pixelPos, colors, bytesPerPixel)) {
+				shiftIndexedColor(pixelPos, shift, bytesPerPixel);
 			}
 		}
 	}
@@ -1145,6 +1151,8 @@ void CTilesetGraphicGenerator::flipImages(lua_State *luaStack, sequence_of_image
 	for (auto &image : images) {
 		/// Do flip image
 		SDL_Surface *const imgSurface { image.get() };
+		const int bytesPerPixel =
+			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
 		size_t ySrc, rySrc;
 		size_t xSrc, rxSrc;
 		size_t &xDst = direction & cHorizontal ? rxSrc : xSrc;
@@ -1153,14 +1161,16 @@ void CTilesetGraphicGenerator::flipImages(lua_State *luaStack, sequence_of_image
 		for (ySrc = 0, rySrc = imgSurface->h - 1; ySrc < imgSurface->h; ySrc++, rySrc--) {
 			for (xSrc = 0, rxSrc = imgSurface->w - 1; xSrc < imgSurface->w; xSrc++, rxSrc--) {
 				const size_t pixel = xSrc + ySrc * imgSurface->w;
-				void *const srcPixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
-				flippedImage[xDst + yDst * imgSurface->w] = getPixel(srcPixelPos, imgSurface->format->BytesPerPixel);
+				void *const srcPixelPos = reinterpret_cast<void *>(
+					uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
+				flippedImage[xDst + yDst * imgSurface->w] =
+					getPixel(srcPixelPos, bytesPerPixel);
 			}
 		}
 		uintptr_t dstPixelPos = uintptr_t(imgSurface->pixels);
 		for (auto pixel : flippedImage) {
-			setPixel(reinterpret_cast<void *>(dstPixelPos), pixel, imgSurface->format->BytesPerPixel);
-			dstPixelPos += imgSurface->format->BytesPerPixel;
+			setPixel(reinterpret_cast<void *>(dstPixelPos), pixel, bytesPerPixel);
+			dstPixelPos += bytesPerPixel;
 		}
 	}
 }
@@ -1196,6 +1206,10 @@ void CTilesetGraphicGenerator::composeByChromaKey(lua_State *luaStack, sequence_
 		SDL_Surface *const dstImgSurface { image.get() };
 		SDL_Surface *const srcImgSurface = parsedSrcImages.size() ? parsedSrcImages[srcImgIdx % parsedSrcImages.size()].get()
 																  : srcImage.get();
+		const int destinationBytesPerPixel =
+			SdlCompatGetPixelFormatDetails(dstImgSurface).BytesPerPixel;
+		const int sourceBytesPerPixel =
+			SdlCompatGetPixelFormatDetails(srcImgSurface).BytesPerPixel;
 		if (parsedSrcIndexes.size()) {
  			const graphic_index frameIdx = parsedSrcIndexes[srcImgIdx % parsedSrcIndexes.size()];
 			SrcTilesetGraphic->DrawFrame(frameIdx, 0, 0, srcImage.get());
@@ -1203,11 +1217,16 @@ void CTilesetGraphicGenerator::composeByChromaKey(lua_State *luaStack, sequence_
 
 		const size_t pixelsNum = dstImgSurface->w * dstImgSurface->h;
 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
-			void *const dstPixelPos = reinterpret_cast<void *>(uintptr_t(dstImgSurface->pixels) + pixel * dstImgSurface->format->BytesPerPixel);
-			void *const srcPixelPos = reinterpret_cast<void *>(uintptr_t(srcImgSurface->pixels) + pixel * dstImgSurface->format->BytesPerPixel);
+			void *const dstPixelPos = reinterpret_cast<void *>(
+				uintptr_t(dstImgSurface->pixels)
+				+ pixel * destinationBytesPerPixel);
+			void *const srcPixelPos = reinterpret_cast<void *>(
+				uintptr_t(srcImgSurface->pixels) + pixel * sourceBytesPerPixel);
 
-			if (checkPixel(dstPixelPos, colors, dstImgSurface->format->BytesPerPixel)) {
-				setPixel(dstPixelPos, getPixel(srcPixelPos, srcImgSurface->format->BytesPerPixel), dstImgSurface->format->BytesPerPixel);
+			if (checkPixel(dstPixelPos, colors, destinationBytesPerPixel)) {
+				setPixel(dstPixelPos,
+				         getPixel(srcPixelPos, sourceBytesPerPixel),
+				         destinationBytesPerPixel);
 			}
 		}
 		srcImgIdx++;
@@ -1292,22 +1311,24 @@ void CTilesetGraphicGenerator::parseModifier(lua_State *luaStack, const int argP
 **/
 sdl2::SurfacePtr CTilesetGraphicGenerator::newBlankImage() const
 {
-	const SDL_PixelFormat *format = SrcTilesetGraphic->getSurface()->format;
+	SDL_Surface *const source = SrcTilesetGraphic->getSurface();
+	const SdlCompatPixelFormatDetails format =
+		SdlCompatGetPixelFormatDetails(source);
 
-	sdl2::SurfacePtr blankImg{SDL_CreateRGBSurface(SrcTilesetGraphic->getSurface()->flags,
-	                                               SrcTileset->getPixelTileSize().x,
-	                                               SrcTileset->getPixelTileSize().y,
-	                                               format->BitsPerPixel,
-	                                               format->Rmask,
-	                                               format->Gmask,
-	                                               format->Bmask,
-	                                               format->Amask)};
+	sdl2::SurfacePtr blankImg{SdlCompatCreateSurface(
+		SrcTileset->getPixelTileSize().x,
+		SrcTileset->getPixelTileSize().y,
+		format.BitsPerPixel,
+		format.Rmask,
+		format.Gmask,
+		format.Bmask,
+		format.Amask)};
 	uint32_t colorKey = 0;
-	if (!SDL_GetColorKey(SrcTilesetGraphic->getSurface(), &colorKey)) {
-		SDL_SetColorKey(blankImg.get(), SDL_TRUE, colorKey);
+	if (SdlCompatGetColorKey(source, &colorKey)) {
+		SdlCompatSetColorKey(blankImg.get(), true, colorKey);
 	}
-	if (format->palette) {
-		SDL_SetSurfacePalette(blankImg.get(), format->palette);
+	if (SDL_Palette *palette = SdlCompatGetSurfacePalette(source)) {
+		SDL_SetSurfacePalette(blankImg.get(), palette);
 	}
 	return blankImg;
 }

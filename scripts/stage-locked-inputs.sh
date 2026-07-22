@@ -167,7 +167,8 @@ STRATAGUS_IOS_LAUNCH_PATCH="$ROOT_DIR/patches/stratagus/0006-ios-launch-image-re
 STRATAGUS_HOST_TOLUA_PATCH="$ROOT_DIR/patches/stratagus/0007-build-host-toluapp.patch"
 STRATAGUS_INPUT_INTENT_PATCH="$ROOT_DIR/patches/stratagus/0008-input-intent-router.patch"
 STRATAGUS_CONTROLLER_INPUT_PATCH="$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
-STRATAGUS_VISION_CONTROLS_PATCH="$ROOT_DIR/patches/stratagus/0010-visionos-indirect-controls.patch"
+STRATAGUS_SDL3_ENGINE_PATCH="$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
+STRATAGUS_VISION_CONTROLS_PATCH="$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
 WARGUS_PATCH="$ROOT_DIR/patches/wargus/0001-xcode-26-apple-vendored-deps.patch"
 WARGUS_IOS_PATCH="$ROOT_DIR/patches/wargus/0002-ios-data-layer-library.patch"
 ALEONA_KOTH_PATCH="$ROOT_DIR/patches/aleonas-tales/0001-fix-king-of-the-hill-map-syntax.patch"
@@ -253,13 +254,31 @@ print "PATCHED Stratagus with the PeonPad input-intent router"
 patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
   < "$STRATAGUS_CONTROLLER_INPUT_PATCH"
 print "PATCHED Stratagus with PeonPad game-controller input"
+[[ -f "$STRATAGUS_SDL3_ENGINE_PATCH" ]] || {
+  print -u2 "required Stratagus direct SDL3 engine patch is missing"
+  exit 1
+}
+patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
+  < "$STRATAGUS_SDL3_ENGINE_PATCH"
+print "PATCHED Stratagus with the direct SDL3 engine compatibility layer"
 [[ -f "$STRATAGUS_VISION_CONTROLS_PATCH" ]] || {
-  print -u2 "required Stratagus Vision controls patch is missing"
+  print -u2 "required Stratagus Vision indirect controls patch is missing"
   exit 1
 }
 patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
   < "$STRATAGUS_VISION_CONTROLS_PATCH"
 print "PATCHED Stratagus with PeonPad Vision indirect controls"
+EXPECTED_STRATAGUS_TREE_SHA=$(manifest_value \
+  "sources.stratagus" "staged_tree_sha256")
+ACTUAL_STRATAGUS_TREE_SHA=$(
+  "$ROOT_DIR/scripts/tracked-tree-sha256.sh" "$ROOT_DIR/engine/stratagus"
+)
+[[ "$ACTUAL_STRATAGUS_TREE_SHA" == "$EXPECTED_STRATAGUS_TREE_SHA" ]] || {
+  print -u2 "staged Stratagus tree digest mismatch"
+  print -u2 "expected: $EXPECTED_STRATAGUS_TREE_SHA"
+  print -u2 "actual:   $ACTUAL_STRATAGUS_TREE_SHA"
+  exit 1
+}
 export_repository "Wargus" "sources.wargus" \
   "$WARGUS_SOURCE" "$ROOT_DIR/game/wargus"
 [[ -f "$WARGUS_PATCH" ]] || {

@@ -3,14 +3,6 @@ include(FetchContent)
 set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE NEVER)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 
-if(PEONPAD_ENABLE_ENGINE)
-  message(FATAL_ERROR
-    "PEONPAD_ENABLE_SDL3 is an isolated foundation lane. The accepted "
-    "PEONPAD_ENABLE_ENGINE SDL2 build remains the default until the engine "
-    "video and audio ports are complete."
-  )
-endif()
-
 if(APPLE)
   enable_language(OBJCXX)
 endif()
@@ -83,6 +75,18 @@ target_include_directories(peonpad_sdl3_input_adapter PUBLIC
 )
 target_link_libraries(peonpad_sdl3_input_adapter PUBLIC SDL3::SDL3)
 target_compile_features(peonpad_sdl3_input_adapter PUBLIC cxx_std_17)
+
+add_library(peonpad_sdl3_mixer_adapter STATIC
+  platform/sdl3/PeonPadSDL3MixerAdapter.cpp
+)
+target_include_directories(peonpad_sdl3_mixer_adapter PUBLIC
+  platform/sdl3/include
+)
+target_link_libraries(peonpad_sdl3_mixer_adapter PUBLIC
+  SDL3::SDL3
+  SDL3_mixer::SDL3_mixer
+)
+target_compile_features(peonpad_sdl3_mixer_adapter PUBLIC cxx_std_17)
 
 set(_peonpad_sdl3_smoke_sources tests/sdl3_foundation_smoke.cpp)
 if(APPLE)
@@ -187,4 +191,19 @@ if(BUILD_TESTING AND
     COMMAND peonpad_sdl3_input_adapter_test --verify-assertions)
   add_test(NAME peonpad_sdl3_foundation
     COMMAND peonpad_sdl3_smoke --headless)
+
+  add_executable(peonpad_sdl3_mixer_adapter_test
+    tests/sdl3_mixer_adapter_test.cpp
+  )
+  target_compile_features(peonpad_sdl3_mixer_adapter_test PRIVATE cxx_std_17)
+  target_compile_definitions(peonpad_sdl3_mixer_adapter_test PRIVATE NDEBUG)
+  target_link_libraries(peonpad_sdl3_mixer_adapter_test PRIVATE
+    peonpad_sdl3_mixer_adapter
+  )
+  add_test(NAME peonpad_sdl3_mixer_adapter
+    COMMAND peonpad_sdl3_mixer_adapter_test)
+  add_test(NAME peonpad_sdl3_mixer_assertions_inactive
+    COMMAND peonpad_sdl3_mixer_adapter_test --verify-assertions)
+  set_tests_properties(peonpad_sdl3_mixer_assertions_inactive PROPERTIES
+    WILL_FAIL TRUE)
 endif()

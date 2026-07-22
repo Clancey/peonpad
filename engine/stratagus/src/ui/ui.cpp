@@ -198,7 +198,7 @@ void InitUserInterface()
 
 	SetViewportMode(VIEWPORT_SINGLE);
 
-	UI.CompletedBarColor = Video.MapRGB(TheScreen->format, UI.CompletedBarColorRGB);
+	UI.CompletedBarColor = Video.MapRGB(TheScreen, UI.CompletedBarColorRGB);
 	UI.ViewportCursorColor = ColorWhite;
 }
 

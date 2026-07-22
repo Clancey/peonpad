@@ -1447,7 +1447,9 @@ void CTextField::mousePressed(gcn::MouseEvent &event) /* override */
 #ifdef PEONPAD_IOS
 		// SDL starts text input before the iOS window has focus during launch.
 		// Ask again when an actual field is tapped so UIKit can show its keyboard.
-		SDL_StartTextInput();
+		if (!SdlCompatStartTextInput(TheWindow)) {
+			ErrorPrint("Couldn't restart SDL text input: %s\n", SDL_GetError());
+		}
 #endif
 		mSelectStart = mText->getCaretPosition();
 		mSelectEndOffset = 0;

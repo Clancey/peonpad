@@ -61,6 +61,7 @@
 #include "guisan/sdl/sdlinput.hpp"
 
 #include "guisan/exception.hpp"
+#include "sdl_compat.h"
 
 namespace gcn
 {
@@ -162,12 +163,12 @@ namespace gcn
           case SDL_KEYDOWN:
               keyInput.setKey(convertSDLEventToGuichanKeyValue(event));
               keyInput.setType(KeyInput::Pressed);
-              keyInput.setShiftPressed(event.key.keysym.mod & KMOD_SHIFT);
-              keyInput.setControlPressed(event.key.keysym.mod & KMOD_CTRL);
-              keyInput.setAltPressed(event.key.keysym.mod & KMOD_ALT);
-              keyInput.setMetaPressed(event.key.keysym.mod & KMOD_GUI);
-              keyInput.setNumericPad(event.key.keysym.sym >= SDLK_KP_0
-                                     && event.key.keysym.sym <= SDLK_KP_EQUALS);
+              keyInput.setShiftPressed(SdlCompatEventKeymod(event) & KMOD_SHIFT);
+              keyInput.setControlPressed(SdlCompatEventKeymod(event) & KMOD_CTRL);
+              keyInput.setAltPressed(SdlCompatEventKeymod(event) & KMOD_ALT);
+              keyInput.setMetaPressed(SdlCompatEventKeymod(event) & KMOD_GUI);
+              keyInput.setNumericPad(SdlCompatEventKeycode(event) >= SDLK_KP_0
+                                     && SdlCompatEventKeycode(event) <= SDLK_KP_EQUALS);
 
               if (!keyInput.getKey().isPrintable() || keyInput.isAltPressed()
                   || keyInput.isControlPressed())
@@ -179,12 +180,12 @@ namespace gcn
           case SDL_KEYUP:
               keyInput.setKey(convertSDLEventToGuichanKeyValue(event));
               keyInput.setType(KeyInput::Released);
-              keyInput.setShiftPressed(event.key.keysym.mod & KMOD_SHIFT);
-              keyInput.setControlPressed(event.key.keysym.mod & KMOD_CTRL);
-              keyInput.setAltPressed(event.key.keysym.mod & KMOD_ALT);
-              keyInput.setMetaPressed(event.key.keysym.mod & KMOD_GUI);
-              keyInput.setNumericPad(event.key.keysym.sym >= SDLK_KP_0
-                                     && event.key.keysym.sym <= SDLK_KP_EQUALS);
+              keyInput.setShiftPressed(SdlCompatEventKeymod(event) & KMOD_SHIFT);
+              keyInput.setControlPressed(SdlCompatEventKeymod(event) & KMOD_CTRL);
+              keyInput.setAltPressed(SdlCompatEventKeymod(event) & KMOD_ALT);
+              keyInput.setMetaPressed(SdlCompatEventKeymod(event) & KMOD_GUI);
+              keyInput.setNumericPad(SdlCompatEventKeycode(event) >= SDLK_KP_0
+                                     && SdlCompatEventKeycode(event) <= SDLK_KP_EQUALS);
 
               mKeyInputQueue.push(keyInput);
               break;
@@ -225,12 +226,12 @@ namespace gcn
                   mouseInput.setType(MouseInput::WheelMovedDown);
               break;
 
-          case SDL_WINDOWEVENT:
+          default:
               /*
                * This occurs when the mouse leaves the window and the Gui-chan
                * application loses its mousefocus.
                */
-              if (event.window.event & SDL_WINDOWEVENT_LEAVE)
+              if (SdlCompatIsWindowEvent(event, SDL_WINDOWEVENT_LEAVE))
               {
                   mMouseInWindow = false;
 
@@ -244,7 +245,7 @@ namespace gcn
                   }
               }
 
-              if (event.window.event & SDL_WINDOWEVENT_ENTER)
+              if (SdlCompatIsWindowEvent(event, SDL_WINDOWEVENT_ENTER))
               {
                   mMouseInWindow = true;
               }
@@ -275,7 +276,7 @@ namespace gcn
     {
         int value = -1;
 
-        switch (event.key.keysym.sym)
+        switch (SdlCompatEventKeycode(event))
         {
           case SDLK_TAB:
               value = Key::Tab;
@@ -414,13 +415,13 @@ namespace gcn
               break;
 
           default:
-              value = event.key.keysym.sym;
+              value = SdlCompatEventKeycode(event);
               break;
         }
 
-        if (!(event.key.keysym.mod & KMOD_NUM))
+        if (!(SdlCompatEventKeymod(event) & KMOD_NUM))
         {
-            switch (event.key.keysym.sym)
+            switch (SdlCompatEventKeycode(event))
             {
               case SDLK_KP_0:
                   value = Key::Insert;
@@ -458,7 +459,7 @@ namespace gcn
         }
         else
         {
-            switch (event.key.keysym.sym)
+            switch (SdlCompatEventKeycode(event))
             {
               case SDLK_KP_0:
                   value = SDLK_0;

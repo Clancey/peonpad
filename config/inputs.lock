@@ -3,7 +3,7 @@
 # that a build is allowed to resolve from the network.
 
 schema_version = 1
-captured_at = "2026-07-10T12:29:31-05:00"
+captured_at = "2026-07-19T00:38:10-08:00"
 
 [reference]
 path = "ref"
@@ -48,6 +48,9 @@ expected_path = "ref/stratagus"
 remote = "https://github.com/Wargus/stratagus.git"
 revision = "3d87c93f7fd8c0b62ee1be5df0a6d9efc72ca6cc"
 dependencies_revision = "58de69c9ef44d1bc915fce9924333d395c7a40d2"
+# SHA-256 over path, executable bit, symlink target, and contents for every
+# tracked file beneath engine/stratagus after applying the ordered patch stack.
+staged_tree_sha256 = "dcbb82935e833c76d466dabb2a35d195ef9188fd9b53f54f4f9c23555e5f0c47"
 license = "GPL-2.0-or-later"
 license_sha256 = "db296f2f7f35bca3a174efb0eb392b3b17bd94b341851429a3dff411b1c2fc73"
 

@@ -599,7 +599,7 @@ void CPlayer::Save(CFile &file) const
 
 	Uint8 r, g, b;
 
-	SDL_GetRGB(p.Color, TheScreen->format, &r, &g, &b);
+	SdlCompatGetRGB(TheScreen, p.Color, &r, &g, &b);
 	file.printf("\n  \"color\", { %d, %d, %d },", r, g, b);
 
 	// UnitColors done by init code.
@@ -1262,7 +1262,8 @@ void GraphicPlayerPixels(int colorIndex, const CGraphic &sprite)
 	Assert(SDL_MUSTLOCK(sprite.getSurface()) == 0);
 	// TODO: This vector allocation is costly in profiles
 	std::vector<SDL_Color> sdlColors = PlayerColorsSDL[colorIndex];
-	const auto palette = sprite.getSurface()->format->palette;
+	SDL_Palette *const palette =
+		SdlCompatGetSurfacePalette(sprite.getSurface());
 	if (palette && palette->ncolors <= PlayerColorIndexStart) {
 		static std::set<fs::path> warnedGraphics;
 		if (warnedGraphics.insert(sprite.File).second) {
@@ -1287,31 +1288,34 @@ void GraphicPlayerPixels(int colorIndex, const CGraphic &sprite)
 		}
 		SDL_SetPaletteColors(palette, &sdlColors[0], PlayerColorIndexStart, count);
 	}
-	if (sprite.SurfaceFlip && sprite.SurfaceFlip->format->palette
-	    && sprite.SurfaceFlip->format->palette->ncolors <= PlayerColorIndexStart) {
+	SDL_Palette *const flippedPalette =
+		sprite.SurfaceFlip
+			? SdlCompatGetSurfacePalette(sprite.SurfaceFlip)
+			: nullptr;
+	if (flippedPalette && flippedPalette->ncolors <= PlayerColorIndexStart) {
 		static std::set<fs::path> warnedGraphics;
 		if (warnedGraphics.insert(sprite.File).second) {
 			ErrorPrint("Warning: flipped graphic '%s' palette has only %d colors; player color remap "
 			           "requires entries starting at %d and will be skipped\n",
 			           sprite.File.string().c_str(),
-			           sprite.SurfaceFlip->format->palette->ncolors,
+			           flippedPalette->ncolors,
 			           PlayerColorIndexStart);
 		}
-	} else if (sprite.SurfaceFlip && sprite.SurfaceFlip->format->palette) {
+	} else if (flippedPalette) {
 		const int count = std::min(PlayerColorIndexCount,
-		                           sprite.SurfaceFlip->format->palette->ncolors - PlayerColorIndexStart);
+		                           flippedPalette->ncolors - PlayerColorIndexStart);
 		if (count < PlayerColorIndexCount) {
 			static std::set<fs::path> warnedGraphics;
 			if (warnedGraphics.insert(sprite.File).second) {
 				ErrorPrint("Warning: flipped graphic '%s' palette has only %d colors; player color remap "
 				           "needs entries %d..%d and will be clamped\n",
 				           sprite.File.string().c_str(),
-				           sprite.SurfaceFlip->format->palette->ncolors,
+				           flippedPalette->ncolors,
 				           PlayerColorIndexStart,
 				           PlayerColorIndexStart + PlayerColorIndexCount - 1);
 			}
 		}
-		SDL_SetPaletteColors(sprite.SurfaceFlip->format->palette, &sdlColors[0], PlayerColorIndexStart, count);
+		SDL_SetPaletteColors(flippedPalette, &sdlColors[0], PlayerColorIndexStart, count);
 	}
 }
 

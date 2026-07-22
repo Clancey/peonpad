@@ -386,7 +386,8 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
-  0010-visionos-indirect-controls.patch \
+  0011-visionos-indirect-controls.patch \
+  0010-direct-sdl3-engine.patch \
   0009-game-controller-input.patch \
   0008-input-intent-router.patch \
   0007-build-host-toluapp.patch \
@@ -416,9 +417,27 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
-  < "$ROOT_DIR/patches/stratagus/0010-visionos-indirect-controls.patch"
+  < "$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
+EXPECTED_STRATAGUS_TREE_SHA=$(awk -F ' *= *' '
+  $0 == "[sources.stratagus]" {in_section = 1; next}
+  /^\[/ {in_section = 0}
+  in_section && $1 == "staged_tree_sha256" {
+    gsub(/"/, "", $2)
+    print $2
+    exit
+  }
+' "$ROOT_DIR/config/inputs.lock")
+ACTUAL_STRATAGUS_TREE_SHA=$(
+  "$ROOT_DIR/scripts/tracked-tree-sha256.sh" "$ROOT_DIR/engine/stratagus"
+)
+[[ "$ACTUAL_STRATAGUS_TREE_SHA" == "$EXPECTED_STRATAGUS_TREE_SHA" ]] || {
+  print -u2 "reconstructed Stratagus tree digest does not match the input lock"
+  exit 1
+}
 cmake -E remove_directory "$PATCH_CHAIN_ROOT"
 if [[ "$MODE" == maintainer ]]; then
   patch --dry-run -s -d "$ROOT_DIR/ref/wargus" -p1 \

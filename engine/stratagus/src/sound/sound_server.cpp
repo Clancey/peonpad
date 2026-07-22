@@ -39,6 +39,7 @@
 
 #include "stratagus.h"
 
+#include "sdl_compat.h"
 #include "sound_server.h"
 
 #ifdef USE_FLUIDSYNTH
@@ -301,7 +302,13 @@ static void ChannelFinished(int channel)
 		event.type = SDL_SOUND_FINISHED;
 		event.user.code = channel;
 		event.user.data1 = (void*) Channels[channel].FinishedCallback;
-		SDL_PeepEvents(&event, 1, SDL_ADDEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT);
+		if (SDL_PeepEvents(
+			    &event, 1, SDL_ADDEVENT,
+			    SDL_FIRSTEVENT, SDL_LASTEVENT) <= 0) {
+			SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+			             "Unable to queue sound-finished event: %s",
+			             SDL_GetError());
+		}
 	}
 	Channels[channel].Unit = nullptr;
 }
@@ -698,9 +705,14 @@ static bool InitSdlSound()
 #ifndef BUILD_VENDORED_SDL
 	const char *cfg = SDL_getenv("TIMIDITY_CFG");
 	if (!cfg && fs::exists(timidityCfg)) {
-		SDL_setenv("TIMIDITY_CFG", timidityCfg.generic_u8string().c_str(), 0);
+		SdlCompatSetEnvironmentVariable(
+			"TIMIDITY_CFG", timidityCfg.generic_u8string().c_str(), false);
 	} else {
-		SDL_setenv("TIMIDITY_CFG", (GetExecutablePath().parent_path() / "freepats" / "crude.cfg").generic_u8string().c_str(), 0);
+		SdlCompatSetEnvironmentVariable(
+			"TIMIDITY_CFG",
+			(GetExecutablePath().parent_path() / "freepats" / "crude.cfg")
+				.generic_u8string().c_str(),
+			false);
 	}
 #else
 	if (fs::exists(timidityCfg)) {
@@ -713,6 +725,7 @@ static bool InitSdlSound()
 	Mix_Init(std::numeric_limits<unsigned int>::max());
 	if (Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, 1024)) {
 		ErrorPrint("Couldn't open audio: %s\n", SDL_GetError());
+		Mix_Quit();
 		return false;
 	} else {
 		printf("Supported sound decoders:");
@@ -742,9 +755,23 @@ bool InitSound()
 		SoundInitialized = false;
 		return false;
 	}
-	SDL_SOUND_FINISHED = SDL_RegisterEvents(1);
+	if (!SdlCompatRegisterUserEvent(&SDL_SOUND_FINISHED)) {
+		ErrorPrint("Couldn't register sound event: %s\n", SDL_GetError());
+		Mix_CloseAudio();
+		Mix_Quit();
+		SoundInitialized = false;
+		return false;
+	}
+	const int allocatedChannels = Mix_AllocateChannels(MaxChannels);
+	if (allocatedChannels != MaxChannels) {
+		ErrorPrint("Couldn't allocate %d sound channels (got %d): %s\n",
+		           MaxChannels, allocatedChannels, SDL_GetError());
+		Mix_CloseAudio();
+		Mix_Quit();
+		SoundInitialized = false;
+		return false;
+	}
 	SoundInitialized = true;
-	Mix_AllocateChannels(MaxChannels);
 	Mix_ChannelFinished(ChannelFinished);
 
 	// Now we're ready for the callback to run

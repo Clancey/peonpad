@@ -1,0 +1,6 @@
+#ifndef PEONPAD_SDL3_COMPAT_SDL_OPENGL_GLEXT_H
+#define PEONPAD_SDL3_COMPAT_SDL_OPENGL_GLEXT_H
+
+#include <SDL3/SDL_opengl_glext.h>
+
+#endif

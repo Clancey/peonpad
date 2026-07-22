@@ -53,7 +53,9 @@ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bu
 set(PEONPAD_IOS_LAUNCH_IMAGE "" CACHE FILEPATH "PeonPad launch image copied into the iOS bundle")
 set(PEONPAD_IOS_ICON_DIR "" CACHE PATH "PeonPad iPad icon files copied into the iOS bundle")
 set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
-option(PEONPAD_IOS_CONTROL_DOCK "Add PeonPad gaze-targetable touch controls" OFF)
+set(PEONPAD_SDL3_COMPAT_INCLUDE_DIR "" CACHE PATH "PeonPad SDL3 compatibility include directory")
+set(PEONPAD_SDL3_PLATFORM_DIR "" CACHE PATH "PeonPad SDL3 platform adapter directory")
+option(PEONPAD_USE_SDL3 "Build Stratagus directly against SDL3" OFF)
 option(BUILD_VENDORED_SDL OFF)
 option(BUILD_VENDORED_MEDIA_LIBS OFF)
 option(DOWNLOAD_FREEPATS OFF)
@@ -687,7 +689,23 @@ else()
 	find_package(Theora)
 endif()
 
-if (BUILD_VENDORED_SDL)
+if(PEONPAD_USE_SDL3)
+	if(NOT TARGET SDL3::SDL3 OR
+	   NOT TARGET SDL3_image::SDL3_image OR
+	   NOT TARGET SDL3_mixer::SDL3_mixer)
+		message(FATAL_ERROR "PEONPAD_USE_SDL3 requires the pinned SDL3-family targets")
+	endif()
+	if(NOT EXISTS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}/SDL.h")
+		message(FATAL_ERROR "PEONPAD_SDL3_COMPAT_INCLUDE_DIR is incomplete")
+	endif()
+	set(SDL2_INCLUDE_DIR "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
+	set(SDL2_MIXER_INCLUDE_DIRS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
+	set(SDL2_IMAGE_INCLUDE_DIRS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
+	set(SDL2_LIBRARY SDL3::SDL3)
+	set(SDL2_MIXER_LIBRARIES SDL3_mixer::SDL3_mixer)
+	set(SDL2_IMAGE_LIBRARIES SDL3_image::SDL3_image)
+	add_definitions(-DPEONPAD_USE_SDL3=1 -DSDL_ENABLE_OLD_NAMES=1)
+elseif(BUILD_VENDORED_SDL)
 	vendored_sdl()
 	vendored_sdl_mixer()
 	vendored_sdl_image()
@@ -725,6 +743,11 @@ include(CheckFunctionExists)
 include(CheckSymbolExists)
 
 vendored_guisan()
+if(PEONPAD_USE_SDL3)
+	target_link_libraries(guisan_lib PUBLIC
+		SDL3::SDL3
+		SDL3_image::SDL3_image)
+endif()
 
 # Windows RC compiler definitions
 
@@ -852,7 +875,8 @@ if (WIN32 AND MINGW)
 	set(stratagus_LIBS ${stratagus_LIBS} dxguid)
 endif()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR
+   CMAKE_SYSTEM_NAME STREQUAL "visionOS")
 	if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
 		message(FATAL_ERROR "PEONPAD_APPLE_PLATFORM_DIR must identify the PeonPad platform/apple directory")
 	endif()
@@ -861,18 +885,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	list(APPEND stratagus_SRCS
 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadViewportGeometry.cpp"
 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
-	if(PEONPAD_IOS_CONTROL_DOCK)
-		if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
-			message(FATAL_ERROR "PEONPAD_IOS_CONTROL_DOCK requires PeonPadIOSControls.mm")
-		endif()
-		add_definitions(-DPEONPAD_IOS_CONTROL_DOCK=1)
+	if(PEONPAD_USE_SDL3)
 		list(APPEND stratagus_SRCS
-			"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
+			"${PEONPAD_APPLE_PLATFORM_DIR}/PeonPadSDL3Window.mm")
 	endif()
-	include_directories("${PEONPAD_APPLE_PLATFORM_DIR}/ios")
-elseif(APPLE)
+	include_directories(
+		"${PEONPAD_APPLE_PLATFORM_DIR}"
+		"${PEONPAD_APPLE_PLATFORM_DIR}/ios")
+elseif(APPLE AND NOT PEONPAD_USE_SDL3)
 	add_definitions(-DUSE_MAC)
 	set(SDL2_LIBRARY ${SDL2_LIBRARY} SDL2main)
+elseif(APPLE)
+	add_definitions(-DUSE_MAC)
 endif()
 
 if(BSD)
@@ -920,8 +944,8 @@ endif()
 # TODO: Add support for other compilers
 
 check_type_size(errno_t ERRNOT)
-check_function_exists("strcpy_s" HAVE_STRCPYS)
-check_function_exists("strncpy_s" HAVE_STRNCPYS)
+check_symbol_exists("strcpy_s" "string.h" HAVE_STRCPYS)
+check_symbol_exists("strncpy_s" "string.h" HAVE_STRNCPYS)
 check_function_exists("strnlen" HAVE_STRNLEN)
 check_function_exists("getopt" HAVE_GETOPT)
 
@@ -1174,6 +1198,14 @@ else ()
 endif ()
 target_link_libraries(stratagus_lib PUBLIC ${stratagus_LIBS} ${CMAKE_DL_LIBS} guisan_lib)
 target_link_libraries(stratagus PUBLIC stratagus_lib)
+if(PEONPAD_USE_SDL3)
+	target_include_directories(stratagus_lib PUBLIC
+		"${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}"
+		"${PEONPAD_SDL3_PLATFORM_DIR}")
+	target_link_libraries(stratagus_lib PUBLIC
+		peonpad_sdl3_input_adapter
+		peonpad_sdl3_mixer_adapter)
+endif()
 
 target_include_directories(stratagus_lib SYSTEM PRIVATE third-party/mdns third-party/spiritless_po/include)
 
@@ -1210,6 +1242,16 @@ if(BUILD_TESTING)
 	add_executable(stratagus_tests ${stratagus_tests_SRCS})
 	target_link_libraries(stratagus_tests PUBLIC stratagus_lib doctest)
 	doctest_discover_tests(stratagus_tests)
+
+	if(PEONPAD_USE_SDL3 AND NOT CMAKE_CROSSCOMPILING)
+		add_executable(peonpad_sdl3_engine_compat_test
+			tests/sdl3_engine_compat_test.cpp)
+		target_link_libraries(peonpad_sdl3_engine_compat_test PRIVATE stratagus_lib)
+		target_compile_definitions(peonpad_sdl3_engine_compat_test PRIVATE NDEBUG)
+		add_test(
+			NAME peonpad_sdl3_engine_compat_release
+			COMMAND peonpad_sdl3_engine_compat_test)
+	endif()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -1234,7 +1276,9 @@ if(WIN32)
 	endif()
 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
 endif()
-if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+if(APPLE AND
+   NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
+   NOT PEONPAD_USE_SDL3)
 	set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} ${SDL2main_LIBRARY}")
 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
 endif()

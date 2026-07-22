@@ -6,11 +6,11 @@
  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
  *
- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
  *
  *                                                         Js_./
  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
  *                                                 _Qhm`] _f "'c  1!5m
  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
  *                                               .)j(] .d_/ '-(  P .   S
@@ -65,6 +65,7 @@
 #include "guisan/image.hpp"
 #include "guisan/sdl/sdlimage.hpp"
 #include "guisan/sdl/sdlpixel.hpp"
+#include "sdl_compat.h"
 
 // For some reason an old version of MSVC did not like std::abs,
 // so we added this macro.
@@ -212,7 +213,7 @@ namespace gcn
             rect.w = area.width;
             rect.h = area.height;
 
-            const Uint32 color = SDL_MapRGBA(mTarget->format, mColor.r, mColor.g, mColor.b, mColor.a);
+            const Uint32 color = SdlCompatMapRGBA(mTarget, mColor.r, mColor.g, mColor.b, mColor.a);
             SDL_FillRect(mTarget, &rect, color);
         }
     }
@@ -282,13 +283,13 @@ namespace gcn
             x2 = top.x + top.width -1;
         }
 
-        const int bpp = mTarget->format->BytesPerPixel;
+        const int bpp = SdlCompatGetPixelFormatDetails(mTarget).BytesPerPixel;
 
         SDL_LockSurface(mTarget);
 
         Uint8 *p = (Uint8 *)mTarget->pixels + y * mTarget->pitch + x1 * bpp;
 
-        Uint32 pixel = SDL_MapRGB(mTarget->format, mColor.r, mColor.g, mColor.b);
+        Uint32 pixel = SdlCompatMapRGB(mTarget, mColor.r, mColor.g, mColor.b);
 
         switch(bpp) {
           case 1:
@@ -393,13 +394,13 @@ namespace gcn
             y2 = top.y + top.height - 1;
         }
 
-        const int bpp = mTarget->format->BytesPerPixel;
+        const int bpp = SdlCompatGetPixelFormatDetails(mTarget).BytesPerPixel;
 
         SDL_LockSurface(mTarget);
 
         Uint8 *p = (Uint8 *)mTarget->pixels + y1 * mTarget->pitch + x * bpp;
 
-        Uint32 pixel = SDL_MapRGB(mTarget->format, mColor.r, mColor.g, mColor.b);
+        Uint32 pixel = SdlCompatMapRGB(mTarget, mColor.r, mColor.g, mColor.b);
 
         switch(bpp) {
           case 1:

@@ -6,11 +6,11 @@
  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
  *
- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
  *
  *                                                         Js_./
  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
  *                                                 _Qhm`] _f "'c  1!5m
  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
  *                                               .)j(] .d_/ '-(  P .   S
@@ -58,6 +58,7 @@
 #define GCN_SDLPIXEL_HPP
 
 #include "SDL.h"
+#include "sdl_compat.h"
 #include "guisan/color.hpp"
 
 namespace gcn
@@ -73,7 +74,7 @@ namespace gcn
      */
     inline const Color SDLgetPixel(SDL_Surface* surface, int x, int y)
     {
-        int bpp = surface->format->BytesPerPixel;
+        int bpp = SdlCompatGetPixelFormatDetails(surface).BytesPerPixel;
 
         SDL_LockSurface(surface);
 
@@ -110,7 +111,7 @@ namespace gcn
 
         unsigned char r,g,b,a;
 
-        SDL_GetRGBA(color, surface->format, &r, &g, &b, &a);
+        SdlCompatGetRGBA(surface, color, &r, &g, &b, &a);
         SDL_UnlockSurface(surface);
 
         return Color(r,g,b,a);
@@ -125,13 +126,13 @@ namespace gcn
      */
     inline void SDLputPixel(SDL_Surface* surface, int x, int y, const Color& color)
     {
-        int bpp = surface->format->BytesPerPixel;
+        int bpp = SdlCompatGetPixelFormatDetails(surface).BytesPerPixel;
 
         SDL_LockSurface(surface);
 
         Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
 
-        Uint32 pixel = SDL_MapRGB(surface->format, color.r, color.g, color.b);
+        Uint32 pixel = SdlCompatMapRGB(surface, color.r, color.g, color.b);
 
         switch(bpp)
         {
@@ -189,13 +190,13 @@ namespace gcn
      * @param dst the destination color.
      * @param a alpha.
      */
-    inline unsigned short SDLAlpha16(unsigned short src, unsigned short dst, unsigned char a, const SDL_PixelFormat *f)
+    inline unsigned short SDLAlpha16(unsigned short src, unsigned short dst, unsigned char a, const SdlCompatPixelFormatDetails &f)
     {
-        unsigned int b = ((src & f->Rmask) * a + (dst & f->Rmask) * (255 - a)) >> 8;
-        unsigned int g = ((src & f->Gmask) * a + (dst & f->Gmask) * (255 - a)) >> 8;
-        unsigned int r = ((src & f->Bmask) * a + (dst & f->Bmask) * (255 - a)) >> 8;
+        unsigned int b = ((src & f.Rmask) * a + (dst & f.Rmask) * (255 - a)) >> 8;
+        unsigned int g = ((src & f.Gmask) * a + (dst & f.Gmask) * (255 - a)) >> 8;
+        unsigned int r = ((src & f.Bmask) * a + (dst & f.Bmask) * (255 - a)) >> 8;
 
-        return (unsigned short)((b & f->Rmask) | (g & f->Gmask) | (r & f->Bmask));
+        return (unsigned short)((b & f.Rmask) | (g & f.Gmask) | (r & f.Bmask));
     }
 
     /*
@@ -220,13 +221,15 @@ namespace gcn
      */
     inline void SDLputPixelAlpha(SDL_Surface* surface, int x, int y, const Color& color)
     {
-        int bpp = surface->format->BytesPerPixel;
+        const SdlCompatPixelFormatDetails details =
+            SdlCompatGetPixelFormatDetails(surface);
+        int bpp = details.BytesPerPixel;
 
         SDL_LockSurface(surface);
 
         Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
 
-        Uint32 pixel = SDL_MapRGB(surface->format, color.r, color.g, color.b);
+        Uint32 pixel = SdlCompatMapRGB(surface, color.r, color.g, color.b);
 
         switch(bpp)
         {
@@ -235,7 +238,7 @@ namespace gcn
               break;
 
           case 2:
-              *(Uint16 *)p = SDLAlpha16(pixel, *(Uint32 *)p, color.a, surface->format);
+              *(Uint16 *)p = SDLAlpha16(pixel, *(Uint16 *)p, color.a, details);
               break;
 
           case 3:

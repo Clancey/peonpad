@@ -1,7 +1,9 @@
 #include "PeonPadViewportGeometry.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 
 namespace {
@@ -145,6 +147,128 @@ bool PeonPadCalculateViewport(const int outputWidth,
 	viewport.logicalHeight = logicalHeight;
 	viewport.scale = static_cast<float>(width) / logicalWidth;
 	return true;
+}
+
+bool PeonPadCalculateRendererTransform(
+	const PeonPadViewportGeometry &viewport,
+	PeonPadRendererTransform &transform)
+{
+	transform = {};
+	if (viewport.x < 0 || viewport.y < 0
+	    || viewport.width <= 0 || viewport.height <= 0
+	    || viewport.logicalWidth <= 0 || viewport.logicalHeight <= 0
+	    || viewport.scale <= 0.0f) {
+		return false;
+	}
+
+	float scale = viewport.scale;
+	for (int iteration = 0; iteration < 32; ++iteration) {
+		const double unscaledX =
+			std::ceil(static_cast<double>(viewport.x) / scale);
+		const double unscaledY =
+			std::ceil(static_cast<double>(viewport.y) / scale);
+		if (unscaledX > std::numeric_limits<int>::max()
+		    || unscaledY > std::numeric_limits<int>::max()) {
+			return false;
+		}
+		int viewportX = static_cast<int>(unscaledX);
+		int viewportY = static_cast<int>(unscaledY);
+		while (std::floor(viewportX * static_cast<double>(scale))
+		       < viewport.x) {
+			if (viewportX == std::numeric_limits<int>::max()) {
+				return false;
+			}
+			++viewportX;
+		}
+		while (std::floor(viewportY * static_cast<double>(scale))
+		       < viewport.y) {
+			if (viewportY == std::numeric_limits<int>::max()) {
+				return false;
+			}
+			++viewportY;
+		}
+
+		const int pixelX = static_cast<int>(
+			std::floor(viewportX * static_cast<double>(scale)));
+		const int pixelY = static_cast<int>(
+			std::floor(viewportY * static_cast<double>(scale)));
+		const int availableWidth =
+			viewport.x + viewport.width - pixelX;
+		const int availableHeight =
+			viewport.y + viewport.height - pixelY;
+		if (availableWidth <= 0 || availableHeight <= 0) {
+			return false;
+		}
+
+		const double maximumScale = std::min({
+			static_cast<double>(scale),
+			static_cast<double>(availableWidth) / viewport.logicalWidth,
+			static_cast<double>(availableHeight) / viewport.logicalHeight,
+		});
+		float fittedScale = static_cast<float>(maximumScale);
+		while (fittedScale > maximumScale) {
+			fittedScale = std::nextafter(fittedScale, 0.0f);
+		}
+		if (fittedScale <= 0.0f) {
+			return false;
+		}
+
+		const double fittedX = std::ceil(
+			static_cast<double>(viewport.x) / fittedScale);
+		const double fittedY = std::ceil(
+			static_cast<double>(viewport.y) / fittedScale);
+		if (fittedX > std::numeric_limits<int>::max()
+		    || fittedY > std::numeric_limits<int>::max()) {
+			return false;
+		}
+		viewportX = static_cast<int>(fittedX);
+		viewportY = static_cast<int>(fittedY);
+		while (std::floor(viewportX * static_cast<double>(fittedScale))
+		       < viewport.x) {
+			if (viewportX == std::numeric_limits<int>::max()) {
+				return false;
+			}
+			++viewportX;
+		}
+		while (std::floor(viewportY * static_cast<double>(fittedScale))
+		       < viewport.y) {
+			if (viewportY == std::numeric_limits<int>::max()) {
+				return false;
+			}
+			++viewportY;
+		}
+		transform = {
+			viewportX,
+			viewportY,
+			viewport.logicalWidth,
+			viewport.logicalHeight,
+			fittedScale,
+		};
+
+		const int transformedX = static_cast<int>(
+			std::floor(viewportX * static_cast<double>(fittedScale)));
+		const int transformedY = static_cast<int>(
+			std::floor(viewportY * static_cast<double>(fittedScale)));
+		const int transformedWidth = static_cast<int>(
+			std::ceil(viewport.logicalWidth
+			          * static_cast<double>(fittedScale)));
+		const int transformedHeight = static_cast<int>(
+			std::ceil(viewport.logicalHeight
+			          * static_cast<double>(fittedScale)));
+		if (transformedX >= viewport.x && transformedY >= viewport.y
+		    && transformedX + transformedWidth
+		           <= viewport.x + viewport.width
+		    && transformedY + transformedHeight
+		           <= viewport.y + viewport.height) {
+			return true;
+		}
+		scale = std::nextafter(fittedScale, 0.0f);
+		if (scale <= 0.0f) {
+			return false;
+		}
+	}
+	transform = {};
+	return false;
 }
 
 bool PeonPadMapViewportPoint(const PeonPadViewportGeometry &viewport,

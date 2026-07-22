@@ -1,0 +1,5646 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d33fdba..164d531 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -53,6 +53,9 @@ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bu
+ set(PEONPAD_IOS_LAUNCH_IMAGE "" CACHE FILEPATH "PeonPad launch image copied into the iOS bundle")
+ set(PEONPAD_IOS_ICON_DIR "" CACHE PATH "PeonPad iPad icon files copied into the iOS bundle")
+ set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
++set(PEONPAD_SDL3_COMPAT_INCLUDE_DIR "" CACHE PATH "PeonPad SDL3 compatibility include directory")
++set(PEONPAD_SDL3_PLATFORM_DIR "" CACHE PATH "PeonPad SDL3 platform adapter directory")
++option(PEONPAD_USE_SDL3 "Build Stratagus directly against SDL3" OFF)
+ option(BUILD_VENDORED_SDL OFF)
+ option(BUILD_VENDORED_MEDIA_LIBS OFF)
+ option(DOWNLOAD_FREEPATS OFF)
+@@ -686,7 +689,23 @@ else()
+ 	find_package(Theora)
+ endif()
+ 
+-if (BUILD_VENDORED_SDL)
++if(PEONPAD_USE_SDL3)
++	if(NOT TARGET SDL3::SDL3 OR
++	   NOT TARGET SDL3_image::SDL3_image OR
++	   NOT TARGET SDL3_mixer::SDL3_mixer)
++		message(FATAL_ERROR "PEONPAD_USE_SDL3 requires the pinned SDL3-family targets")
++	endif()
++	if(NOT EXISTS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}/SDL.h")
++		message(FATAL_ERROR "PEONPAD_SDL3_COMPAT_INCLUDE_DIR is incomplete")
++	endif()
++	set(SDL2_INCLUDE_DIR "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
++	set(SDL2_MIXER_INCLUDE_DIRS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
++	set(SDL2_IMAGE_INCLUDE_DIRS "${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}")
++	set(SDL2_LIBRARY SDL3::SDL3)
++	set(SDL2_MIXER_LIBRARIES SDL3_mixer::SDL3_mixer)
++	set(SDL2_IMAGE_LIBRARIES SDL3_image::SDL3_image)
++	add_definitions(-DPEONPAD_USE_SDL3=1 -DSDL_ENABLE_OLD_NAMES=1)
++elseif(BUILD_VENDORED_SDL)
+ 	vendored_sdl()
+ 	vendored_sdl_mixer()
+ 	vendored_sdl_image()
+@@ -724,6 +743,11 @@ include(CheckFunctionExists)
+ include(CheckSymbolExists)
+ 
+ vendored_guisan()
++if(PEONPAD_USE_SDL3)
++	target_link_libraries(guisan_lib PUBLIC
++		SDL3::SDL3
++		SDL3_image::SDL3_image)
++endif()
+ 
+ # Windows RC compiler definitions
+ 
+@@ -851,7 +875,8 @@ if (WIN32 AND MINGW)
+ 	set(stratagus_LIBS ${stratagus_LIBS} dxguid)
+ endif()
+ 
+-if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR
++   CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+ 	if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
+ 		message(FATAL_ERROR "PEONPAD_APPLE_PLATFORM_DIR must identify the PeonPad platform/apple directory")
+ 	endif()
+@@ -860,10 +885,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+ 	list(APPEND stratagus_SRCS
+ 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadViewportGeometry.cpp"
+ 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
+-	include_directories("${PEONPAD_APPLE_PLATFORM_DIR}/ios")
+-elseif(APPLE)
++	if(PEONPAD_USE_SDL3)
++		list(APPEND stratagus_SRCS
++			"${PEONPAD_APPLE_PLATFORM_DIR}/PeonPadSDL3Window.mm")
++	endif()
++	include_directories(
++		"${PEONPAD_APPLE_PLATFORM_DIR}"
++		"${PEONPAD_APPLE_PLATFORM_DIR}/ios")
++elseif(APPLE AND NOT PEONPAD_USE_SDL3)
+ 	add_definitions(-DUSE_MAC)
+ 	set(SDL2_LIBRARY ${SDL2_LIBRARY} SDL2main)
++elseif(APPLE)
++	add_definitions(-DUSE_MAC)
+ endif()
+ 
+ if(BSD)
+@@ -911,8 +944,8 @@ endif()
+ # TODO: Add support for other compilers
+ 
+ check_type_size(errno_t ERRNOT)
+-check_function_exists("strcpy_s" HAVE_STRCPYS)
+-check_function_exists("strncpy_s" HAVE_STRNCPYS)
++check_symbol_exists("strcpy_s" "string.h" HAVE_STRCPYS)
++check_symbol_exists("strncpy_s" "string.h" HAVE_STRNCPYS)
+ check_function_exists("strnlen" HAVE_STRNLEN)
+ check_function_exists("getopt" HAVE_GETOPT)
+ 
+@@ -1165,6 +1198,14 @@ else ()
+ endif ()
+ target_link_libraries(stratagus_lib PUBLIC ${stratagus_LIBS} ${CMAKE_DL_LIBS} guisan_lib)
+ target_link_libraries(stratagus PUBLIC stratagus_lib)
++if(PEONPAD_USE_SDL3)
++	target_include_directories(stratagus_lib PUBLIC
++		"${PEONPAD_SDL3_COMPAT_INCLUDE_DIR}"
++		"${PEONPAD_SDL3_PLATFORM_DIR}")
++	target_link_libraries(stratagus_lib PUBLIC
++		peonpad_sdl3_input_adapter
++		peonpad_sdl3_mixer_adapter)
++endif()
+ 
+ target_include_directories(stratagus_lib SYSTEM PRIVATE third-party/mdns third-party/spiritless_po/include)
+ 
+@@ -1201,6 +1242,16 @@ if(BUILD_TESTING)
+ 	add_executable(stratagus_tests ${stratagus_tests_SRCS})
+ 	target_link_libraries(stratagus_tests PUBLIC stratagus_lib doctest)
+ 	doctest_discover_tests(stratagus_tests)
++
++	if(PEONPAD_USE_SDL3 AND NOT CMAKE_CROSSCOMPILING)
++		add_executable(peonpad_sdl3_engine_compat_test
++			tests/sdl3_engine_compat_test.cpp)
++		target_link_libraries(peonpad_sdl3_engine_compat_test PRIVATE stratagus_lib)
++		target_compile_definitions(peonpad_sdl3_engine_compat_test PRIVATE NDEBUG)
++		add_test(
++			NAME peonpad_sdl3_engine_compat_release
++			COMMAND peonpad_sdl3_engine_compat_test)
++	endif()
+ endif()
+ 
+ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+@@ -1225,7 +1276,9 @@ if(WIN32)
+ 	endif()
+ 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
+ endif()
+-if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
++if(APPLE AND
++   NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
++   NOT PEONPAD_USE_SDL3)
+ 	set_target_properties(stratagus PROPERTIES LINK_FLAGS "${LINK_FLAGS} ${SDL2main_LIBRARY}")
+ 	set(CMAKE_EXE_LINKER_FLAGS_PROFILE "${CMAKE_EXE_LINKER_FLAGS}")
+ endif()
+diff --git a/src/game/game.cpp b/src/game/game.cpp
+index 8920eb8..d22fe73 100644
+--- a/src/game/game.cpp
++++ b/src/game/game.cpp
+@@ -236,9 +236,11 @@ static void LoadStratagusMap(const fs::path &smpdir, const fs::path &mapname)
+ static void WriteMapPreview(const fs::path &mapname, CMap &map)
+ {
+ 	const int rectSize = 5; // size of rectange used for player start spots
+-	const SDL_PixelFormat *fmt = MinimapSurface->format;
+-	SDL_Surface *preview = SDL_CreateRGBSurface(SDL_SWSURFACE,
+-												UI.Minimap.W, UI.Minimap.H, 32, fmt->Rmask, fmt->Gmask, fmt->Bmask, 0);
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(MinimapSurface);
++	SDL_Surface *preview = SdlCompatCreateSurface(
++		UI.Minimap.W, UI.Minimap.H, 32,
++		format.Rmask, format.Gmask, format.Bmask, 0);
+ 	SDL_BlitSurface(MinimapSurface, nullptr, preview, nullptr);
+ 
+ 	SDL_LockSurface(preview);
+diff --git a/src/include/iolib.h b/src/include/iolib.h
+index 9580c37..1f46ccc 100644
+--- a/src/include/iolib.h
++++ b/src/include/iolib.h
+@@ -122,6 +122,7 @@ class CFile
+ 	int read(void *buf, size_t len);
+ 	int seek(long offset, int whence);
+ 	long tell();
++	long size();
+ 	static SDL_RWops *to_SDL_RWops(std::unique_ptr<CFile> file);
+ 
+ 	void write(std::string_view);
+diff --git a/src/include/sdl_compat.h b/src/include/sdl_compat.h
+new file mode 100644
+index 0000000..ebd8f69
+--- /dev/null
++++ b/src/include/sdl_compat.h
+@@ -0,0 +1,957 @@
++#pragma once
++
++#include <SDL.h>
++
++#include <algorithm>
++#include <cstdio>
++#include <limits>
++#include <string>
++#include <vector>
++
++struct SdlCompatPixelFormatDetails
++{
++	int BitsPerPixel = 0;
++	int BytesPerPixel = 0;
++	Uint32 Rmask = 0;
++	Uint32 Gmask = 0;
++	Uint32 Bmask = 0;
++	Uint32 Amask = 0;
++	Uint8 Rshift = 0;
++	Uint8 Gshift = 0;
++	Uint8 Bshift = 0;
++	Uint8 Ashift = 0;
++};
++
++inline bool SdlCompatWriteReadinessMarker(FILE *stream)
++{
++	if (stream == nullptr) {
++		SDL_SetError("Readiness marker requires an output stream");
++		return false;
++	}
++	if (std::fputs("PEONPAD_ENGINE_READY\n", stream) == EOF
++	    || std::fflush(stream) != 0) {
++		SDL_SetError("Unable to write and flush the engine readiness marker");
++		return false;
++	}
++	return true;
++}
++
++inline std::string SdlCompatGetBasePath()
++{
++#ifdef PEONPAD_USE_SDL3
++	const char *path = SDL_GetBasePath();
++	return path != nullptr ? path : "";
++#else
++	char *path = SDL_GetBasePath();
++	const std::string result = path != nullptr ? path : "";
++	SDL_free(path);
++	return result;
++#endif
++}
++
++inline Uint32 SdlCompatSurfaceFormat(const SDL_Surface *surface)
++{
++#ifdef PEONPAD_USE_SDL3
++	return static_cast<Uint32>(surface->format);
++#else
++	return surface->format->format;
++#endif
++}
++
++inline SdlCompatPixelFormatDetails
++SdlCompatGetPixelFormatDetails(const SDL_Surface *surface)
++{
++	SdlCompatPixelFormatDetails result;
++#ifdef PEONPAD_USE_SDL3
++	const SDL_PixelFormatDetails *details =
++		SDL_GetPixelFormatDetails(surface->format);
++	if (details != nullptr) {
++		result.BitsPerPixel = details->bits_per_pixel;
++		result.BytesPerPixel = details->bytes_per_pixel;
++		result.Rmask = details->Rmask;
++		result.Gmask = details->Gmask;
++		result.Bmask = details->Bmask;
++		result.Amask = details->Amask;
++		result.Rshift = details->Rshift;
++		result.Gshift = details->Gshift;
++		result.Bshift = details->Bshift;
++		result.Ashift = details->Ashift;
++	}
++#else
++	result.BitsPerPixel = surface->format->BitsPerPixel;
++	result.BytesPerPixel = surface->format->BytesPerPixel;
++	result.Rmask = surface->format->Rmask;
++	result.Gmask = surface->format->Gmask;
++	result.Bmask = surface->format->Bmask;
++	result.Amask = surface->format->Amask;
++	result.Rshift = surface->format->Rshift;
++	result.Gshift = surface->format->Gshift;
++	result.Bshift = surface->format->Bshift;
++	result.Ashift = surface->format->Ashift;
++#endif
++	return result;
++}
++
++inline SDL_Palette *SdlCompatGetSurfacePalette(SDL_Surface *surface)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetSurfacePalette(surface);
++#else
++	return surface->format->palette;
++#endif
++}
++
++inline bool SdlCompatSurfaceHasFormat(const SDL_Surface *surface)
++{
++#ifdef PEONPAD_USE_SDL3
++	return surface != nullptr && surface->format != SDL_PIXELFORMAT_UNKNOWN;
++#else
++	return surface != nullptr && surface->format != nullptr;
++#endif
++}
++
++inline bool SdlCompatSurfaceUsesPreallocatedPixels(const SDL_Surface *surface)
++{
++#ifdef PEONPAD_USE_SDL3
++	return (surface->flags & SDL_SURFACE_PREALLOCATED) != 0;
++#else
++	return (surface->flags & SDL_PREALLOC) != 0;
++#endif
++}
++
++inline bool SdlCompatGetColorKey(SDL_Surface *surface, Uint32 *colorKey)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetSurfaceColorKey(surface, colorKey);
++#else
++	return SDL_GetColorKey(surface, colorKey) == 0;
++#endif
++}
++
++inline bool
++SdlCompatSetColorKey(SDL_Surface *surface, bool enabled, Uint32 colorKey)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetSurfaceColorKey(surface, enabled, colorKey);
++#else
++	return SDL_SetColorKey(surface, enabled ? SDL_TRUE : SDL_FALSE, colorKey) == 0;
++#endif
++}
++
++inline Uint32 SdlCompatMapRGB(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_MapSurfaceRGB(surface, r, g, b);
++#else
++	return SDL_MapRGB(surface->format, r, g, b);
++#endif
++}
++
++inline Uint32
++SdlCompatMapRGBA(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_MapSurfaceRGBA(surface, r, g, b, a);
++#else
++	return SDL_MapRGBA(surface->format, r, g, b, a);
++#endif
++}
++
++inline void SdlCompatGetRGB(SDL_Surface *surface, Uint32 pixel,
++                            Uint8 *r, Uint8 *g, Uint8 *b)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_GetRGB(pixel, SDL_GetPixelFormatDetails(surface->format),
++	           SDL_GetSurfacePalette(surface), r, g, b);
++#else
++	SDL_GetRGB(pixel, surface->format, r, g, b);
++#endif
++}
++
++inline void SdlCompatGetRGBA(SDL_Surface *surface, Uint32 pixel,
++                             Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_GetRGBA(pixel, SDL_GetPixelFormatDetails(surface->format),
++	            SDL_GetSurfacePalette(surface), r, g, b, a);
++#else
++	SDL_GetRGBA(pixel, surface->format, r, g, b, a);
++#endif
++}
++
++inline Uint32 SdlCompatPixelFormatForMasks(int bitsPerPixel,
++                                           Uint32 rmask, Uint32 gmask,
++                                           Uint32 bmask, Uint32 amask)
++{
++#ifdef PEONPAD_USE_SDL3
++	return static_cast<Uint32>(SDL_GetPixelFormatForMasks(
++		bitsPerPixel, rmask, gmask, bmask, amask));
++#else
++	return SDL_MasksToPixelFormatEnum(
++		bitsPerPixel, rmask, gmask, bmask, amask);
++#endif
++}
++
++inline SDL_Surface *SdlCompatCreateSurface(int width, int height,
++                                           int bitsPerPixel,
++                                           Uint32 rmask, Uint32 gmask,
++                                           Uint32 bmask, Uint32 amask)
++{
++#ifdef PEONPAD_USE_SDL3
++	const SDL_PixelFormat format = SDL_GetPixelFormatForMasks(
++		bitsPerPixel, rmask, gmask, bmask, amask);
++	if (format == SDL_PIXELFORMAT_UNKNOWN) {
++		SDL_SetError("Unsupported %d-bit surface masks", bitsPerPixel);
++		return nullptr;
++	}
++	SDL_Surface *surface = SDL_CreateSurface(width, height, format);
++	if (surface != nullptr && SDL_ISPIXELFORMAT_INDEXED(format)
++	    && SDL_CreateSurfacePalette(surface) == nullptr) {
++		SDL_DestroySurface(surface);
++		return nullptr;
++	}
++	return surface;
++#else
++	return SDL_CreateRGBSurface(
++		0, width, height, bitsPerPixel, rmask, gmask, bmask, amask);
++#endif
++}
++
++inline SDL_Surface *SdlCompatCreateSurfaceFrom(
++	void *pixels, int width, int height, int bitsPerPixel, int pitch,
++	Uint32 rmask, Uint32 gmask, Uint32 bmask, Uint32 amask)
++{
++#ifdef PEONPAD_USE_SDL3
++	const SDL_PixelFormat format = SDL_GetPixelFormatForMasks(
++		bitsPerPixel, rmask, gmask, bmask, amask);
++	if (format == SDL_PIXELFORMAT_UNKNOWN) {
++		SDL_SetError("Unsupported %d-bit surface masks", bitsPerPixel);
++		return nullptr;
++	}
++	SDL_Surface *surface =
++		SDL_CreateSurfaceFrom(width, height, format, pixels, pitch);
++	if (surface != nullptr && SDL_ISPIXELFORMAT_INDEXED(format)
++	    && SDL_CreateSurfacePalette(surface) == nullptr) {
++		SDL_DestroySurface(surface);
++		return nullptr;
++	}
++	return surface;
++#else
++	return SDL_CreateRGBSurfaceFrom(
++		pixels, width, height, bitsPerPixel, pitch,
++		rmask, gmask, bmask, amask);
++#endif
++}
++
++inline SDL_Surface *SdlCompatConvertSurface(SDL_Surface *surface, Uint32 format)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_ConvertSurface(surface, static_cast<SDL_PixelFormat>(format));
++#else
++	return SDL_ConvertSurfaceFormat(surface, format, 0);
++#endif
++}
++
++inline SDL_Surface *SdlCompatDuplicateSurface(SDL_Surface *surface)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_DuplicateSurface(surface);
++#else
++	return SDL_ConvertSurface(surface, surface->format, 0);
++#endif
++}
++
++inline bool SdlCompatBlitScaled(SDL_Surface *source,
++                                const SDL_Rect *sourceRect,
++                                SDL_Surface *destination,
++                                const SDL_Rect *destinationRect)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_BlitSurfaceScaled(source, sourceRect, destination,
++	                             destinationRect, SDL_SCALEMODE_NEAREST);
++#else
++	SDL_Rect mutableDestination;
++	SDL_Rect *destinationPointer = nullptr;
++	if (destinationRect != nullptr) {
++		mutableDestination = *destinationRect;
++		destinationPointer = &mutableDestination;
++	}
++	return SDL_BlitScaled(
++		source, sourceRect, destination, destinationPointer) == 0;
++#endif
++}
++
++inline bool SdlCompatBlitSurface(SDL_Surface *source,
++                                 const SDL_Rect *sourceRect,
++                                 SDL_Surface *destination,
++                                 SDL_Rect *destinationRect)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_BlitSurface(
++		source, sourceRect, destination, destinationRect);
++#else
++	return SDL_BlitSurface(
++		source, sourceRect, destination, destinationRect) == 0;
++#endif
++}
++
++inline SDL_Keycode SdlCompatEventKeycode(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.key.key;
++#else
++	return event.key.keysym.sym;
++#endif
++}
++
++inline SDL_Keymod SdlCompatEventKeymod(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.key.mod;
++#else
++	return static_cast<SDL_Keymod>(event.key.keysym.mod);
++#endif
++}
++
++inline void SdlCompatSetEventKeycode(SDL_Event &event, SDL_Keycode keycode)
++{
++#ifdef PEONPAD_USE_SDL3
++	event.key.key = keycode;
++#else
++	event.key.keysym.sym = keycode;
++#endif
++}
++
++inline bool SdlCompatIsWindowEvent(const SDL_Event &event, Uint32 eventType)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.type == eventType;
++#else
++	return event.type == SDL_WINDOWEVENT && event.window.event == eventType;
++#endif
++}
++
++inline bool SdlCompatSetEnvironmentVariable(const char *name,
++                                            const char *value,
++                                            bool overwrite)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_setenv_unsafe(name, value, overwrite ? 1 : 0) == 0;
++#else
++	return SDL_setenv(name, value, overwrite ? 1 : 0) == 0;
++#endif
++}
++
++inline bool SdlCompatInitCore()
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS);
++#else
++	return SDL_Init(
++		SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_TIMER) == 0;
++#endif
++}
++
++inline bool SdlCompatRegisterUserEvent(Uint32 *eventType)
++{
++	const Uint32 registered = SDL_RegisterEvents(1);
++#ifdef PEONPAD_USE_SDL3
++	if (registered == 0) {
++#else
++	if (registered == static_cast<Uint32>(-1)) {
++#endif
++		return false;
++	}
++	*eventType = registered;
++	return true;
++}
++
++inline Uint32 SdlCompatTicks()
++{
++	return static_cast<Uint32>(SDL_GetTicks());
++}
++
++inline const SDL_ControllerAxisEvent &
++SdlCompatControllerAxisEvent(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.gaxis;
++#else
++	return event.caxis;
++#endif
++}
++
++inline const SDL_ControllerButtonEvent &
++SdlCompatControllerButtonEvent(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.gbutton;
++#else
++	return event.cbutton;
++#endif
++}
++
++inline bool SdlCompatStartTextInput(SDL_Window *window)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_StartTextInput(window);
++#else
++	(void)window;
++	SDL_StartTextInput();
++	return true;
++#endif
++}
++
++inline bool SdlCompatStopTextInput(SDL_Window *window)
++{
++#ifdef PEONPAD_USE_SDL3
++	return window == nullptr || SDL_StopTextInput(window);
++#else
++	(void)window;
++	SDL_StopTextInput();
++	return true;
++#endif
++}
++
++inline bool SdlCompatInitGameControllers()
++{
++#ifdef PEONPAD_USE_SDL3
++	if (SDL_WasInit(SDL_INIT_GAMEPAD) == 0
++	    && !SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
++		return false;
++	}
++	SDL_SetGamepadEventsEnabled(true);
++	return true;
++#else
++	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0
++	    && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
++		return false;
++	}
++	SDL_GameControllerEventState(SDL_ENABLE);
++	return true;
++#endif
++}
++
++inline std::vector<SDL_JoystickID> SdlCompatGetGameControllerDevices()
++{
++	std::vector<SDL_JoystickID> devices;
++#ifdef PEONPAD_USE_SDL3
++	int count = 0;
++	SDL_JoystickID *identifiers = SDL_GetGamepads(&count);
++	if (identifiers == nullptr) {
++		return devices;
++	}
++	devices.assign(identifiers, identifiers + count);
++	SDL_free(identifiers);
++#else
++	const int count = SDL_NumJoysticks();
++	for (int index = 0; index < count; ++index) {
++		if (SDL_IsGameController(index)) {
++			devices.push_back(index);
++		}
++	}
++#endif
++	return devices;
++}
++
++inline SDL_GameController *
++SdlCompatOpenGameController(SDL_JoystickID device)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_OpenGamepad(device);
++#else
++	return SDL_IsGameController(device) ? SDL_GameControllerOpen(device) : nullptr;
++#endif
++}
++
++inline SDL_JoystickID
++SdlCompatGameControllerInstanceId(SDL_GameController *controller)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetGamepadID(controller);
++#else
++	return SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
++#endif
++}
++
++inline bool SdlCompatJoystickIdIsValid(SDL_JoystickID identifier)
++{
++#ifdef PEONPAD_USE_SDL3
++	return identifier != 0
++		&& identifier <= static_cast<SDL_JoystickID>(
++			std::numeric_limits<int>::max());
++#else
++	return identifier >= 0;
++#endif
++}
++
++inline const char *
++SdlCompatGameControllerName(SDL_GameController *controller)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetGamepadName(controller);
++#else
++	return SDL_GameControllerName(controller);
++#endif
++}
++
++inline void SdlCompatCloseGameController(SDL_GameController *controller)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_CloseGamepad(controller);
++#else
++	SDL_GameControllerClose(controller);
++#endif
++}
++
++inline int SdlCompatMaximumDisplayRefreshRate()
++{
++	int maximum = 0;
++#ifdef PEONPAD_USE_SDL3
++	int count = 0;
++	SDL_DisplayID *displays = SDL_GetDisplays(&count);
++	if (displays == nullptr) {
++		return 0;
++	}
++	for (int index = 0; index < count; ++index) {
++		const SDL_DisplayMode *mode =
++			SDL_GetDesktopDisplayMode(displays[index]);
++		if (mode != nullptr) {
++			maximum = std::max(
++				maximum, static_cast<int>(mode->refresh_rate + 0.5f));
++		}
++	}
++	SDL_free(displays);
++#else
++	const int count = SDL_GetNumVideoDisplays();
++	for (int index = 0; index < count; ++index) {
++		SDL_DisplayMode mode;
++		if (SDL_GetDesktopDisplayMode(index, &mode) == 0) {
++			maximum = std::max(maximum, mode.refresh_rate);
++		}
++	}
++#endif
++	return maximum;
++}
++
++inline bool SdlCompatSetSwapInterval(int interval)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GL_SetSwapInterval(interval);
++#else
++	return SDL_GL_SetSwapInterval(interval) == 0;
++#endif
++}
++
++inline SDL_Window *SdlCompatCreateWindow(const char *title, int x, int y,
++                                         int width, int height, Uint64 flags)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_Window *window = SDL_CreateWindow(
++		title, width, height, static_cast<SDL_WindowFlags>(flags));
++	if (window != nullptr && x != SDL_WINDOWPOS_UNDEFINED
++	    && y != SDL_WINDOWPOS_UNDEFINED
++	    && !SDL_SetWindowPosition(window, x, y)) {
++		SDL_DestroyWindow(window);
++		return nullptr;
++	}
++	return window;
++#else
++	return SDL_CreateWindow(
++		title, x, y, width, height, static_cast<Uint32>(flags));
++#endif
++}
++
++inline SDL_Renderer *
++SdlCompatCreateRenderer(SDL_Window *window, bool verticalSync)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
++	if (renderer != nullptr && verticalSync
++	    && !SDL_SetRenderVSync(renderer, 1)) {
++		SDL_DestroyRenderer(renderer);
++		return nullptr;
++	}
++	return renderer;
++#else
++	Uint32 flags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
++	if (verticalSync) {
++		flags |= SDL_RENDERER_PRESENTVSYNC;
++	}
++	return SDL_CreateRenderer(window, -1, flags);
++#endif
++}
++
++inline const char *SdlCompatRendererName(SDL_Renderer *renderer)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetRendererName(renderer);
++#else
++	static SDL_RendererInfo info;
++	return SDL_GetRendererInfo(renderer, &info) == 0 ? info.name : nullptr;
++#endif
++}
++
++inline bool SdlCompatGetWindowMouseGrab(SDL_Window *window)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetWindowMouseGrab(window);
++#else
++	return SDL_GetWindowGrab(window) == SDL_TRUE;
++#endif
++}
++
++inline bool SdlCompatSetWindowMouseGrab(SDL_Window *window, bool grabbed)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetWindowMouseGrab(window, grabbed);
++#else
++	SDL_SetWindowGrab(window, grabbed ? SDL_TRUE : SDL_FALSE);
++	return true;
++#endif
++}
++
++inline bool SdlCompatSetWindowFullscreen(SDL_Window *window, bool fullscreen)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetWindowFullscreen(window, fullscreen);
++#else
++	return SDL_SetWindowFullscreen(
++		window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) == 0;
++#endif
++}
++
++inline bool SdlCompatGetWindowSize(SDL_Window *window, int *width, int *height)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetWindowSize(window, width, height);
++#else
++	SDL_GetWindowSize(window, width, height);
++	return true;
++#endif
++}
++
++inline bool SdlCompatSetWindowSize(SDL_Window *window, int width, int height)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetWindowSize(window, width, height);
++#else
++	SDL_SetWindowSize(window, width, height);
++	return true;
++#endif
++}
++
++inline bool
++SdlCompatSetWindowIcon(SDL_Window *window, SDL_Surface *icon)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetWindowIcon(window, icon);
++#else
++	SDL_SetWindowIcon(window, icon);
++	return true;
++#endif
++}
++
++inline bool SdlCompatSetCursor(SDL_Cursor *cursor)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetCursor(cursor);
++#else
++	SDL_SetCursor(cursor);
++	return true;
++#endif
++}
++
++inline bool SdlCompatSetClipboardText(const char *text)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetClipboardText(text);
++#else
++	return SDL_SetClipboardText(text) == 0;
++#endif
++}
++
++inline bool
++SdlCompatGetWindowDrawableSize(SDL_Window *window, int *width, int *height)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetWindowSizeInPixels(window, width, height);
++#else
++	SDL_GL_GetDrawableSize(window, width, height);
++	return true;
++#endif
++}
++
++inline bool SdlCompatIsWindowEvent(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.type >= SDL_EVENT_WINDOW_FIRST
++		&& event.type <= SDL_EVENT_WINDOW_LAST;
++#else
++	return event.type == SDL_WINDOWEVENT;
++#endif
++}
++
++inline Uint32 SdlCompatWindowEventType(const SDL_Event &event)
++{
++#ifdef PEONPAD_USE_SDL3
++	return event.type;
++#else
++	return event.window.event;
++#endif
++}
++
++inline bool SdlCompatSetRenderDrawColor(SDL_Renderer *renderer,
++                                        Uint8 red, Uint8 green,
++                                        Uint8 blue, Uint8 alpha)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderDrawColor(renderer, red, green, blue, alpha);
++#else
++	return SDL_SetRenderDrawColor(renderer, red, green, blue, alpha) == 0;
++#endif
++}
++
++inline bool SdlCompatSetRenderTarget(SDL_Renderer *renderer,
++                                     SDL_Texture *texture)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderTarget(renderer, texture);
++#else
++	return SDL_SetRenderTarget(renderer, texture) == 0;
++#endif
++}
++
++inline bool SdlCompatRenderClear(SDL_Renderer *renderer)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_RenderClear(renderer);
++#else
++	return SDL_RenderClear(renderer) == 0;
++#endif
++}
++
++inline bool SdlCompatRenderPresent(SDL_Renderer *renderer)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_RenderPresent(renderer);
++#else
++	SDL_RenderPresent(renderer);
++	return true;
++#endif
++}
++
++inline bool SdlCompatRenderCopy(SDL_Renderer *renderer, SDL_Texture *texture,
++                                const SDL_Rect *source, const SDL_Rect *target)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_FRect sourceFloat;
++	SDL_FRect targetFloat;
++	const SDL_FRect *sourcePointer = nullptr;
++	const SDL_FRect *targetPointer = nullptr;
++	if (source != nullptr) {
++		sourceFloat = {
++			static_cast<float>(source->x), static_cast<float>(source->y),
++			static_cast<float>(source->w), static_cast<float>(source->h)};
++		sourcePointer = &sourceFloat;
++	}
++
++	if (target != nullptr) {
++		targetFloat = {
++			static_cast<float>(target->x), static_cast<float>(target->y),
++			static_cast<float>(target->w), static_cast<float>(target->h)};
++		targetPointer = &targetFloat;
++	}
++	return SDL_RenderTexture(renderer, texture, sourcePointer, targetPointer);
++#else
++	return SDL_RenderCopy(renderer, texture, source, target) == 0;
++#endif
++}
++
++inline bool SdlCompatUpdateTexture(SDL_Texture *texture,
++                                   const SDL_Rect *rect,
++                                   const void *pixels, int pitch)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_UpdateTexture(texture, rect, pixels, pitch);
++#else
++	return SDL_UpdateTexture(texture, rect, pixels, pitch) == 0;
++#endif
++}
++
++inline bool SdlCompatUpdateYuvTexture(SDL_Texture *texture,
++                                      const SDL_Rect *rect,
++                                      const Uint8 *yPlane, int yPitch,
++                                      const Uint8 *uPlane, int uPitch,
++                                      const Uint8 *vPlane, int vPitch)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_UpdateYUVTexture(
++		texture, rect, yPlane, yPitch, uPlane, uPitch, vPlane, vPitch);
++#else
++	return SDL_UpdateYUVTexture(
++		texture, rect, yPlane, yPitch, uPlane, uPitch, vPlane, vPitch) == 0;
++#endif
++}
++
++inline bool SdlCompatSetTextureNearest(SDL_Texture *texture)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
++#else
++	return SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest) == 0;
++#endif
++}
++
++inline bool SdlCompatSetRenderLogicalSize(SDL_Renderer *renderer,
++                                          int width, int height)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderLogicalPresentation(
++		renderer, width, height, SDL_LOGICAL_PRESENTATION_LETTERBOX);
++#else
++	return SDL_RenderSetLogicalSize(renderer, width, height) == 0;
++#endif
++}
++
++inline bool SdlCompatDisableRenderLogicalPresentation(SDL_Renderer *renderer)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderLogicalPresentation(
++		renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
++#else
++	return SDL_RenderSetLogicalSize(renderer, 0, 0) == 0;
++#endif
++}
++
++inline bool SdlCompatGetRenderLogicalSize(SDL_Renderer *renderer,
++                                          int *width, int *height)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_RendererLogicalPresentation presentation;
++	return SDL_GetRenderLogicalPresentation(
++		renderer, width, height, &presentation);
++#else
++	SDL_RenderGetLogicalSize(renderer, width, height);
++	return true;
++#endif
++}
++
++inline bool SdlCompatGetRenderOutputSize(SDL_Renderer *renderer,
++                                         int *width, int *height)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_GetCurrentRenderOutputSize(renderer, width, height);
++#else
++	return SDL_GetRendererOutputSize(renderer, width, height) == 0;
++#endif
++}
++
++inline bool
++SdlCompatSetRenderScale(SDL_Renderer *renderer, float scaleX, float scaleY)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderScale(renderer, scaleX, scaleY);
++#else
++	return SDL_RenderSetScale(renderer, scaleX, scaleY) == 0;
++#endif
++}
++
++inline bool
++SdlCompatSetRenderViewport(SDL_Renderer *renderer, const SDL_Rect *viewport)
++{
++#ifdef PEONPAD_USE_SDL3
++	return SDL_SetRenderViewport(renderer, viewport);
++#else
++	return SDL_RenderSetViewport(renderer, viewport) == 0;
++#endif
++}
++
++inline bool SdlCompatConvertEventToRenderCoordinates(
++	SDL_Renderer *renderer, SDL_Event *event)
++{
++	if (renderer == nullptr || event == nullptr) {
++		SDL_SetError("Renderer event conversion requires non-null arguments");
++		return false;
++	}
++#ifdef PEONPAD_USE_SDL3
++	return SDL_ConvertEventToRenderCoordinates(renderer, event);
++#else
++	return true;
++#endif
++}
++
++inline bool SdlCompatPointerPressIsOutside(
++	const SDL_Event &event, int logicalWidth, int logicalHeight)
++{
++	float x = 0.0f;
++	float y = 0.0f;
++	if (event.type == SDL_MOUSEBUTTONDOWN) {
++		x = event.button.x;
++		y = event.button.y;
++	} else if (event.type == SDL_FINGERDOWN) {
++#ifdef PEONPAD_USE_SDL3
++		x = event.tfinger.x;
++		y = event.tfinger.y;
++#else
++		x = event.tfinger.x * logicalWidth;
++		y = event.tfinger.y * logicalHeight;
++#endif
++	} else {
++		return false;
++	}
++	return x < 0.0f || y < 0.0f
++	    || x >= logicalWidth || y >= logicalHeight;
++}
++
++inline bool SdlCompatRenderReadPixels(SDL_Renderer *renderer,
++                                      const SDL_Rect *rect,
++                                      SDL_Surface *destination)
++{
++#ifdef PEONPAD_USE_SDL3
++	SDL_Surface *readback = SDL_RenderReadPixels(renderer, rect);
++	if (readback == nullptr) {
++		return false;
++	}
++	const bool copied =
++		SDL_BlitSurface(readback, nullptr, destination, nullptr);
++	SDL_DestroySurface(readback);
++	return copied;
++#else
++	return SDL_RenderReadPixels(
++		renderer, rect, destination->format->format,
++		destination->pixels, destination->pitch) == 0;
++#endif
++}
++
++inline bool SdlCompatRenderFillRect(SDL_Renderer *renderer,
++                                    const SDL_Rect *rect)
++{
++#ifdef PEONPAD_USE_SDL3
++	if (rect == nullptr) {
++		return SDL_RenderFillRect(renderer, nullptr);
++	}
++	const SDL_FRect floatRect{
++		static_cast<float>(rect->x), static_cast<float>(rect->y),
++		static_cast<float>(rect->w), static_cast<float>(rect->h)};
++	return SDL_RenderFillRect(renderer, &floatRect);
++#else
++	return SDL_RenderFillRect(renderer, rect) == 0;
++#endif
++}
++
++inline bool SdlCompatRenderDrawRect(SDL_Renderer *renderer,
++                                    const SDL_Rect *rect)
++{
++#ifdef PEONPAD_USE_SDL3
++	if (rect == nullptr) {
++		return SDL_RenderRect(renderer, nullptr);
++	}
++	const SDL_FRect floatRect{
++		static_cast<float>(rect->x), static_cast<float>(rect->y),
++		static_cast<float>(rect->w), static_cast<float>(rect->h)};
++	return SDL_RenderRect(renderer, &floatRect);
++#else
++	return SDL_RenderDrawRect(renderer, rect) == 0;
++#endif
++}
+diff --git a/src/include/sdl_gl_compat.h b/src/include/sdl_gl_compat.h
+new file mode 100644
+index 0000000..db0f268
+--- /dev/null
++++ b/src/include/sdl_gl_compat.h
+@@ -0,0 +1,94 @@
++#pragma once
++
++#include <SDL.h>
++#include <SDL_opengl.h>
++
++#include <limits>
++
++struct SdlCompatOpenGlTextureBinding
++{
++#ifdef PEONPAD_USE_SDL3
++	GLenum target = 0;
++#else
++	SDL_Texture *texture = nullptr;
++#endif
++};
++
++inline bool SdlCompatBindOpenGlTexture(
++	SDL_Renderer *renderer, SDL_Texture *texture,
++	SdlCompatOpenGlTextureBinding *binding)
++{
++	if (renderer == nullptr || texture == nullptr || binding == nullptr) {
++		SDL_InvalidParamError("renderer, texture, or binding");
++		return false;
++	}
++
++#ifdef PEONPAD_USE_SDL3
++	if (!SDL_FlushRenderer(renderer)) {
++		return false;
++	}
++	const SDL_PropertiesID properties = SDL_GetTextureProperties(texture);
++	if (properties == 0) {
++		return false;
++	}
++	const Sint64 textureName = SDL_GetNumberProperty(
++		properties, SDL_PROP_TEXTURE_OPENGL_TEXTURE_NUMBER, 0);
++	const Sint64 textureTarget = SDL_GetNumberProperty(
++		properties, SDL_PROP_TEXTURE_OPENGL_TEXTURE_TARGET_NUMBER, 0);
++	if (textureName <= 0 || textureTarget <= 0
++	    || static_cast<Uint64>(textureName)
++	           > std::numeric_limits<GLuint>::max()
++	    || static_cast<Uint64>(textureTarget)
++	           > std::numeric_limits<GLenum>::max()) {
++		SDL_SetError("SDL texture is not backed by the OpenGL renderer");
++		return false;
++	}
++	(void)glGetError();
++	binding->target = static_cast<GLenum>(textureTarget);
++	glBindTexture(binding->target, static_cast<GLuint>(textureName));
++	if (glGetError() != GL_NO_ERROR) {
++		SDL_SetError("OpenGL rejected the SDL texture binding");
++		binding->target = 0;
++		return false;
++	}
++	return true;
++#else
++	if (SDL_GL_BindTexture(texture, nullptr, nullptr) != 0) {
++		return false;
++	}
++	binding->texture = texture;
++	return true;
++#endif
++}
++
++inline bool
++SdlCompatUnbindOpenGlTexture(SdlCompatOpenGlTextureBinding *binding)
++{
++	if (binding == nullptr) {
++		SDL_InvalidParamError("binding");
++		return false;
++	}
++
++#ifdef PEONPAD_USE_SDL3
++	if (binding->target == 0) {
++		SDL_SetError("OpenGL texture binding is not active");
++		return false;
++	}
++	(void)glGetError();
++	glBindTexture(binding->target, 0);
++	binding->target = 0;
++	if (glGetError() != GL_NO_ERROR) {
++		SDL_SetError("OpenGL rejected the SDL texture unbind");
++		return false;
++	}
++	return true;
++#else
++	if (binding->texture == nullptr) {
++		SDL_SetError("OpenGL texture binding is not active");
++		return false;
++	}
++	SDL_Texture *texture = binding->texture;
++	binding->texture = nullptr;
++	return SDL_GL_UnbindTexture(texture) == 0;
++#endif
++}
+diff --git a/src/include/sdl_input_adapter.h b/src/include/sdl_input_adapter.h
+index 5427e9f..0675480 100644
+--- a/src/include/sdl_input_adapter.h
++++ b/src/include/sdl_input_adapter.h
+@@ -15,7 +15,7 @@ std::vector<InputIntent> AdaptSdlTouchEvent(TouchInputState &touchInput,
+                                             int width, int height,
+                                             std::uint32_t timestamp, int modifiers);
+ 
+-SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint8 windowEvent,
++SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint32 windowEvent,
+                                             bool networkGame,
+                                             bool pauseOnLeave);
+ 
+diff --git a/src/include/video.h b/src/include/video.h
+index 294745e..a09ff83 100644
+--- a/src/include/video.h
++++ b/src/include/video.h
+@@ -36,6 +36,7 @@
+ #include "color.h"
+ #include "filesystem.h"
+ #include "sdl2_helper.h"
++#include "sdl_compat.h"
+ #include "shaders.h"
+ #include "stratagus.h"
+ #include "vec2i.h"
+@@ -363,26 +364,30 @@ class CVideo
+ 	void FillCircleClip(Uint32 color, const PixelPos &screenPos, int radius);
+ 	void FillTransCircleClip(Uint32 color, int x, int y, int radius, unsigned char alpha);
+ 
+-	Uint32 MapRGB(SDL_PixelFormat *f, Uint8 r, Uint8 g, Uint8 b) { return SDL_MapRGB(f, r, g, b); }
+-	Uint32 MapRGB(SDL_PixelFormat *f, const CColor &color)
++	Uint32 MapRGB(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b)
+ 	{
+-		return MapRGB(f, color.R, color.G, color.B);
++		return SdlCompatMapRGB(surface, r, g, b);
+ 	}
+-	Uint32 MapRGBA(SDL_PixelFormat *f, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
++	Uint32 MapRGB(SDL_Surface *surface, const CColor &color)
+ 	{
+-		return SDL_MapRGBA(f, r, g, b, a);
++		return MapRGB(surface, color.R, color.G, color.B);
+ 	}
+-	Uint32 MapRGBA(SDL_PixelFormat *f, const CColor &color)
++	Uint32 MapRGBA(SDL_Surface *surface, Uint8 r, Uint8 g, Uint8 b, Uint8 a)
+ 	{
+-		return MapRGBA(f, color.R, color.G, color.B, color.A);
++		return SdlCompatMapRGBA(surface, r, g, b, a);
+ 	}
+-	void GetRGB(Uint32 c, SDL_PixelFormat *f, Uint8 *r, Uint8 *g, Uint8 *b)
++	Uint32 MapRGBA(SDL_Surface *surface, const CColor &color)
+ 	{
+-		SDL_GetRGB(c, f, r, g, b);
++		return MapRGBA(surface, color.R, color.G, color.B, color.A);
+ 	}
+-	void GetRGBA(Uint32 c, SDL_PixelFormat *f, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
++	void GetRGB(Uint32 c, SDL_Surface *surface, Uint8 *r, Uint8 *g, Uint8 *b)
+ 	{
+-		SDL_GetRGBA(c, f, r, g, b, a);
++		SdlCompatGetRGB(surface, c, r, g, b);
++	}
++	void GetRGBA(Uint32 c, SDL_Surface *surface,
++	             Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
++	{
++		SdlCompatGetRGBA(surface, c, r, g, b, a);
+ 	}
+ 
+ 	int Width = 0;
+diff --git a/src/map/fow.cpp b/src/map/fow.cpp
+index 3a6171e..012b59a 100644
+--- a/src/map/fow.cpp
++++ b/src/map/fow.cpp
+@@ -137,13 +137,15 @@ void CFogOfWar::InitTiled()
+     CFogOfWar::TiledFogSrc->Load();
+ 
+     if (Settings.Type == FogOfWarTypes::cTiledLegacy) {
+-        TileOfFogOnly = SDL_CreateRGBSurface(SDL_SWSURFACE, PixelTileSize.x, PixelTileSize.y,
+-                                             32, RMASK, GMASK, BMASK, AMASK);
++        TileOfFogOnly = SdlCompatCreateSurface(
++            PixelTileSize.x, PixelTileSize.y, 32,
++            RMASK, GMASK, BMASK, AMASK);
+         SDL_FillRect(TileOfFogOnly, nullptr, Settings.FogColorSDL | uint32_t(Settings.ExploredOpacity) << ASHIFT);
+     }
+ 
+-    SDL_Surface * const newFogSurface = SDL_ConvertSurfaceFormat(CFogOfWar::TiledFogSrc->getSurface(),
+-                                                                 SDL_MasksToPixelFormatEnum(32, RMASK, GMASK, BMASK, AMASK), 0);
++    SDL_Surface * const newFogSurface = SdlCompatConvertSurface(
++        CFogOfWar::TiledFogSrc->getSurface(),
++        SdlCompatPixelFormatForMasks(32, RMASK, GMASK, BMASK, AMASK));
+     TiledAlphaFog = CGraphic::New("");
+     TiledAlphaFog->setSurface(newFogSurface);
+     TiledAlphaFog->Width = PixelTileSize.x;
+@@ -540,7 +542,8 @@ void CFogOfWar::UpscaleBilinear(const uint8_t *const src, const SDL_Rect &srcRec
+     constexpr int32_t fixedOne = 65536;
+ 
+     uint32_t *const target = (uint32_t*)trgSurface->pixels;
+-    const uint16_t AShift = trgSurface->format->Ashift;
++    const uint16_t AShift =
++        SdlCompatGetPixelFormatDetails(trgSurface).Ashift;
+ 
+     /// FIXME: '-1' shouldn't be here, but without it the resulting fog has a shift to the left and upward
+     const int32_t xRatio = (int32_t(srcRect.w - 1) << 16) / trgRect.w;
+@@ -604,7 +607,8 @@ void CFogOfWar::UpscaleBilinear(const uint8_t *const src, const SDL_Rect &srcRec
+ void CFogOfWar::UpscaleSimple(const uint8_t *src, const SDL_Rect &srcRect, const int16_t srcWidth,
+                               SDL_Surface *const trgSurface, const SDL_Rect &trgRect) const
+ {
+-    const uint16_t surfaceAShift = trgSurface->format->Ashift;
++    const uint16_t surfaceAShift =
++        SdlCompatGetPixelFormatDetails(trgSurface).Ashift;
+ 
+     const uint8_t texelWidth  = PixelTileSize.x / 4;
+     const uint8_t texelHeight = PixelTileSize.y / 4;
+diff --git a/src/map/map_draw.cpp b/src/map/map_draw.cpp
+index 5b0eccb..e30291a 100644
+--- a/src/map/map_draw.cpp
++++ b/src/map/map_draw.cpp
+@@ -395,13 +395,13 @@ static void ShowUnitName(const CViewport &vp, PixelPos pos, CUnit *unit, bool hi
+ 	if (unit && unit->IsAliveOnMap()) {
+ 		int backgroundColor;
+ 		if (unit->Player->Index == (*tplayer).Index) {
+-			backgroundColor = Video.MapRGB(TheScreen->format, 0, 0, 252);
++			backgroundColor = Video.MapRGB(TheScreen, 0, 0, 252);
+ 		} else if (unit->Player->IsAllied(*tplayer)) {
+-			backgroundColor = Video.MapRGB(TheScreen->format, 0, 176, 0);
++			backgroundColor = Video.MapRGB(TheScreen, 0, 176, 0);
+ 		} else if (unit->Player->IsEnemy(*tplayer)) {
+-			backgroundColor = Video.MapRGB(TheScreen->format, 252, 0, 0);
++			backgroundColor = Video.MapRGB(TheScreen, 252, 0, 0);
+ 		} else {
+-			backgroundColor = Video.MapRGB(TheScreen->format, 176, 176, 176);
++			backgroundColor = Video.MapRGB(TheScreen, 176, 176, 176);
+ 		}
+ 		width = font.getWidth(unit->Type->Name) + 10;
+ 		x = std::min<int>(GameCursor->G->Width + pos.x, vp.BottomRightPos.x - 1 - width);
+diff --git a/src/map/map_fog.cpp b/src/map/map_fog.cpp
+index e8edb2e..f5a2b61 100644
+--- a/src/map/map_fog.cpp
++++ b/src/map/map_fog.cpp
+@@ -433,9 +433,8 @@ void CViewport::AdjustFogSurface()
+ 									/ PixelTileSize.y + 2)
+ 									* PixelTileSize.y; /// +2 because of Offset.y
+ 
+-    this->FogSurface = SDL_CreateRGBSurface(SDL_SWSURFACE, surfaceWidth,
+-                                                     	   surfaceHeight,
+-                                                     	   32, RMASK, GMASK, BMASK, AMASK);
++    this->FogSurface = SdlCompatCreateSurface(
++        surfaceWidth, surfaceHeight, 32, RMASK, GMASK, BMASK, AMASK);
+     SDL_SetSurfaceBlendMode(this->FogSurface, SDL_BLENDMODE_NONE);
+ 
+ 	const uint32_t fogColorSolid = FogOfWar->GetFogColorSDL() | (uint32_t(0xFF) << ASHIFT);
+diff --git a/src/map/minimap.cpp b/src/map/minimap.cpp
+index be50b5c..7bdeac8 100644
+--- a/src/map/minimap.cpp
++++ b/src/map/minimap.cpp
+@@ -133,10 +133,15 @@ void CMinimap::Create()
+ 	}
+ 
+ 	// Palette updated from UpdateMinimapTerrain()
+-	SDL_PixelFormat *f    = Map.TileGraphic->getSurface()->format;
+-	MinimapTerrainSurface = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, f->BitsPerPixel, f->Rmask, f->Gmask, f->Bmask, f->Amask);
+-	MinimapSurface 		  = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, 32, RMASK, GMASK, BMASK, 0);
+-	MinimapFogSurface 	  = SDL_CreateRGBSurface(SDL_SWSURFACE, W, H, 32, RMASK, GMASK, BMASK, AMASK);
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface());
++	MinimapTerrainSurface = SdlCompatCreateSurface(
++		W, H, format.BitsPerPixel,
++		format.Rmask, format.Gmask, format.Bmask, format.Amask);
++	MinimapSurface = SdlCompatCreateSurface(
++		W, H, 32, RMASK, GMASK, BMASK, 0);
++	MinimapFogSurface = SdlCompatCreateSurface(
++		W, H, 32, RMASK, GMASK, BMASK, AMASK);
+ 
+     SDL_SetSurfaceBlendMode(MinimapFogSurface, SDL_BLENDMODE_BLEND);
+ 
+@@ -172,11 +177,12 @@ void CMinimap::UpdateTerrain()
+ 	if (!scaley) {
+ 		scaley = 1;
+ 	}
+-	const int bpp = Map.TileGraphic->getSurface()->format->BytesPerPixel;
++	const int bpp =
++		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface()).BytesPerPixel;
+ 
+ 	if (bpp == 1) {
+-		SDL_SetPaletteColors(MinimapTerrainSurface->format->palette,
+-		                     Map.TileGraphic->getSurface()->format->palette->colors,
++		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(MinimapTerrainSurface),
++		                     SdlCompatGetSurfacePalette(Map.TileGraphic->getSurface())->colors,
+ 		                     0,
+ 		                     256);
+ 	}
+@@ -250,7 +256,8 @@ void CMinimap::UpdateXY(const Vec2i &pos)
+ 	}
+ 
+ 	const int tilepitch = Map.TileGraphic->getSurface()->w / PixelTileSize.x;
+-	const int bpp = Map.TileGraphic->getSurface()->format->BytesPerPixel;
++	const int bpp =
++		SdlCompatGetPixelFormatDetails(Map.TileGraphic->getSurface()).BytesPerPixel;
+ 
+ 	//
+ 	//  Pixel 7,6 7,14, 15,6 15,14 are taken for the minimap picture.
+@@ -322,7 +329,7 @@ static void DrawUnitOn(const CUnit &unit, int red_phase)
+ 
+ 	Uint32 color;
+ 	if (unit.Player->Index == PlayerNumNeutral) {
+-		color = Video.MapRGB(TheScreen->format, type->NeutralMinimapColorRGB);
++		color = Video.MapRGB(TheScreen, type->NeutralMinimapColorRGB);
+ 	} else if (unit.Player == ThisPlayer && !Editor.Running) {
+ 		if (unit.Attacked && unit.Attacked + ATTACK_BLINK_DURATION > GameCycle &&
+ 			(red_phase || unit.Attacked + ATTACK_RED_DURATION > GameCycle)) {
+@@ -348,8 +355,8 @@ static void DrawUnitOn(const CUnit &unit, int red_phase)
+ 	}
+ 	int bpp = 0;
+ 	SDL_Color c;
+-	bpp = MinimapSurface->format->BytesPerPixel;
+-	SDL_GetRGB(color, TheScreen->format, &c.r, &c.g, &c.b);
++	bpp = SdlCompatGetPixelFormatDetails(MinimapSurface).BytesPerPixel;
++	SdlCompatGetRGB(TheScreen, color, &c.r, &c.g, &c.b);
+ 	while (w-- >= 0) {
+ 		int h = h0;
+ 		while (h-- >= 0) {
+@@ -377,7 +384,8 @@ void CMinimap::Update()
+ 
+ 	// Clear Minimap background if not transparent
+ 	if (!Transparent) {
+-		SDL_FillRect(MinimapSurface, nullptr, SDL_MapRGB(MinimapSurface->format, 0, 0, 0));
++		SDL_FillRect(MinimapSurface, nullptr,
++		             SdlCompatMapRGB(MinimapSurface, 0, 0, 0));
+ 	}
+ 
+ 	//
+@@ -493,7 +501,7 @@ void CMinimap::Destroy()
+ 		SDL_FreeSurface(MinimapSurface);
+ 		MinimapSurface = nullptr;
+ 	}
+-	if (MinimapFogSurface && MinimapFogSurface->format != nullptr) {
++	if (SdlCompatSurfaceHasFormat(MinimapFogSurface)) {
+ 		SDL_FreeSurface(MinimapFogSurface);
+ 		MinimapFogSurface = nullptr;
+ 	}
+diff --git a/src/map/script_tileset.cpp b/src/map/script_tileset.cpp
+index 3e05878..60069c8 100644
+--- a/src/map/script_tileset.cpp
++++ b/src/map/script_tileset.cpp
+@@ -1067,13 +1067,16 @@ void CTilesetGraphicGenerator::removeColors(lua_State *luaStack, sequence_of_ima
+ 	for (auto &image : images) {
+ 		/// Do remove colors
+ 		SDL_Surface *const imgSurface { image.get() };
++		const int bytesPerPixel =
++			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
+ 		const size_t pixelsNum = imgSurface->w * imgSurface->h;
+ 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
+-			void *const pixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
+-			if (checkPixel(pixelPos, colors, imgSurface->format->BytesPerPixel)) {
+-				if (!except) removePixel(pixelPos, colorKey, imgSurface->format->BytesPerPixel);
++			void *const pixelPos = reinterpret_cast<void *>(
++				uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
++			if (checkPixel(pixelPos, colors, bytesPerPixel)) {
++				if (!except) removePixel(pixelPos, colorKey, bytesPerPixel);
+ 			} else if (except) {
+-				removePixel(pixelPos, colorKey, imgSurface->format->BytesPerPixel);
++				removePixel(pixelPos, colorKey, bytesPerPixel);
+ 			}
+ 		}
+ 	}
+@@ -1097,11 +1100,14 @@ void CTilesetGraphicGenerator::shiftIndexedColors(lua_State *luaStack, sequence_
+ 	for (auto &image : images) {
+ 		/// Do shift colors
+ 		SDL_Surface *const imgSurface { image.get() };
++		const int bytesPerPixel =
++			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
+ 		const size_t pixelsNum = imgSurface->w * imgSurface->h;
+ 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
+-			void *const pixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
+-			if (checkPixel(pixelPos, colors, imgSurface->format->BytesPerPixel)) {
+-				shiftIndexedColor(pixelPos, shift, imgSurface->format->BytesPerPixel);
++			void *const pixelPos = reinterpret_cast<void *>(
++				uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
++			if (checkPixel(pixelPos, colors, bytesPerPixel)) {
++				shiftIndexedColor(pixelPos, shift, bytesPerPixel);
+ 			}
+ 		}
+ 	}
+@@ -1145,6 +1151,8 @@ void CTilesetGraphicGenerator::flipImages(lua_State *luaStack, sequence_of_image
+ 	for (auto &image : images) {
+ 		/// Do flip image
+ 		SDL_Surface *const imgSurface { image.get() };
++		const int bytesPerPixel =
++			SdlCompatGetPixelFormatDetails(imgSurface).BytesPerPixel;
+ 		size_t ySrc, rySrc;
+ 		size_t xSrc, rxSrc;
+ 		size_t &xDst = direction & cHorizontal ? rxSrc : xSrc;
+@@ -1153,14 +1161,16 @@ void CTilesetGraphicGenerator::flipImages(lua_State *luaStack, sequence_of_image
+ 		for (ySrc = 0, rySrc = imgSurface->h - 1; ySrc < imgSurface->h; ySrc++, rySrc--) {
+ 			for (xSrc = 0, rxSrc = imgSurface->w - 1; xSrc < imgSurface->w; xSrc++, rxSrc--) {
+ 				const size_t pixel = xSrc + ySrc * imgSurface->w;
+-				void *const srcPixelPos = reinterpret_cast<void *>(uintptr_t(imgSurface->pixels) + pixel * imgSurface->format->BytesPerPixel);
+-				flippedImage[xDst + yDst * imgSurface->w] = getPixel(srcPixelPos, imgSurface->format->BytesPerPixel);
++				void *const srcPixelPos = reinterpret_cast<void *>(
++					uintptr_t(imgSurface->pixels) + pixel * bytesPerPixel);
++				flippedImage[xDst + yDst * imgSurface->w] =
++					getPixel(srcPixelPos, bytesPerPixel);
+ 			}
+ 		}
+ 		uintptr_t dstPixelPos = uintptr_t(imgSurface->pixels);
+ 		for (auto pixel : flippedImage) {
+-			setPixel(reinterpret_cast<void *>(dstPixelPos), pixel, imgSurface->format->BytesPerPixel);
+-			dstPixelPos += imgSurface->format->BytesPerPixel;
++			setPixel(reinterpret_cast<void *>(dstPixelPos), pixel, bytesPerPixel);
++			dstPixelPos += bytesPerPixel;
+ 		}
+ 	}
+ }
+@@ -1196,6 +1206,10 @@ void CTilesetGraphicGenerator::composeByChromaKey(lua_State *luaStack, sequence_
+ 		SDL_Surface *const dstImgSurface { image.get() };
+ 		SDL_Surface *const srcImgSurface = parsedSrcImages.size() ? parsedSrcImages[srcImgIdx % parsedSrcImages.size()].get()
+ 																  : srcImage.get();
++		const int destinationBytesPerPixel =
++			SdlCompatGetPixelFormatDetails(dstImgSurface).BytesPerPixel;
++		const int sourceBytesPerPixel =
++			SdlCompatGetPixelFormatDetails(srcImgSurface).BytesPerPixel;
+ 		if (parsedSrcIndexes.size()) {
+  			const graphic_index frameIdx = parsedSrcIndexes[srcImgIdx % parsedSrcIndexes.size()];
+ 			SrcTilesetGraphic->DrawFrame(frameIdx, 0, 0, srcImage.get());
+@@ -1203,11 +1217,16 @@ void CTilesetGraphicGenerator::composeByChromaKey(lua_State *luaStack, sequence_
+ 
+ 		const size_t pixelsNum = dstImgSurface->w * dstImgSurface->h;
+ 		for (size_t pixel = 0; pixel < pixelsNum; pixel++) {
+-			void *const dstPixelPos = reinterpret_cast<void *>(uintptr_t(dstImgSurface->pixels) + pixel * dstImgSurface->format->BytesPerPixel);
+-			void *const srcPixelPos = reinterpret_cast<void *>(uintptr_t(srcImgSurface->pixels) + pixel * dstImgSurface->format->BytesPerPixel);
+-
+-			if (checkPixel(dstPixelPos, colors, dstImgSurface->format->BytesPerPixel)) {
+-				setPixel(dstPixelPos, getPixel(srcPixelPos, srcImgSurface->format->BytesPerPixel), dstImgSurface->format->BytesPerPixel);
++			void *const dstPixelPos = reinterpret_cast<void *>(
++				uintptr_t(dstImgSurface->pixels)
++				+ pixel * destinationBytesPerPixel);
++			void *const srcPixelPos = reinterpret_cast<void *>(
++				uintptr_t(srcImgSurface->pixels) + pixel * sourceBytesPerPixel);
++
++			if (checkPixel(dstPixelPos, colors, destinationBytesPerPixel)) {
++				setPixel(dstPixelPos,
++				         getPixel(srcPixelPos, sourceBytesPerPixel),
++				         destinationBytesPerPixel);
+ 			}
+ 		}
+ 		srcImgIdx++;
+@@ -1292,22 +1311,24 @@ void CTilesetGraphicGenerator::parseModifier(lua_State *luaStack, const int argP
+ **/
+ sdl2::SurfacePtr CTilesetGraphicGenerator::newBlankImage() const
+ {
+-	const SDL_PixelFormat *format = SrcTilesetGraphic->getSurface()->format;
+-
+-	sdl2::SurfacePtr blankImg{SDL_CreateRGBSurface(SrcTilesetGraphic->getSurface()->flags,
+-	                                               SrcTileset->getPixelTileSize().x,
+-	                                               SrcTileset->getPixelTileSize().y,
+-	                                               format->BitsPerPixel,
+-	                                               format->Rmask,
+-	                                               format->Gmask,
+-	                                               format->Bmask,
+-	                                               format->Amask)};
++	SDL_Surface *const source = SrcTilesetGraphic->getSurface();
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(source);
++
++	sdl2::SurfacePtr blankImg{SdlCompatCreateSurface(
++		SrcTileset->getPixelTileSize().x,
++		SrcTileset->getPixelTileSize().y,
++		format.BitsPerPixel,
++		format.Rmask,
++		format.Gmask,
++		format.Bmask,
++		format.Amask)};
+ 	uint32_t colorKey = 0;
+-	if (!SDL_GetColorKey(SrcTilesetGraphic->getSurface(), &colorKey)) {
+-		SDL_SetColorKey(blankImg.get(), SDL_TRUE, colorKey);
++	if (SdlCompatGetColorKey(source, &colorKey)) {
++		SdlCompatSetColorKey(blankImg.get(), true, colorKey);
+ 	}
+-	if (format->palette) {
+-		SDL_SetSurfacePalette(blankImg.get(), format->palette);
++	if (SDL_Palette *palette = SdlCompatGetSurfacePalette(source)) {
++		SDL_SetSurfacePalette(blankImg.get(), palette);
+ 	}
+ 	return blankImg;
+ }
+diff --git a/src/sound/music.cpp b/src/sound/music.cpp
+index b426ff5..15038a2 100644
+--- a/src/sound/music.cpp
++++ b/src/sound/music.cpp
+@@ -98,6 +98,9 @@ static void MusicFinishedCallback()
+ 	if (SDL_PeepEvents(&event, 1, SDL_ADDEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT) <= 0) {
+ 		// if we failed to enqueue the event, clear the flag again
+ 		MusicFinishedEventQueued.clear();
++		SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
++		             "Unable to queue music-finished event: %s",
++		             SDL_GetError());
+ 	}
+ }
+ 
+diff --git a/src/sound/sound_server.cpp b/src/sound/sound_server.cpp
+index 850529a..359681f 100644
+--- a/src/sound/sound_server.cpp
++++ b/src/sound/sound_server.cpp
+@@ -39,6 +39,7 @@
+ 
+ #include "stratagus.h"
+ 
++#include "sdl_compat.h"
+ #include "sound_server.h"
+ 
+ #ifdef USE_FLUIDSYNTH
+@@ -301,7 +302,13 @@ static void ChannelFinished(int channel)
+ 		event.type = SDL_SOUND_FINISHED;
+ 		event.user.code = channel;
+ 		event.user.data1 = (void*) Channels[channel].FinishedCallback;
+-		SDL_PeepEvents(&event, 1, SDL_ADDEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT);
++		if (SDL_PeepEvents(
++			    &event, 1, SDL_ADDEVENT,
++			    SDL_FIRSTEVENT, SDL_LASTEVENT) <= 0) {
++			SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
++			             "Unable to queue sound-finished event: %s",
++			             SDL_GetError());
++		}
+ 	}
+ 	Channels[channel].Unit = nullptr;
+ }
+@@ -698,9 +705,14 @@ static bool InitSdlSound()
+ #ifndef BUILD_VENDORED_SDL
+ 	const char *cfg = SDL_getenv("TIMIDITY_CFG");
+ 	if (!cfg && fs::exists(timidityCfg)) {
+-		SDL_setenv("TIMIDITY_CFG", timidityCfg.generic_u8string().c_str(), 0);
++		SdlCompatSetEnvironmentVariable(
++			"TIMIDITY_CFG", timidityCfg.generic_u8string().c_str(), false);
+ 	} else {
+-		SDL_setenv("TIMIDITY_CFG", (GetExecutablePath().parent_path() / "freepats" / "crude.cfg").generic_u8string().c_str(), 0);
++		SdlCompatSetEnvironmentVariable(
++			"TIMIDITY_CFG",
++			(GetExecutablePath().parent_path() / "freepats" / "crude.cfg")
++				.generic_u8string().c_str(),
++			false);
+ 	}
+ #else
+ 	if (fs::exists(timidityCfg)) {
+@@ -713,6 +725,7 @@ static bool InitSdlSound()
+ 	Mix_Init(std::numeric_limits<unsigned int>::max());
+ 	if (Mix_OpenAudio(MIX_DEFAULT_FREQUENCY, MIX_DEFAULT_FORMAT, MIX_DEFAULT_CHANNELS, 1024)) {
+ 		ErrorPrint("Couldn't open audio: %s\n", SDL_GetError());
++		Mix_Quit();
+ 		return false;
+ 	} else {
+ 		printf("Supported sound decoders:");
+@@ -742,9 +755,23 @@ bool InitSound()
+ 		SoundInitialized = false;
+ 		return false;
+ 	}
+-	SDL_SOUND_FINISHED = SDL_RegisterEvents(1);
++	if (!SdlCompatRegisterUserEvent(&SDL_SOUND_FINISHED)) {
++		ErrorPrint("Couldn't register sound event: %s\n", SDL_GetError());
++		Mix_CloseAudio();
++		Mix_Quit();
++		SoundInitialized = false;
++		return false;
++	}
++	const int allocatedChannels = Mix_AllocateChannels(MaxChannels);
++	if (allocatedChannels != MaxChannels) {
++		ErrorPrint("Couldn't allocate %d sound channels (got %d): %s\n",
++		           MaxChannels, allocatedChannels, SDL_GetError());
++		Mix_CloseAudio();
++		Mix_Quit();
++		SoundInitialized = false;
++		return false;
++	}
+ 	SoundInitialized = true;
+-	Mix_AllocateChannels(MaxChannels);
+ 	Mix_ChannelFinished(ChannelFinished);
+ 
+ 	// Now we're ready for the callback to run
+diff --git a/src/stratagus/iolib.cpp b/src/stratagus/iolib.cpp
+index 92a6494..d99e697 100644
+--- a/src/stratagus/iolib.cpp
++++ b/src/stratagus/iolib.cpp
+@@ -45,9 +45,12 @@
+ 
+ #include <SDL.h>
+ 
++#include <array>
+ #include <cstdarg>
+ #include <cstdio>
++#include <limits>
+ #include <map>
++#include <string>
+ #include <unordered_map>
+ 
+ #ifdef USE_ZLIB
+@@ -80,13 +83,26 @@ class CFile::PImpl
+ 	int read(void *buf, size_t len);
+ 	int seek(long offset, int whence);
+ 	long tell();
++	long size();
+ 	int write(const void *buf, size_t len);
+ 
+ private:
++#ifdef USE_ZLIB
++	long gzipSize();
++#endif
++#ifdef USE_BZ2LIB
++	bool reopenBzipAt(long position);
++	long bzipSize();
++#endif
++
+ 	ClfType cl_type = ClfType::Invalid; /// type of CFile
++	std::string cl_name;
++	long cl_flags = 0;
++	long cl_position = 0;
++	long cl_size = -1;
+ 	FILE *cl_plain = nullptr;  /// standard file pointer
+ #ifdef USE_ZLIB
+-	gzFile cl_gz;    /// gzip file pointer
++	gzFile cl_gz = nullptr;    /// gzip file pointer
+ #endif // !USE_ZLIB
+ #ifdef USE_BZ2LIB
+ 	BZFILE *cl_bz = nullptr; /// bzip2 file pointer
+@@ -155,6 +171,11 @@ long CFile::tell()
+ 	return pimpl->tell();
+ }
+ 
++long CFile::size()
++{
++	return pimpl->size();
++}
++
+ /**
+ **  CLprintf Library file write
+ **
+@@ -165,20 +186,141 @@ void CFile::write(std::string_view data)
+ 	pimpl->write(data.data(), data.size());
+ }
+ 
++#ifdef PEONPAD_USE_SDL3
++
++static Sint64 SDLCALL sdl_size(void *userdata)
++{
++	CFile *self = static_cast<CFile *>(userdata);
++	const long size = self->tell();
++	const long result = self->size();
++	if (result < 0) {
++		SDL_SetError("Unable to determine CFile stream size");
++		return -1;
++	}
++	if (self->tell() != size) {
++		SDL_SetError("CFile size query changed the stream position");
++		return -1;
++	}
++	return result;
++}
++
++static Sint64 SDLCALL
++sdl_seek(void *userdata, Sint64 offset, SDL_IOWhence whence)
++{
++	if (offset < std::numeric_limits<long>::min()
++	    || offset > std::numeric_limits<long>::max()) {
++		SDL_SetError("CFile seek offset is outside the supported range");
++		return -1;
++	}
++
++	int origin = SEEK_SET;
++	switch (whence) {
++		case SDL_IO_SEEK_SET:
++			origin = SEEK_SET;
++			break;
++		case SDL_IO_SEEK_CUR:
++			origin = SEEK_CUR;
++			break;
++		case SDL_IO_SEEK_END:
++			origin = SEEK_END;
++			break;
++		default:
++			SDL_SetError("Invalid CFile seek origin");
++			return -1;
++	}
++
++	CFile *self = static_cast<CFile *>(userdata);
++	if (self->seek(static_cast<long>(offset), origin) != 0) {
++		SDL_SetError("Unable to seek CFile stream");
++		return -1;
++	}
++	return self->tell();
++}
++
++static size_t SDLCALL
++sdl_read(void *userdata, void *ptr, size_t size, SDL_IOStatus *status)
++{
++	CFile *self = static_cast<CFile *>(userdata);
++	const size_t request =
++		std::min(size, static_cast<size_t>(std::numeric_limits<int>::max()));
++	const int bytesRead = self->read(ptr, request);
++	if (bytesRead < 0) {
++		*status = SDL_IO_STATUS_ERROR;
++		SDL_SetError("Unable to read CFile stream");
++		return 0;
++	}
++	if (static_cast<size_t>(bytesRead) < request) {
++		*status = SDL_IO_STATUS_EOF;
++	}
++	return static_cast<size_t>(bytesRead);
++}
++
++static size_t SDLCALL
++sdl_write(void *, const void *, size_t, SDL_IOStatus *status)
++{
++	*status = SDL_IO_STATUS_READONLY;
++	SDL_SetError("CFile SDL stream is read-only");
++	return 0;
++}
++
++static bool SDLCALL sdl_flush(void *, SDL_IOStatus *)
++{
++	return true;
++}
++
++static bool SDLCALL sdl_close(void *userdata)
++{
++	std::unique_ptr<CFile> self{static_cast<CFile *>(userdata)};
++	if (self->close() != 0) {
++		SDL_SetError("Unable to close CFile stream");
++		return false;
++	}
++	return true;
++}
++
++SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
++{
++	if (!file) {
++		SDL_SetError("CFile stream requires an owner");
++		return nullptr;
++	}
++	SDL_IOStreamInterface interface;
++	SDL_INIT_INTERFACE(&interface);
++	interface.size = sdl_size;
++	interface.seek = sdl_seek;
++	interface.read = sdl_read;
++	interface.write = sdl_write;
++	interface.flush = sdl_flush;
++	interface.close = sdl_close;
++
++	SDL_IOStream *stream = SDL_OpenIO(&interface, file.get());
++	if (stream != nullptr) {
++		file.release();
++	}
++	return stream;
++}
++
++#else
++
+ static Sint64 sdl_size(SDL_RWops *context)
+ {
+ 	CFile *self = reinterpret_cast<CFile*>(context->hidden.unknown.data1);
+-	long currentPosition = self->tell();
+-	self->seek(0, SEEK_END);
+-	long size = self->tell();
+-	self->seek(currentPosition, SEEK_SET);
+-	return size;
++	const long position = self->tell();
++	const long result = self->size();
++	if (result < 0 || self->tell() != position) {
++		SDL_SetError("Unable to determine CFile stream size");
++		return -1;
++	}
++	return result;
+ }
+ 
+ static Sint64 sdl_seek(SDL_RWops *context, Sint64 offset, int whence)
+ {
+ 	CFile *self = reinterpret_cast<CFile*>(context->hidden.unknown.data1);
+-	return self->seek(offset, whence);
++	if (self->seek(offset, whence) != 0) {
++		return -1;
++	}
++	return self->tell();
+ }
+ 
+ static size_t sdl_read(SDL_RWops *context, void *ptr, size_t size, size_t maxnum)
+@@ -187,9 +329,8 @@ static size_t sdl_read(SDL_RWops *context, void *ptr, size_t size, size_t maxnum
+ 	return self->read(ptr, size * maxnum) / size;
+ }
+ 
+-static size_t sdl_write(SDL_RWops *context, const void *ptr, size_t size, size_t num)
++static size_t sdl_write(SDL_RWops *, const void *, size_t, size_t)
+ {
+-	// Should not be called.
+ 	return 0;
+ }
+ 
+@@ -203,7 +344,14 @@ static int sdl_close(SDL_RWops *context)
+ 
+ SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
+ {
++	if (!file) {
++		SDL_SetError("CFile stream requires an owner");
++		return nullptr;
++	}
+ 	SDL_RWops *ops = SDL_AllocRW();
++	if (ops == nullptr) {
++		return nullptr;
++	}
+ 	ops->type = SDL_RWOPS_UNKNOWN;
+ 	ops->hidden.unknown.data1 = file.release();
+ 	ops->size = sdl_size;
+@@ -214,6 +362,8 @@ SDL_RWops *CFile::to_SDL_RWops(std::unique_ptr<CFile> file)
+ 	return ops;
+ }
+ 
++#endif
++
+ //
+ //  Implementation.
+ //
+@@ -252,28 +402,6 @@ static int gzseek(CFile *file, unsigned offset, int whence)
+ 
+ #endif // USE_ZLIB
+ 
+-#ifdef USE_BZ2LIB
+-
+-/**
+-**  Seek on compressed input. (I hope newer libs support it directly)
+-**
+-**  @param file    File handle
+-**  @param offset  Seek position
+-**  @param whence  How to seek
+-*/
+-static void bzseek(BZFILE *file, unsigned offset, int)
+-{
+-	char buf[32];
+-
+-	while (offset > sizeof(buf)) {
+-		BZ2_bzread(file, buf, sizeof(buf));
+-		offset -= sizeof(buf);
+-	}
+-	BZ2_bzread(file, buf, offset);
+-}
+-
+-#endif // USE_BZ2LIB
+-
+ int CFile::PImpl::open(const char *name, long openflags)
+ {
+ 	const char *openstring;
+@@ -291,17 +419,23 @@ int CFile::PImpl::open(const char *name, long openflags)
+ 	}
+ 
+ 	cl_type = ClfType::Invalid;
++	cl_name.clear();
++	cl_flags = openflags;
++	cl_position = 0;
++	cl_size = -1;
+ 
+ 	if (openflags & CL_OPEN_WRITE) {
+ #ifdef USE_BZ2LIB
+ 		if ((openflags & CL_WRITE_BZ2)
+-			&& (cl_bz = BZ2_bzopen((std::string(name) + ".bz2").c_str(), openstring))) {
++		    && (cl_name = std::string(name) + ".bz2",
++		        cl_bz = BZ2_bzopen(cl_name.c_str(), openstring))) {
+ 			cl_type = ClfType::Bzip2;
+ 		} else
+ #endif
+ #ifdef USE_ZLIB
+ 			if ((openflags & CL_WRITE_GZ)
+-		        && (cl_gz = gzopen((std::string(name) + ".gz").c_str(), openstring)))
++			    && (cl_name = std::string(name) + ".gz",
++			        cl_gz = gzopen(cl_name.c_str(), openstring)))
+ 		{
+ 				cl_type = ClfType::Gzip;
+ 			} else
+@@ -312,12 +446,14 @@ int CFile::PImpl::open(const char *name, long openflags)
+ 	} else {
+ 		if (!(cl_plain = fopen(name, openstring))) { // try plain first
+ #ifdef USE_ZLIB
+-			if ((cl_gz = gzopen((std::string(name) + ".gz").c_str(), "rb"))) {
++			if ((cl_name = std::string(name) + ".gz",
++			     cl_gz = gzopen(cl_name.c_str(), "rb"))) {
+ 				cl_type = ClfType::Gzip;
+ 			} else
+ #endif
+ #ifdef USE_BZ2LIB
+-				if ((cl_bz = BZ2_bzopen((std::string(name) + ".bz2").c_str(), "rb"))) {
++				if ((cl_name = std::string(name) + ".bz2",
++				     cl_bz = BZ2_bzopen(cl_name.c_str(), "rb"))) {
+ 					cl_type = ClfType::Bzip2;
+ 				} else
+ #endif
+@@ -331,7 +467,8 @@ int CFile::PImpl::open(const char *name, long openflags)
+ #ifdef USE_BZ2LIB
+ 				if (buf[0] == 'B' && buf[1] == 'Z') {
+ 					fclose(cl_plain);
+-					if ((cl_bz = BZ2_bzopen(name, "rb"))) {
++					cl_name = name;
++					if ((cl_bz = BZ2_bzopen(cl_name.c_str(), "rb"))) {
+ 						cl_type = ClfType::Bzip2;
+ 					} else {
+ 						if (!(cl_plain = fopen(name, "rb"))) {
+@@ -343,7 +480,8 @@ int CFile::PImpl::open(const char *name, long openflags)
+ #ifdef USE_ZLIB
+ 				if (buf[0] == 0x1f) { // don't check for buf[1] == 0x8b, so that old compress also works!
+ 					fclose(cl_plain);
+-					if ((cl_gz = gzopen(name, "rb"))) {
++					cl_name = name;
++					if ((cl_gz = gzopen(cl_name.c_str(), "rb"))) {
+ 						cl_type = ClfType::Gzip;
+ 					} else {
+ 						if (!(cl_plain = fopen(name, "rb"))) {
+@@ -378,11 +516,13 @@ int CFile::PImpl::close()
+ #ifdef USE_ZLIB
+ 		if (tp == ClfType::Gzip) {
+ 			ret = gzclose(cl_gz);
++			cl_gz = nullptr;
+ 		}
+ #endif // USE_ZLIB
+ #ifdef USE_BZ2LIB
+ 		if (tp == ClfType::Bzip2) {
+ 			BZ2_bzclose(cl_bz);
++			cl_bz = nullptr;
+ 			ret = 0;
+ 		}
+ #endif // USE_BZ2LIB
+@@ -390,6 +530,10 @@ int CFile::PImpl::close()
+ 		errno = EBADF;
+ 	}
+ 	cl_type = ClfType::Invalid;
++	cl_name.clear();
++	cl_flags = 0;
++	cl_position = 0;
++	cl_size = -1;
+ 	return ret;
+ }
+ 
+@@ -404,11 +548,22 @@ int CFile::PImpl::read(void *buf, size_t len)
+ #ifdef USE_ZLIB
+ 		if (cl_type == ClfType::Gzip) {
+ 			ret = gzread(cl_gz, buf, len);
++			if (len != 0 && ret == 0 && gzeof(cl_gz)) {
++				const long position = tell();
++				if (position >= 0) {
++					cl_size = position;
++				}
++			}
+ 		}
+ #endif // USE_ZLIB
+ #ifdef USE_BZ2LIB
+ 		if (cl_type == ClfType::Bzip2) {
+ 			ret = BZ2_bzread(cl_bz, buf, len);
++			if (ret > 0) {
++				cl_position += ret;
++			} else if (len != 0 && ret == 0) {
++				cl_size = cl_position;
++			}
+ 		}
+ #endif // USE_BZ2LIB
+ 	} else {
+@@ -442,6 +597,7 @@ int CFile::PImpl::write(const void *buf, size_t size)
+ {
+ 	ClfType tp = cl_type;
+ 	int ret = -1;
++	cl_size = -1;
+ 
+ 	if (tp != ClfType::Invalid) {
+ 		if (tp == ClfType::Plain) {
+@@ -455,6 +611,9 @@ int CFile::PImpl::write(const void *buf, size_t size)
+ #ifdef USE_BZ2LIB
+ 		if (tp == ClfType::Bzip2) {
+ 			ret = BZ2_bzwrite(cl_bz, const_cast<void *>(buf), size);
++			if (ret > 0) {
++				cl_position += ret;
++			}
+ 		}
+ #endif // USE_BZ2LIB
+ 	} else {
+@@ -465,56 +624,269 @@ int CFile::PImpl::write(const void *buf, size_t size)
+ 
+ int CFile::PImpl::seek(long offset, int whence)
+ {
+-	int ret = -1;
+-	ClfType tp = cl_type;
+-
+-	if (tp != ClfType::Invalid) {
+-		if (tp == ClfType::Plain) {
+-			ret = fseek(cl_plain, offset, whence);
+-		}
++	switch (cl_type) {
++		case ClfType::Plain:
++			return fseek(cl_plain, offset, whence) == 0 ? 0 : -1;
++		case ClfType::Gzip:
+ #ifdef USE_ZLIB
+-		if (tp == ClfType::Gzip) {
+-			ret = gzseek(cl_gz, offset, whence);
++		{
++			const long current = tell();
++			if (current < 0) {
++				return -1;
++			}
++			long base = 0;
++			switch (whence) {
++				case SEEK_SET:
++					break;
++				case SEEK_CUR:
++					base = current;
++					break;
++				case SEEK_END:
++					base = gzipSize();
++					if (base < 0) {
++						return -1;
++					}
++					break;
++				default:
++					return -1;
++			}
++			if ((offset > 0
++			     && base > std::numeric_limits<long>::max() - offset)
++			    || (offset < 0
++			        && base < std::numeric_limits<long>::min() - offset)) {
++				return -1;
++			}
++			const long target = base + offset;
++			if (target < 0) {
++				return -1;
++			}
++			gzclearerr(cl_gz);
++			const z_off_t result = gzseek(cl_gz, target, SEEK_SET);
++			if (result != target) {
++				gzclearerr(cl_gz);
++				gzseek(cl_gz, current, SEEK_SET);
++				return -1;
++			}
++			return 0;
+ 		}
+-#endif // USE_ZLIB
++#else
++			return -1;
++#endif
++		case ClfType::Bzip2:
+ #ifdef USE_BZ2LIB
+-		if (tp == ClfType::Bzip2) {
+-			bzseek(cl_bz, offset, whence);
+-			ret = 0;
++		{
++			const long current = cl_position;
++			long base = 0;
++			switch (whence) {
++				case SEEK_SET:
++					break;
++				case SEEK_CUR:
++					base = current;
++					break;
++				case SEEK_END:
++					base = bzipSize();
++					if (base < 0) {
++						return -1;
++					}
++					break;
++				default:
++					return -1;
++			}
++			if ((offset > 0
++			     && base > std::numeric_limits<long>::max() - offset)
++			    || (offset < 0
++			        && base < std::numeric_limits<long>::min() - offset)) {
++				return -1;
++			}
++			const long target = base + offset;
++			if (target < 0) {
++				return -1;
++			}
++			if (target == current) {
++				return 0;
++			}
++			if (reopenBzipAt(target)) {
++				return 0;
++			}
++			reopenBzipAt(current);
++			return -1;
+ 		}
+-#endif // USE_BZ2LIB
+-	} else {
+-		errno = EBADF;
++#else
++			return -1;
++#endif
++		case ClfType::Invalid:
++			errno = EBADF;
++			return -1;
+ 	}
+-	return ret;
++	return -1;
+ }
+ 
+ long CFile::PImpl::tell()
+ {
+-	int ret = -1;
+-	ClfType tp = cl_type;
++	switch (cl_type) {
++		case ClfType::Plain:
++			return ftell(cl_plain);
++		case ClfType::Gzip:
++#ifdef USE_ZLIB
++			return static_cast<long>(gztell(cl_gz));
++#else
++			return -1;
++#endif
++		case ClfType::Bzip2:
++#ifdef USE_BZ2LIB
++			return cl_position;
++#else
++			return -1;
++#endif
++		case ClfType::Invalid:
++			errno = EBADF;
++			return -1;
++	}
++	return -1;
++}
+ 
+-	if (tp != ClfType::Invalid) {
+-		if (tp == ClfType::Plain) {
+-			ret = ftell(cl_plain);
++long CFile::PImpl::size()
++{
++	switch (cl_type) {
++		case ClfType::Plain:
++		{
++			const long original = ftell(cl_plain);
++			if (original < 0 || fseek(cl_plain, 0, SEEK_END) != 0) {
++				return -1;
++			}
++			const long result = ftell(cl_plain);
++			if (fseek(cl_plain, original, SEEK_SET) != 0) {
++				return -1;
++			}
++			return result;
+ 		}
++		case ClfType::Gzip:
+ #ifdef USE_ZLIB
+-		if (tp == ClfType::Gzip) {
+-			ret = gztell(cl_gz);
++			return gzipSize();
++#else
++			return -1;
++#endif
++		case ClfType::Bzip2:
++#ifdef USE_BZ2LIB
++			return bzipSize();
++#else
++			return -1;
++#endif
++		case ClfType::Invalid:
++			errno = EBADF;
++			return -1;
++	}
++	return -1;
++}
++
++#ifdef USE_ZLIB
++long CFile::PImpl::gzipSize()
++{
++	if (cl_size >= 0) {
++		return cl_size;
++	}
++	if ((cl_flags & CL_OPEN_READ) == 0) {
++		return -1;
++	}
++	const long original = tell();
++	if (original < 0) {
++		return -1;
++	}
++	gzclearerr(cl_gz);
++	if (gzseek(cl_gz, 0, SEEK_SET) != 0) {
++		return -1;
++	}
++
++	std::array<unsigned char, 64 * 1024> buffer{};
++	long total = 0;
++	for (;;) {
++		const int result =
++			gzread(cl_gz, buffer.data(),
++			       static_cast<unsigned int>(buffer.size()));
++		if (result < 0
++		    || total > std::numeric_limits<long>::max() - result) {
++			gzclearerr(cl_gz);
++			gzseek(cl_gz, original, SEEK_SET);
++			return -1;
+ 		}
+-#endif // USE_ZLIB
++		if (result == 0) {
++			break;
++		}
++		total += result;
++	}
++	cl_size = total;
++	gzclearerr(cl_gz);
++	if (gzseek(cl_gz, original, SEEK_SET) != original) {
++		return -1;
++	}
++	return cl_size;
++}
++#endif
++
+ #ifdef USE_BZ2LIB
+-		if (tp == ClfType::Bzip2) {
+-			// FIXME: need to implement this
+-			ret = -1;
++bool CFile::PImpl::reopenBzipAt(long position)
++{
++	if ((cl_flags & CL_OPEN_READ) == 0 || position < 0) {
++		return false;
++	}
++	if (cl_bz != nullptr) {
++		BZ2_bzclose(cl_bz);
++	}
++	cl_bz = BZ2_bzopen(cl_name.c_str(), "rb");
++	cl_position = 0;
++	if (cl_bz == nullptr) {
++		return false;
++	}
++
++	std::array<unsigned char, 64 * 1024> buffer{};
++	while (cl_position < position) {
++		const long remaining = position - cl_position;
++		const int request = static_cast<int>(std::min<long>(
++			remaining, static_cast<long>(buffer.size())));
++		const int result = BZ2_bzread(cl_bz, buffer.data(), request);
++		if (result <= 0) {
++			return false;
+ 		}
+-#endif // USE_BZ2LIB
+-	} else {
+-		errno = EBADF;
++		cl_position += result;
+ 	}
+-	return ret;
++	return true;
+ }
+ 
++long CFile::PImpl::bzipSize()
++{
++	if (cl_size >= 0) {
++		return cl_size;
++	}
++	if ((cl_flags & CL_OPEN_READ) == 0) {
++		return -1;
++	}
++	const long original = cl_position;
++	if (!reopenBzipAt(0)) {
++		return -1;
++	}
++
++	std::array<unsigned char, 64 * 1024> buffer{};
++	for (;;) {
++		const int result =
++			BZ2_bzread(cl_bz, buffer.data(), static_cast<int>(buffer.size()));
++		if (result < 0
++		    || cl_position > std::numeric_limits<long>::max() - result) {
++			reopenBzipAt(original);
++			return -1;
++		}
++		if (result == 0) {
++			break;
++		}
++		cl_position += result;
++	}
++	cl_size = cl_position;
++	if (!reopenBzipAt(original)) {
++		return -1;
++	}
++	return cl_size;
++}
++#endif
++
+ 
+ /**
+ **  Find a file with its correct extension ("", ".gz" or ".bz2")
+diff --git a/src/stratagus/player.cpp b/src/stratagus/player.cpp
+index 0445ef7..8ac768f 100644
+--- a/src/stratagus/player.cpp
++++ b/src/stratagus/player.cpp
+@@ -599,7 +599,7 @@ void CPlayer::Save(CFile &file) const
+ 
+ 	Uint8 r, g, b;
+ 
+-	SDL_GetRGB(p.Color, TheScreen->format, &r, &g, &b);
++	SdlCompatGetRGB(TheScreen, p.Color, &r, &g, &b);
+ 	file.printf("\n  \"color\", { %d, %d, %d },", r, g, b);
+ 
+ 	// UnitColors done by init code.
+@@ -1262,7 +1262,8 @@ void GraphicPlayerPixels(int colorIndex, const CGraphic &sprite)
+ 	Assert(SDL_MUSTLOCK(sprite.getSurface()) == 0);
+ 	// TODO: This vector allocation is costly in profiles
+ 	std::vector<SDL_Color> sdlColors = PlayerColorsSDL[colorIndex];
+-	const auto palette = sprite.getSurface()->format->palette;
++	SDL_Palette *const palette =
++		SdlCompatGetSurfacePalette(sprite.getSurface());
+ 	if (palette && palette->ncolors <= PlayerColorIndexStart) {
+ 		static std::set<fs::path> warnedGraphics;
+ 		if (warnedGraphics.insert(sprite.File).second) {
+@@ -1287,31 +1288,34 @@ void GraphicPlayerPixels(int colorIndex, const CGraphic &sprite)
+ 		}
+ 		SDL_SetPaletteColors(palette, &sdlColors[0], PlayerColorIndexStart, count);
+ 	}
+-	if (sprite.SurfaceFlip && sprite.SurfaceFlip->format->palette
+-	    && sprite.SurfaceFlip->format->palette->ncolors <= PlayerColorIndexStart) {
++	SDL_Palette *const flippedPalette =
++		sprite.SurfaceFlip
++			? SdlCompatGetSurfacePalette(sprite.SurfaceFlip)
++			: nullptr;
++	if (flippedPalette && flippedPalette->ncolors <= PlayerColorIndexStart) {
+ 		static std::set<fs::path> warnedGraphics;
+ 		if (warnedGraphics.insert(sprite.File).second) {
+ 			ErrorPrint("Warning: flipped graphic '%s' palette has only %d colors; player color remap "
+ 			           "requires entries starting at %d and will be skipped\n",
+ 			           sprite.File.string().c_str(),
+-			           sprite.SurfaceFlip->format->palette->ncolors,
++			           flippedPalette->ncolors,
+ 			           PlayerColorIndexStart);
+ 		}
+-	} else if (sprite.SurfaceFlip && sprite.SurfaceFlip->format->palette) {
++	} else if (flippedPalette) {
+ 		const int count = std::min(PlayerColorIndexCount,
+-		                           sprite.SurfaceFlip->format->palette->ncolors - PlayerColorIndexStart);
++		                           flippedPalette->ncolors - PlayerColorIndexStart);
+ 		if (count < PlayerColorIndexCount) {
+ 			static std::set<fs::path> warnedGraphics;
+ 			if (warnedGraphics.insert(sprite.File).second) {
+ 				ErrorPrint("Warning: flipped graphic '%s' palette has only %d colors; player color remap "
+ 				           "needs entries %d..%d and will be clamped\n",
+ 				           sprite.File.string().c_str(),
+-				           sprite.SurfaceFlip->format->palette->ncolors,
++				           flippedPalette->ncolors,
+ 				           PlayerColorIndexStart,
+ 				           PlayerColorIndexStart + PlayerColorIndexCount - 1);
+ 			}
+ 		}
+-		SDL_SetPaletteColors(sprite.SurfaceFlip->format->palette, &sdlColors[0], PlayerColorIndexStart, count);
++		SDL_SetPaletteColors(flippedPalette, &sdlColors[0], PlayerColorIndexStart, count);
+ 	}
+ }
+ 
+diff --git a/src/stratagus/script_player.cpp b/src/stratagus/script_player.cpp
+index 8240bd2..dd12362 100644
+--- a/src/stratagus/script_player.cpp
++++ b/src/stratagus/script_player.cpp
+@@ -326,7 +326,7 @@ void CPlayer::Load(lua_State *l)
+ 			const int r = LuaToNumber(l, j + 1, 1);
+ 			const int g = LuaToNumber(l, j + 1, 2);
+ 			const int b = LuaToNumber(l, j + 1, 3);
+-			this->Color = Video.MapRGB(TheScreen->format, r, g, b);
++			this->Color = Video.MapRGB(TheScreen, r, g, b);
+ 		} else if (value == "timers") {
+ 			if (!lua_istable(l, j + 1)) {
+ 				LuaError(l, "incorrect argument");
+diff --git a/src/stratagus/stratagus.cpp b/src/stratagus/stratagus.cpp
+index 6d447ff..38ec7f2 100644
+--- a/src/stratagus/stratagus.cpp
++++ b/src/stratagus/stratagus.cpp
+@@ -226,6 +226,7 @@ extern void beos_init(int argc, char **argv);
+ 
+ #include <cstdlib>
+ #include <cstdio>
++#include <stdexcept>
+ 
+ #ifdef USE_WIN32
+ # include <dbghelp.h>
+@@ -714,12 +715,13 @@ try {
+ #endif
+ 	//  Setup some defaults.
+ 	#ifdef PEONPAD_IOS
+-		if (char *basePath = SDL_GetBasePath()) {
+-			StratagusLibPath = (fs::path(basePath) / "Aleona").string();
+-			SDL_free(basePath);
+-		} else {
+-			StratagusLibPath = ".";
++		const std::string basePath = SdlCompatGetBasePath();
++		if (basePath.empty()) {
++			throw std::runtime_error(
++				std::string("Unable to resolve SDL application base path: ")
++				+ SDL_GetError());
+ 		}
++		StratagusLibPath = (fs::path(basePath) / "Aleona").string();
+ 	#elif !defined(MAC_BUNDLE)
+ 		StratagusLibPath = ".";
+ 	#else
+@@ -801,6 +803,9 @@ try {
+ 	UnitManager->Init(); // Units memory management
+ 	PreMenuSetup();     // Load everything needed for menus
+ 
++	if (!SdlCompatWriteReadinessMarker(stdout)) {
++		throw std::runtime_error(SDL_GetError());
++	}
+ 	MenuLoop();
+ 
+ 	Exit(0);
+diff --git a/src/stratagus/util.cpp b/src/stratagus/util.cpp
+index b4c4a14..65b00e9 100644
+--- a/src/stratagus/util.cpp
++++ b/src/stratagus/util.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include "util.h"
+ 
++#include "sdl_compat.h"
+ #include "stratagus.h"
+ 
+ #include <SDL.h>
+@@ -422,8 +423,11 @@ std::optional<std::string> GetClipboard()
+ 	}
+ }
+ 
+-void SetClipboard(const std::string &str) {
+-	SDL_SetClipboardText(str.c_str());
++void SetClipboard(const std::string &str)
++{
++	if (!SdlCompatSetClipboardText(str.c_str())) {
++		ErrorPrint("Unable to set clipboard text: %s\n", SDL_GetError());
++	}
+ }
+ 
+ /*----------------------------------------------------------------------------
+diff --git a/src/ui/icons.cpp b/src/ui/icons.cpp
+index c39811b..c40d24d 100644
+--- a/src/ui/icons.cpp
++++ b/src/ui/icons.cpp
+@@ -189,7 +189,7 @@ static void ApplyPaletteSwaps(const std::vector<PaletteSwap> &swaps, const CUnit
+ 		if (unit.Variable[varIdx].Enable) {
+ 			int value = def ? unit.Variable[varIdx].Max : unit.Variable[varIdx].Value;
+ 			const SDL_Color *colors = swap.GetColorsForPercentAndAlternative(value, unit.Variable[varIdx].Max, UnitNumber(unit));
+-			SDL_SetPaletteColors(graphic->getSurface()->format->palette,
++			SDL_SetPaletteColors(SdlCompatGetSurfacePalette(graphic->getSurface()),
+ 			                     colors,
+ 			                     swap.GetColorIndexStart(),
+ 			                     swap.GetColorCount());
+diff --git a/src/ui/mainscr.cpp b/src/ui/mainscr.cpp
+index 16ba286..2ca2bd6 100644
+--- a/src/ui/mainscr.cpp
++++ b/src/ui/mainscr.cpp
+@@ -769,7 +769,7 @@ void MessagesDisplay::DrawMessages()
+ 			/*
+ 			if (MessagesCount) {
+ 				int textHeight = MessagesCount * (UI.MessageFont->Height() + 1);
+-				Uint32 color = Video.MapRGB(TheScreen->format, 38, 38, 78);
++				Uint32 color = Video.MapRGB(TheScreen, 38, 38, 78);
+ 				Video.FillTransRectangleClip(color, UI.MapArea.X + 7, UI.MapArea.Y + 7,
+ 											 UI.MapArea.EndX - UI.MapArea.X - 16,
+ 											 textHeight - MessagesScrollY + 1, 0x80);
+diff --git a/src/ui/ui.cpp b/src/ui/ui.cpp
+index dc4e82f..7372d6a 100644
+--- a/src/ui/ui.cpp
++++ b/src/ui/ui.cpp
+@@ -198,7 +198,7 @@ void InitUserInterface()
+ 
+ 	SetViewportMode(VIEWPORT_SINGLE);
+ 
+-	UI.CompletedBarColor = Video.MapRGB(TheScreen->format, UI.CompletedBarColorRGB);
++	UI.CompletedBarColor = Video.MapRGB(TheScreen, UI.CompletedBarColorRGB);
+ 	UI.ViewportCursorColor = ColorWhite;
+ }
+ 
+diff --git a/src/ui/uibuttons_proc.cpp b/src/ui/uibuttons_proc.cpp
+index bea31ab..629c72a 100644
+--- a/src/ui/uibuttons_proc.cpp
++++ b/src/ui/uibuttons_proc.cpp
+@@ -135,9 +135,9 @@ void DrawUIButton(ButtonStyle *style, unsigned flags, int x, int y,
+ 				color.B = (p->BorderColorRGB.B > 0) << ((shift - 0x10) / 2);
+ 			}
+ 		}
+-		p->BorderColor = Video.MapRGB(TheScreen->format, color);
++		p->BorderColor = Video.MapRGB(TheScreen, color);
+ 	} else {
+-		p->BorderColor = Video.MapRGB(TheScreen->format, p->BorderColorRGB);
++		p->BorderColor = Video.MapRGB(TheScreen, p->BorderColorRGB);
+ 	}
+ 	if (p->BorderSize) {
+ 		for (int i = 0; i < p->BorderSize; ++i) {
+diff --git a/src/ui/widgets.cpp b/src/ui/widgets.cpp
+index 358de5d..7ed71d3 100644
+--- a/src/ui/widgets.cpp
++++ b/src/ui/widgets.cpp
+@@ -1447,7 +1447,9 @@ void CTextField::mousePressed(gcn::MouseEvent &event) /* override */
+ #ifdef PEONPAD_IOS
+ 		// SDL starts text input before the iOS window has focus during launch.
+ 		// Ask again when an actual field is tapped so UIKit can show its keyboard.
+-		SDL_StartTextInput();
++		if (!SdlCompatStartTextInput(TheWindow)) {
++			ErrorPrint("Couldn't restart SDL text input: %s\n", SDL_GetError());
++		}
+ #endif
+ 		mSelectStart = mText->getCaretPosition();
+ 		mSelectEndOffset = 0;
+diff --git a/src/video/color.cpp b/src/video/color.cpp
+index 7e2a70a..32a716b 100644
+--- a/src/video/color.cpp
++++ b/src/video/color.cpp
+@@ -32,6 +32,7 @@
+ #include "color.h"
+ 
+ #include "script.h"
++#include "sdl_compat.h"
+ #include "stratagus.h"
+ 
+ #include <SDL.h>
+@@ -46,7 +47,7 @@ extern SDL_Surface *TheScreen;
+ 
+ CColor::operator IntColor() const
+ {
+-	return SDL_MapRGB(TheScreen->format, R, G, B);
++	return SdlCompatMapRGB(TheScreen, R, G, B);
+ }
+ 
+ void CColor::Parse(lua_State *l, const int offset)
+diff --git a/src/video/cursor.cpp b/src/video/cursor.cpp
+index e25044a..5f3fa15 100644
+--- a/src/video/cursor.cpp
++++ b/src/video/cursor.cpp
+@@ -102,7 +102,12 @@ SDL_Cursor *CCursor::GetSDLCursor()
+ 		for (unsigned int i = SdlCursors.size(); i <= SpriteFrame; i++) {
+ 			G->Load();
+ 			int ww, wh;
+-			SDL_GetWindowSize(TheWindow, &ww, &wh);
++			if (!SdlCompatGetWindowSize(TheWindow, &ww, &wh)
++			    || ww <= 0 || wh <= 0) {
++				ErrorPrint("Unable to query cursor window size: %s\n",
++				           SDL_GetError());
++				return nullptr;
++			}
+ 
+ 			double xScale = (double)ww / Video.Width;
+ 			double yScale = (double)wh / (Video.Height * Video.VerticalPixelSize);
+@@ -115,25 +120,47 @@ SDL_Cursor *CCursor::GetSDLCursor()
+ 				// wh = Video.Height * xScale;
+ 			}
+ 
+-			int w = floor(G->getWidth() * xScale);
+-			int h = floor(G->getHeight() * yScale);
++			const int w = std::max(
++				1, static_cast<int>(floor(G->getWidth() * xScale)));
++			const int h = std::max(
++				1, static_cast<int>(floor(G->getHeight() * yScale)));
+ 
+ 			SDL_Rect srect = {G->frame_map[i].x, G->frame_map[i].y, G->getWidth(), G->getHeight()};
+ 
+ 			sdl2::SurfacePtr intermediate{
+-				SDL_CreateRGBSurface(0, srect.w, srect.h, 32, RMASK, GMASK, BMASK, AMASK)};
+-			SDL_BlitSurface(G->getSurface(), &srect, intermediate.get(), nullptr);
++				SdlCompatCreateSurface(
++					srect.w, srect.h, 32, RMASK, GMASK, BMASK, AMASK)};
++			if (!intermediate
++			    || !SdlCompatBlitSurface(
++				    G->getSurface(), &srect, intermediate.get(), nullptr)) {
++				ErrorPrint("Unable to create cursor source surface: %s\n",
++				           SDL_GetError());
++				return nullptr;
++			}
+ 
+ 			sdl2::SurfacePtr cursorFrame{
+-				SDL_CreateRGBSurface(0, w, h, 32, RMASK, GMASK, BMASK, AMASK)};
+-			SDL_BlitScaled(intermediate.get(), nullptr, cursorFrame.get(), nullptr);
++				SdlCompatCreateSurface(w, h, 32, RMASK, GMASK, BMASK, AMASK)};
++			if (!cursorFrame
++			    || !SdlCompatBlitScaled(
++				    intermediate.get(), nullptr, cursorFrame.get(), nullptr)) {
++				ErrorPrint("Unable to scale cursor surface: %s\n",
++				           SDL_GetError());
++				return nullptr;
++			}
+ 
+ 			intermediate.reset();
+ 
++			sdl2::CursorPtr cur{
++				SDL_CreateColorCursor(
++					cursorFrame.get(),
++					static_cast<int>(floor(HotPos.x * xScale)),
++					static_cast<int>(floor(HotPos.y * yScale)))};
++			if (!cur) {
++				ErrorPrint("Unable to create hardware cursor: %s\n",
++				           SDL_GetError());
++				return nullptr;
++			}
+ 			SdlCursorSurfaces.push_back(std::move(cursorFrame));
+-			sdl2::CursorPtr cur{SDL_CreateColorCursor(SdlCursorSurfaces.back().get(),
+-			                                          floor(HotPos.x * xScale),
+-			                                          floor(HotPos.y * yScale))};
+ 			SdlCursors.push_back(std::move(cur));
+ 		}
+ 	}
+@@ -318,7 +345,9 @@ void DrawCursor()
+ 			LastSizeVersion = SizeChangeCounter;
+ 		}
+ 	} else if (ActuallyVisibleGameCursor) {
+-		SDL_SetCursor(Video.blankCursor.get());
++		if (!SdlCompatSetCursor(Video.blankCursor.get())) {
++			ErrorPrint("Unable to hide hardware cursor: %s\n", SDL_GetError());
++		}
+ 		ActuallyVisibleGameCursor = nullptr;
+ 	}
+ 
+@@ -336,7 +365,10 @@ void DrawCursor()
+ 	//  Only draw it if it exists
+ 	if (GameCursor == nullptr || IsDemoMode()) {
+ 		if (Preference.HardwareCursor) {
+-			SDL_SetCursor(Video.blankCursor.get());
++			if (!SdlCompatSetCursor(Video.blankCursor.get())) {
++				ErrorPrint("Unable to hide hardware cursor: %s\n",
++				           SDL_GetError());
++			}
+ 			ActuallyVisibleGameCursor = nullptr;
+ 		}
+ 		return;
+@@ -352,17 +384,25 @@ void DrawCursor()
+ 				if (HiddenSurface) {
+ 					VideoPaletteListRemove(HiddenSurface.get());
+ 				}
+-				HiddenSurface.reset(SDL_CreateRGBSurface(SDL_SWSURFACE,
+-				                                         GameCursor->G->getWidth(),
+-				                                         GameCursor->G->getHeight(),
+-				                                         TheScreen->format->BitsPerPixel,
+-				                                         TheScreen->format->Rmask,
+-				                                         TheScreen->format->Gmask,
+-				                                         TheScreen->format->Bmask,
+-				                                         TheScreen->format->Amask));
++				const SdlCompatPixelFormatDetails format =
++					SdlCompatGetPixelFormatDetails(TheScreen);
++				HiddenSurface.reset(SdlCompatCreateSurface(
++					GameCursor->G->getWidth(),
++					GameCursor->G->getHeight(),
++					format.BitsPerPixel,
++					format.Rmask,
++					format.Gmask,
++					format.Bmask,
++					format.Amask));
+ 			}
+ 			SDL_Rect srcRect = { Sint16(pos.x), Sint16(pos.y), Uint16(GameCursor->G->getWidth()), Uint16(GameCursor->G->getHeight())};
+-			SDL_BlitSurface(TheScreen, &srcRect, HiddenSurface.get(), nullptr);
++			if (!HiddenSurface
++			    || !SdlCompatBlitSurface(
++				    TheScreen, &srcRect, HiddenSurface.get(), nullptr)) {
++				ErrorPrint("Unable to preserve software cursor background: %s\n",
++				           SDL_GetError());
++				return;
++			}
+ 		}
+ 
+ 		if (!GameCursor->G->IsLoaded()) {
+@@ -375,7 +415,12 @@ void DrawCursor()
+ 			if (!GameCursor->G->IsLoaded()) {
+ 				GameCursor->G->Load();
+ 			}
+-			SDL_SetCursor(GameCursor->GetSDLCursor());
++			SDL_Cursor *cursor = GameCursor->GetSDLCursor();
++			if (cursor == nullptr || !SdlCompatSetCursor(cursor)) {
++				ErrorPrint("Unable to display hardware cursor: %s\n",
++				           SDL_GetError());
++				return;
++			}
+ 			ActuallyVisibleGameCursor = GameCursor;
+ 			VisibleGameCursorFrame = GameCursor->SpriteFrame;
+ 		}
+@@ -390,9 +435,16 @@ void HideCursor()
+ 	if (!Preference.HardwareCursor && !GameRunning && !Editor.Running && GameCursor) {
+ 		const PixelPos pos = CursorScreenPos - GameCursor->HotPos;
+ 		SDL_Rect dstRect = {Sint16(pos.x), Sint16(pos.y), 0, 0 };
+-		SDL_BlitSurface(HiddenSurface.get(), nullptr, TheScreen, &dstRect);
++		if (HiddenSurface
++		    && !SdlCompatBlitSurface(
++			    HiddenSurface.get(), nullptr, TheScreen, &dstRect)) {
++			ErrorPrint("Unable to restore software cursor background: %s\n",
++			           SDL_GetError());
++		}
+ 	} else {
+-		SDL_SetCursor(Video.blankCursor.get());
++		if (!SdlCompatSetCursor(Video.blankCursor.get())) {
++			ErrorPrint("Unable to hide hardware cursor: %s\n", SDL_GetError());
++		}
+ 		ActuallyVisibleGameCursor = nullptr;
+ 	}
+ }
+diff --git a/src/video/font.cpp b/src/video/font.cpp
+index 87bd688..51994c7 100644
+--- a/src/video/font.cpp
++++ b/src/video/font.cpp
+@@ -178,7 +178,8 @@ static void VideoDrawChar(const CGraphic &g,
+ {
+ 	SDL_Rect srect = {Sint16(gx), Sint16(gy), Uint16(w), Uint16(h)};
+ 	SDL_Rect drect = {Sint16(x), Sint16(y), 0, 0};
+-	SDL_SetPaletteColors(g.getSurface()->format->palette, fc.Colors.data(), 0, fc.Colors.size());
++	SDL_SetPaletteColors(SdlCompatGetSurfacePalette(g.getSurface()),
++	                     fc.Colors.data(), 0, fc.Colors.size());
+ 	SDL_BlitSurface(g.getSurface(), &srect, TheScreen, &drect);
+ }
+ 
+@@ -494,7 +495,7 @@ int convertSDLKeyCharacterToGuichanKey(int key)
+ 	} input;
+ 	SDL_Event event{};
+ 	event.type = SDL_KEYDOWN;
+-	event.key.keysym.sym = (SDL_Keycode) key;
++	SdlCompatSetEventKeycode(event, static_cast<SDL_Keycode>(key));
+ 	auto ret = input.convertSDLEventToGuichanKeyValue(event);
+ 	return ret.getValue() == -1 ? key : ret.getValue();
+ }
+diff --git a/src/video/graphic.cpp b/src/video/graphic.cpp
+index b698514..3704091 100644
+--- a/src/video/graphic.cpp
++++ b/src/video/graphic.cpp
+@@ -132,7 +132,7 @@ void CGraphic::DrawSubCustomMod(int gx, int gy, int w, int h, int x, int y,
+ 								SDL_Surface *surface /*= TheScreen*/) const
+ {
+ 	Assert(surface);
+-	Assert(surface->format->BitsPerPixel == 32);
++	Assert(SdlCompatGetPixelFormatDetails(surface).BitsPerPixel == 32);
+ 
+ 
+ 	size_t srcOffset = mSurface->w * gy + gx;
+@@ -633,21 +633,27 @@ void CGraphic::GenFramesMap()
+ static void ApplyGrayScale(SDL_Surface *Surface, int Width, int Height)
+ {
+ 	SDL_LockSurface(Surface);
+-	const SDL_PixelFormat *f = Surface->format;
+-	const int bpp = Surface->format->BytesPerPixel;
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(Surface);
++	const int bpp = format.BytesPerPixel;
+ 	const double redGray = 0.21;
+ 	const double greenGray = 0.72;
+ 	const double blueGray = 0.07;
+ 
+ 	switch (bpp) {
+ 		case 1: {
+-			SDL_Color colors[256];
+-			SDL_Palette &pal = *Surface->format->palette;
+-			for (int i = 0; i < 256; ++i) {
+-				const int gray = redGray * pal.colors[i].r + greenGray * pal.colors[i].g + blueGray * pal.colors[i].b;
++			SDL_Palette *const palette = SdlCompatGetSurfacePalette(Surface);
++			Assert(palette != nullptr);
++			std::vector<SDL_Color> colors(palette->ncolors);
++			for (int i = 0; i < palette->ncolors; ++i) {
++				const int gray = redGray * palette->colors[i].r
++					+ greenGray * palette->colors[i].g
++					+ blueGray * palette->colors[i].b;
+ 				colors[i].r = colors[i].g = colors[i].b = gray;
++				colors[i].a = palette->colors[i].a;
+ 			}
+-			SDL_SetPaletteColors(&pal, &colors[0], 0, 256);
++			SDL_SetPaletteColors(
++				palette, colors.data(), 0, static_cast<int>(colors.size()));
+ 			break;
+ 		}
+ 		case 4: {
+@@ -655,10 +661,10 @@ static void ApplyGrayScale(SDL_Surface *Surface, int Width, int Height)
+ 			for (int i = 0; i < Height; ++i) {
+ 				for (int j = 0; j < Width; ++j) {
+ 					p = static_cast<Uint32 *>(Surface->pixels) + (i * Surface->w + j);
+-					const Uint32 gray = ((Uint8)((*p) * redGray) >> f->Rshift) +
+-										((Uint8)(*(p + 1) * greenGray) >> f->Gshift) +
+-										((Uint8)(*(p + 2) * blueGray) >> f->Bshift) +
+-										((Uint8)(*(p + 3)) >> f->Ashift);
++					const Uint32 gray = ((Uint8)((*p) * redGray) >> format.Rshift) +
++										((Uint8)(*(p + 1) * greenGray) >> format.Gshift) +
++										((Uint8)(*(p + 2) * blueGray) >> format.Bshift) +
++										((Uint8)(*(p + 3)) >> format.Ashift);
+ 					*p = gray;
+ 				}
+ 			}
+@@ -701,7 +707,7 @@ void CGraphic::Load(bool grayscale)
+ 	OriginWidth = mSurface->w;
+ 	OriginHeight = mSurface->h;
+ 
+-	if (mSurface->format->BytesPerPixel == 1) {
++	if (SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel == 1) {
+ 		VideoPaletteListAdd(mSurface);
+ 	}
+ 
+@@ -748,7 +754,7 @@ static void FreeSurface(SDL_Surface **surface)
+ 
+ 	unsigned char *pixels = nullptr;
+ 
+-	if ((*surface)->flags & SDL_PREALLOC) {
++	if (SdlCompatSurfaceUsesPreallocatedPixels(*surface)) {
+ 		pixels = (unsigned char *)(*surface)->pixels;
+ 	}
+ 
+@@ -775,18 +781,25 @@ void CGraphic::Flip()
+ 		return;
+ 	}
+ 
+-	SDL_Surface *s = SurfaceFlip = SDL_ConvertSurface(mSurface, mSurface->format, 0);
++	SDL_Surface *s = SurfaceFlip = SdlCompatDuplicateSurface(mSurface);
++	if (SurfaceFlip == nullptr) {
++		ErrorPrint("Unable to duplicate graphic '%s': %s\n",
++		           File.u8string().c_str(), SDL_GetError());
++		ExitFatal(-1);
++	}
+ 	Uint32 ckey;
+-	if (!SDL_GetColorKey(mSurface, &ckey)) {
+-		SDL_SetColorKey(SurfaceFlip, SDL_TRUE, ckey);
++	if (SdlCompatGetColorKey(mSurface, &ckey)) {
++		SdlCompatSetColorKey(SurfaceFlip, true, ckey);
+ 	}
+ 	SDL_SetSurfaceBlendMode(SurfaceFlip, SDL_BLENDMODE_NONE);
+-	if (SurfaceFlip->format->BytesPerPixel == 1) {
++	const int bytesPerPixel =
++		SdlCompatGetPixelFormatDetails(SurfaceFlip).BytesPerPixel;
++	if (bytesPerPixel == 1) {
+ 		VideoPaletteListAdd(SurfaceFlip);
+ 	}
+ 	SDL_LockSurface(mSurface);
+ 	SDL_LockSurface(s);
+-	switch (s->format->BytesPerPixel) {
++	switch (bytesPerPixel) {
+ 		case 1:
+ 			for (int i = 0; i < s->h; ++i) {
+ 				for (int j = 0; j < s->w; ++j) {
+@@ -851,11 +864,14 @@ void CGraphic::Resize(int w, int h)
+ 
+ 	Resized = true;
+ 	Uint32 ckey;
+-	bool useckey = !SDL_GetColorKey(mSurface, &ckey);
++	const bool useckey = SdlCompatGetColorKey(mSurface, &ckey);
+ 
+-	int bpp = mSurface->format->BytesPerPixel;
++	const int bpp = SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel;
+ 	if (bpp == 1) {
+-		SDL_Color pal[256];
++		SDL_Palette *const palette = SdlCompatGetSurfacePalette(mSurface);
++		Assert(palette != nullptr);
++		const std::vector<SDL_Color> paletteColors(
++			palette->colors, palette->colors + palette->ncolors);
+ 
+ 		SDL_LockSurface(mSurface);
+ 
+@@ -873,14 +889,22 @@ void CGraphic::Resize(int w, int h)
+ 		SDL_UnlockSurface(mSurface);
+ 		VideoPaletteListRemove(mSurface);
+ 
+-		memcpy(pal, mSurface->format->palette->colors, sizeof(SDL_Color) * 256);
+ 		SDL_FreeSurface(mSurface);
+ 
+-		mSurface = SDL_CreateRGBSurfaceFrom(data, w, h, 8, w, 0, 0, 0, 0);
+-		if (mSurface->format->BytesPerPixel == 1) {
++		mSurface =
++			SdlCompatCreateSurfaceFrom(data, w, h, 8, w, 0, 0, 0, 0);
++		if (mSurface == nullptr) {
++			delete[] data;
++			ErrorPrint("Unable to resize indexed graphic '%s': %s\n",
++			           File.u8string().c_str(), SDL_GetError());
++			ExitFatal(-1);
++		}
++		if (SdlCompatGetPixelFormatDetails(mSurface).BytesPerPixel == 1) {
+ 			VideoPaletteListAdd(mSurface);
+ 		}
+-		SDL_SetPaletteColors(mSurface->format->palette, pal, 0, 256);
++		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(mSurface),
++		                     paletteColors.data(), 0,
++		                     static_cast<int>(paletteColors.size()));
+ 	} else {
+ 		SDL_LockSurface(mSurface);
+ 
+@@ -931,20 +955,25 @@ void CGraphic::Resize(int w, int h)
+ 			}
+ 		}
+ 
+-		int Rmask = mSurface->format->Rmask;
+-		int Gmask = mSurface->format->Gmask;
+-		int Bmask = mSurface->format->Bmask;
+-		int Amask = mSurface->format->Amask;
++		const SdlCompatPixelFormatDetails format =
++			SdlCompatGetPixelFormatDetails(mSurface);
+ 
+ 		SDL_UnlockSurface(mSurface);
+ 		VideoPaletteListRemove(mSurface);
+ 		SDL_FreeSurface(mSurface);
+ 
+-		mSurface =
+-			SDL_CreateRGBSurfaceFrom(data, w, h, 8 * bpp, w * bpp, Rmask, Gmask, Bmask, Amask);
++		mSurface = SdlCompatCreateSurfaceFrom(
++			data, w, h, 8 * bpp, w * bpp,
++			format.Rmask, format.Gmask, format.Bmask, format.Amask);
++		if (mSurface == nullptr) {
++			delete[] data;
++			ErrorPrint("Unable to resize graphic '%s': %s\n",
++			           File.u8string().c_str(), SDL_GetError());
++			ExitFatal(-1);
++		}
+ 	}
+ 	if (useckey) {
+-		SDL_SetColorKey(mSurface, SDL_TRUE, ckey);
++		SdlCompatSetColorKey(mSurface, true, ckey);
+ 	}
+ 
+ 	Height = h / (originHeight / Height);
+@@ -1028,20 +1057,26 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
+ 	const uint16_t cols = GetFrameCountPerRow();
+ 	const int newGraphicHeight = GetGraphicHeight() + Height * ((numOfFramesToAdd - 1) / cols + 1);
+ 
+-	const SDL_PixelFormat *pf = mSurface->format;
+-	const uint8_t bpp = mSurface->format->BytesPerPixel;
+-	SDL_Surface *newSurface = SDL_CreateRGBSurface(SDL_SWSURFACE,
+-	                                               GetGraphicWidth(),
+-	                                               newGraphicHeight,
+-	                                               8 * bpp,
+-	                                               pf->Rmask,
+-	                                               pf->Gmask,
+-	                                               pf->Bmask,
+-	                                               pf->Amask);
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(mSurface);
++	const uint8_t bpp = format.BytesPerPixel;
++	SDL_Surface *newSurface = SdlCompatCreateSurface(
++		GetGraphicWidth(),
++		newGraphicHeight,
++		8 * bpp,
++		format.Rmask,
++		format.Gmask,
++		format.Bmask,
++		format.Amask);
++	if (newSurface == nullptr) {
++		ErrorPrint("Unable to expand graphic '%s': %s\n",
++		           File.u8string().c_str(), SDL_GetError());
++		ExitFatal(-1);
++	}
+ 	uint32_t ckey;
+-	const bool useckey = !SDL_GetColorKey(mSurface, &ckey);
++	const bool useckey = SdlCompatGetColorKey(mSurface, &ckey);
+ 	if (useckey) {
+-		SDL_SetColorKey(newSurface, SDL_TRUE, ckey);
++		SdlCompatSetColorKey(newSurface, true, ckey);
+ 	}
+ 
+ 	SDL_FillRect(newSurface, nullptr, useckey ? ckey : 0);
+@@ -1056,8 +1091,10 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
+ 	if (bpp == 1) {
+ 		VideoPaletteListRemove(mSurface);
+ 
+-		const SDL_Palette *palette = mSurface->format->palette;
+-		SDL_SetPaletteColors(newSurface->format->palette, palette->colors, 0, palette->ncolors);
++		const SDL_Palette *palette = SdlCompatGetSurfacePalette(mSurface);
++		Assert(palette != nullptr);
++		SDL_SetPaletteColors(SdlCompatGetSurfacePalette(newSurface),
++		                     palette->colors, 0, palette->ncolors);
+ 
+ 		VideoPaletteListAdd(newSurface);
+ 	}
+@@ -1079,9 +1116,11 @@ void CGraphic::ExpandFor(const uint16_t numOfFramesToAdd)
+ */
+ bool CGraphic::TransparentPixel(int x, int y)
+ {
+-	int bpp = mSurface->format->BytesPerPixel;
++	const SdlCompatPixelFormatDetails format =
++		SdlCompatGetPixelFormatDetails(mSurface);
++	const int bpp = format.BytesPerPixel;
+ 	Uint32 colorkey;
+-	bool has_colorkey = !SDL_GetColorKey(mSurface, &colorkey);
++	const bool has_colorkey = SdlCompatGetColorKey(mSurface, &colorkey);
+ 	if ((bpp == 1 && !has_colorkey) || bpp == 3) {
+ 		return false;
+ 	}
+@@ -1097,7 +1136,7 @@ bool CGraphic::TransparentPixel(int x, int y)
+ 		bool ckey = has_colorkey;
+ 		if (ckey && *p == colorkey) {
+ 			ret = true;
+-		} else if (p[mSurface->format->Ashift >> 3] == 255) {
++		} else if (p[format.Ashift >> 3] == 255) {
+ 			ret = true;
+ 		}
+ 	}
+@@ -1117,7 +1156,8 @@ void CGraphic::SetPaletteColor(int idx, int r, int g, int b) {
+ 	color.r = r;
+ 	color.g = g;
+ 	color.b = b;
+-	SDL_SetPaletteColors(mSurface->format->palette, &color, idx, 1);
++	SDL_SetPaletteColors(
++		SdlCompatGetSurfacePalette(mSurface), &color, idx, 1);
+ }
+ 
+ void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
+@@ -1141,17 +1181,24 @@ void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
+ 		return;
+ 	}
+ 
+-	int bpp = mSurface->format->BytesPerPixel;
++	const SdlCompatPixelFormatDetails destinationFormat =
++		SdlCompatGetPixelFormatDetails(mSurface);
++	const SdlCompatPixelFormatDetails sourceFormat =
++		SdlCompatGetPixelFormatDetails(other->mSurface);
++	const int bpp = destinationFormat.BytesPerPixel;
+ 	unsigned int srcColorKey;
+ 	unsigned int dstColorKey;
+ 
+-	if (!((bpp == 1 && SDL_GetColorKey(other->mSurface, &srcColorKey) == 0 && SDL_GetColorKey(mSurface, &dstColorKey) == 0) || bpp == 4)) {
++	if (!((bpp == 1
++	       && SdlCompatGetColorKey(other->mSurface, &srcColorKey)
++	       && SdlCompatGetColorKey(mSurface, &dstColorKey))
++	      || bpp == 4)) {
+ 		PrintOnStdOut(Format("ERROR: OverlayGraphic only supported for 8-bit graphics with "
+ 		                     "transparency or RGBA graphics (%s)",
+ 		                     File.c_str()));
+ 		return;
+ 	}
+-	if ((bpp != other->mSurface->format->BytesPerPixel)) {
++	if (bpp != sourceFormat.BytesPerPixel) {
+ 		PrintOnStdOut(Format(
+ 			"ERROR: OverlayGraphic only supported graphics with same depth (%s depth != %s depth)",
+ 			File.c_str(),
+@@ -1190,27 +1237,27 @@ void CGraphic::OverlayGraphic(CGraphic *other, bool mask)
+ 				for (int y = 0; y < mSurface->h; y++) {
+ 					uint32_t* src = src_base + x + y * other->mSurface->pitch;
+ 					uint32_t* dst = dst_base + x + y * mSurface->pitch;
+-					double alphaSrc = (*src & other->mSurface->format->Amask) / 255.0;
++					double alphaSrc = (*src & sourceFormat.Amask) / 255.0;
+ 					if (mask) {
+ 						alphaSrc = 1 - alphaSrc;
+ 					}
+-					double alphaDst = (*dst & mSurface->format->Amask) / 255.0;
+-					uint8_t rSrc = *src & other->mSurface->format->Rmask;
+-					uint8_t rDst = *dst & mSurface->format->Rmask;
+-					uint8_t gSrc = *src & other->mSurface->format->Gmask;
+-					uint8_t gDst = *dst & mSurface->format->Gmask;
+-					uint8_t bSrc = *src & other->mSurface->format->Bmask;
+-					uint8_t bDst = *dst & mSurface->format->Bmask;
++					double alphaDst = (*dst & destinationFormat.Amask) / 255.0;
++					uint8_t rSrc = *src & sourceFormat.Rmask;
++					uint8_t rDst = *dst & destinationFormat.Rmask;
++					uint8_t gSrc = *src & sourceFormat.Gmask;
++					uint8_t gDst = *dst & destinationFormat.Gmask;
++					uint8_t bSrc = *src & sourceFormat.Bmask;
++					uint8_t bDst = *dst & destinationFormat.Bmask;
+ 
+ 					double aOut = std::min(1.0, alphaSrc + alphaDst * (1 - alphaSrc));
+ 					uint8_t rOut = static_cast<uint8_t>((rSrc * alphaSrc + rDst * alphaDst * (1 - alphaSrc)) / aOut);
+ 					uint8_t gOut = static_cast<uint8_t>((gSrc * alphaSrc + gDst * alphaDst * (1 - alphaSrc)) / aOut);
+ 					uint8_t bOut = static_cast<uint8_t>((bSrc * alphaSrc + bDst * alphaDst * (1 - alphaSrc)) / aOut);
+ 
+-					*dst = (static_cast<uint8_t>(aOut * 255) << mSurface->format->Ashift) |
+-						(rOut << mSurface->format->Rshift) |
+-						(gOut << mSurface->format->Gshift) |
+-						(bOut << mSurface->format->Bshift);
++					*dst = (static_cast<uint8_t>(aOut * 255) << destinationFormat.Ashift) |
++						(rOut << destinationFormat.Rshift) |
++						(gOut << destinationFormat.Gshift) |
++						(bOut << destinationFormat.Bshift);
+ 				}
+ 			}
+ 			break;
+@@ -1236,7 +1283,8 @@ static inline void dither(SDL_Surface *Surface) {
+ 
+ static void applyAlphaGrayscaleToSurface(SDL_Surface **src, int alpha)
+ {
+-	SDL_Surface *alphaSurface = SDL_CreateRGBSurface(0, (*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
++	SDL_Surface *alphaSurface = SdlCompatCreateSurface(
++		(*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
+ 	if (!alphaSurface) {
+ 		ErrorPrint("Cannot create surface: %s\n", SDL_GetError());
+ 		ExitFatal(-1);
+@@ -1251,7 +1299,8 @@ static void applyAlphaGrayscaleToSurface(SDL_Surface **src, int alpha)
+ static void shrinkSurfaceFramesInY(SDL_Surface **src, int shrink, const std::vector<CGraphic::frame_pos_t> &frameMap, int frameW, int frameH)
+ {
+ 	shrink = std::abs(shrink);
+-	SDL_Surface *alphaSurface = SDL_CreateRGBSurface(0, (*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
++	SDL_Surface *alphaSurface = SdlCompatCreateSurface(
++		(*src)->w, (*src)->h, 32, RMASK, GMASK, BMASK, AMASK);
+ 	if (!alphaSurface) {
+ 		ErrorPrint("Cannot create surface: %s\n", SDL_GetError());
+ 		ExitFatal(-1);
+@@ -1259,7 +1308,7 @@ static void shrinkSurfaceFramesInY(SDL_Surface **src, int shrink, const std::vec
+ 	for (const auto& frame : frameMap) {
+ 		const SDL_Rect srcRect = { frame.x, frame.y, frameW, frameH };
+ 		SDL_Rect dstRect = { frame.x, frame.y + shrink / 2, frameW, frameH - (shrink - shrink / 2) };
+-		SDL_BlitScaled(*src, &srcRect, alphaSurface, &dstRect);
++		SdlCompatBlitScaled(*src, &srcRect, alphaSurface, &dstRect);
+ 	}
+ 	SDL_FreeSurface(*src);
+ 	*src = alphaSurface;
+@@ -1343,7 +1392,7 @@ CFiller::bits_map::~bits_map()
+ void CFiller::bits_map::Init(CGraphic *g)
+ {
+ 	SDL_Surface *s = g->getSurface();
+-	int bpp = s->format->BytesPerPixel;
++	const int bpp = SdlCompatGetPixelFormatDetails(s).BytesPerPixel;
+ 	unsigned int ckey;
+ 
+ 	if (bstore) {
+@@ -1353,7 +1402,7 @@ void CFiller::bits_map::Init(CGraphic *g)
+ 		Height = 0;
+ 	}
+ 
+-	if ((bpp == 1 && SDL_GetColorKey(s, &ckey) != 0) || bpp == 3) {
++	if ((bpp == 1 && !SdlCompatGetColorKey(s, &ckey)) || bpp == 3) {
+ 		return;
+ 	}
+ 
+@@ -1367,7 +1416,7 @@ void CFiller::bits_map::Init(CGraphic *g)
+ 
+ 	SDL_LockSurface(s);
+ 
+-	switch (s->format->BytesPerPixel) {
++	switch (bpp) {
+ 		case 1: {
+ 			unsigned char *ptr = (unsigned char *)s->pixels;
+ 
+@@ -1391,7 +1440,7 @@ void CFiller::bits_map::Init(CGraphic *g)
+ 			break;
+ 		case 4:
+ 		{
+-			if (!SDL_GetColorKey(s, &ckey)) {
++			if (SdlCompatGetColorKey(s, &ckey)) {
+ 				unsigned int *ptr = (unsigned int *)s->pixels;
+ 
+ 				for (int i = 0; i < Height; ++i) {
+diff --git a/src/video/mng.cpp b/src/video/mng.cpp
+index 9a2ecc6..fe1e4d3 100644
+--- a/src/video/mng.cpp
++++ b/src/video/mng.cpp
+@@ -113,7 +113,7 @@ struct MngWrapper
+ 
+ 		mng->free();
+ 		mng->mSurface =
+-			SDL_CreateRGBSurface(SDL_SWSURFACE, width, height, 8 * 3, Rmask, Gmask, Bmask, 0);
++			SdlCompatCreateSurface(width, height, 8 * 3, Rmask, Gmask, Bmask, 0);
+ 		if (mng->mSurface == nullptr) {
+ 			ErrorPrint("Out of memory");
+ 			exit(1);
+diff --git a/src/video/movie.cpp b/src/video/movie.cpp
+index 4dc1fe9..71330c1 100644
+--- a/src/video/movie.cpp
++++ b/src/video/movie.cpp
+@@ -223,16 +223,22 @@ static void OggFree(OggData *data)
+ /**
+ **  Draw Ogg data to the overlay
+ */
+-static void OutputTheora(OggData &data, SDL_Texture &yuv_overlay, SDL_Rect &rect)
++static bool OutputTheora(OggData &data, SDL_Texture &yuv_overlay, SDL_Rect &rect)
+ {
+ 	yuv_buffer yuv;
+ 
+ 	theora_decode_YUVout(&data.tstate, &yuv);
+ 
+-	SDL_UpdateYUVTexture(&yuv_overlay, nullptr, yuv.y, yuv.y_stride, yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride);
+-	SDL_RenderClear(TheRenderer);
+-	SDL_RenderCopy(TheRenderer, &yuv_overlay, nullptr, &rect);
+-	SDL_RenderPresent(TheRenderer);
++	if (!SdlCompatUpdateYuvTexture(
++		    &yuv_overlay, nullptr, yuv.y, yuv.y_stride,
++		    yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride)
++	    || !SdlCompatRenderClear(TheRenderer)
++	    || !SdlCompatRenderCopy(TheRenderer, &yuv_overlay, nullptr, &rect)
++	    || !SdlCompatRenderPresent(TheRenderer)) {
++		ErrorPrint("Unable to render movie frame: %s\n", SDL_GetError());
++		return false;
++	}
++	return true;
+ }
+ 
+ /**
+@@ -273,7 +279,7 @@ int PlayMovie(const std::string &name)
+ 	CFile f;
+ 	if (f.open(filename.c_str(), CL_OPEN_READ) == -1) {
+ 		ErrorPrint("Can't open file '%s'\n", name.c_str());
+-		return 0;
++		return -1;
+ 	}
+ 
+ 	OggData data{};
+@@ -298,7 +304,13 @@ int PlayMovie(const std::string &name)
+ 		rect.y = 0;
+ 	}
+ 
+-	SDL_RenderClear(TheRenderer);
++	if (!SdlCompatRenderClear(TheRenderer)) {
++		ErrorPrint("Unable to clear renderer for movie playback: %s\n",
++		           SDL_GetError());
++		OggFree(&data);
++		f.close();
++		return -1;
++	}
+ 	Video.ClearScreen();
+ 	sdl2::TexturePtr yuv_overlay{SDL_CreateTexture(TheRenderer,
+ 	                                               SDL_PIXELFORMAT_YV12,
+@@ -312,7 +324,7 @@ int PlayMovie(const std::string &name)
+ 			"SDL_CreateYUVOverlay: %dx%d\n", data.tinfo.frame_width, data.tinfo.frame_height);
+ 		OggFree(&data);
+ 		f.close();
+-		return 0;
++		return -1;
+ 	}
+ 
+ 	// since video's may be longer and should be streamed, we play them as music, but
+@@ -338,12 +350,16 @@ int PlayMovie(const std::string &name)
+ 	SetCallbacks(&callbacks);
+ 
+ 	Invalidate();
+-	SDL_RenderClear(TheRenderer);
+-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
+-	SDL_RenderDrawRect(TheRenderer, nullptr);
++	bool playbackFailed = false;
++	if (!SdlCompatRenderClear(TheRenderer)
++	    || !SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255)
++	    || !SdlCompatRenderDrawRect(TheRenderer, nullptr)) {
++		ErrorPrint("Unable to prepare movie renderer: %s\n", SDL_GetError());
++		playbackFailed = true;
++	}
+ 	// SDL_RenderPresent(TheRenderer);
+ 
+-	MovieStop = false;
++	MovieStop = playbackFailed;
+ 	const unsigned int start_ticks = SDL_GetTicks();
+ 	bool need_data = true;
+ 	while (!MovieStop) {
+@@ -363,7 +379,11 @@ int PlayMovie(const std::string &name)
+ 			continue;
+ 		}
+ 		if (diff > 0) {
+-			OutputTheora(data, *yuv_overlay, rect);
++			if (!OutputTheora(data, *yuv_overlay, rect)) {
++				playbackFailed = true;
++				MovieStop = true;
++				break;
++			}
+ 			need_data = true;
+ 		}
+ 
+@@ -380,7 +400,7 @@ int PlayMovie(const std::string &name)
+ 
+ 	SetCallbacks(old_callbacks);
+ 
+-	return 0;
++	return playbackFailed ? -1 : 0;
+ }
+ 
+ Movie::~Movie()
+@@ -396,14 +416,24 @@ Movie::~Movie()
+ static void RenderToSurface(SDL_Surface &surface, SDL_Texture *yuv_overlay, SDL_Rect &rect, OggData &data) {
+ 	yuv_buffer yuv{};
+ 	theora_decode_YUVout(&data.tstate, &yuv);
+-	SDL_UpdateYUVTexture(yuv_overlay, nullptr, yuv.y, yuv.y_stride, yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride);
+-	SDL_RenderClear(TheRenderer);
++	if (!SdlCompatUpdateYuvTexture(
++		    yuv_overlay, nullptr, yuv.y, yuv.y_stride,
++		    yuv.u, yuv.uv_stride, yuv.v, yuv.uv_stride)
++	    || !SdlCompatRenderClear(TheRenderer)) {
++		ErrorPrint("Unable to prepare movie surface: %s\n", SDL_GetError());
++		SDL_FillRect(&surface, nullptr, 0);
++		return;
++	}
+ 
+ 	// since SDL will render us at logical size, and SDL_RenderReadPixels will read the at
+ 	// output size, we need to adapt the rectangles to read and write from dynamically
+ 	int rw, rh, ww, wh;
+-	SDL_GetWindowSize(TheWindow, &ww, &wh);
+-	SDL_RenderGetLogicalSize(TheRenderer, &rw, &rh);
++	if (!SdlCompatGetRenderOutputSize(TheRenderer, &ww, &wh)
++	    || !SdlCompatGetRenderLogicalSize(TheRenderer, &rw, &rh)) {
++		ErrorPrint("Unable to query renderer dimensions: %s\n", SDL_GetError());
++		SDL_FillRect(&surface, nullptr, 0);
++		return;
++	}
+ 	SDL_Rect render_rect;
+ 	render_rect.x = 0;
+ 	render_rect.y = 0;
+@@ -418,9 +448,14 @@ static void RenderToSurface(SDL_Surface &surface, SDL_Texture *yuv_overlay, SDL_
+ 	read_rect.h = rect.h;
+ 	read_rect.x = (ww - (rw * scale)) / 2;
+ 	read_rect.y = (wh - (rh * scale)) / 2;
+-	SDL_RenderCopy(TheRenderer, yuv_overlay, nullptr, &render_rect);
+-	if (SDL_RenderReadPixels(TheRenderer, &read_rect, surface.format->format, surface.pixels, surface.pitch)) {
+-		ErrorPrint("Reading from renderer not supported\n");
++	if (!SdlCompatRenderCopy(
++		    TheRenderer, yuv_overlay, nullptr, &render_rect)) {
++		ErrorPrint("Unable to render movie surface: %s\n", SDL_GetError());
++		SDL_FillRect(&surface, nullptr, 0);
++		return;
++	}
++	if (!SdlCompatRenderReadPixels(TheRenderer, &read_rect, &surface)) {
++		ErrorPrint("Reading from renderer not supported: %s\n", SDL_GetError());
+ 		SDL_FillRect(&surface, nullptr, 0); // completely transparent
+ 	}
+ }
+@@ -440,8 +475,9 @@ bool Movie::Load(const std::string &name, int w, int h)
+ 	rect.w = w;
+ 	rect.h = h;
+ 
+-	mSurface = SDL_CreateRGBSurface(
+-		0, w, h, TheScreen->format->BitsPerPixel, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
++	mSurface = SdlCompatCreateSurface(
++		w, h, SdlCompatGetPixelFormatDetails(TheScreen).BitsPerPixel,
++		0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+ 
+ 	if (mSurface == nullptr) {
+ 		ErrorPrint("SDL_CreateRGBSurface: %s\n", SDL_GetError());
+diff --git a/src/video/png.cpp b/src/video/png.cpp
+index bf526f7..45d3a15 100644
+--- a/src/video/png.cpp
++++ b/src/video/png.cpp
+@@ -73,7 +73,7 @@ void SaveMapPNG(const char *name)
+ 	const size_t imageWidth = Map.Info.MapWidth * PixelTileSize.x;
+ 	const size_t imageHeight = Map.Info.MapHeight * PixelTileSize.y;
+ 
+-	SDL_Surface *mapImage = SDL_CreateRGBSurface(SDL_SWSURFACE,
++	SDL_Surface *mapImage = SdlCompatCreateSurface(
+ 		imageWidth, imageHeight, 32, RMASK, GMASK, BMASK, 0);
+ 
+ 	for (int i = 0; i < Map.Info.MapHeight; ++i) {
+diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
+index 39dedbc..304a7ee 100644
+--- a/src/video/sdl.cpp
++++ b/src/video/sdl.cpp
+@@ -114,13 +114,13 @@ uint8_t SizeChangeCounter = 0;
+ 
+ static bool dummyRenderer = false;
+ 
+-uint32_t SDL_CUSTOM_KEY_UP;
++uint32_t SDL_CUSTOM_KEY_UP = 0;
+ 
+ static std::map<SDL_JoystickID, SDL_GameController *> SdlControllers;
+ static ControllerDeviceRegistry SdlControllerRegistry;
+ static ControllerInputState SdlControllerState;
+ 
+-static void OpenSdlController(int deviceIndex);
++static void OpenSdlController(SDL_JoystickID device);
+ 
+ /**
+ **  Clean up SDL video resources properly
+@@ -129,11 +129,27 @@ static void CleanUpVideoSdl()
+ {
+ 	for (const auto &[instanceId, controller] : SdlControllers) {
+ 		(void)instanceId;
+-		SDL_GameControllerClose(controller);
++		SdlCompatCloseGameController(controller);
+ 	}
+ 	SdlControllers.clear();
+ 	SdlControllerRegistry.Clear();
+ 
++	SdlCompatStopTextInput(TheWindow);
++
++	if (Video.blankCursor) {
++		Video.blankCursor.reset();
++	}
++
++	if (TheTexture) {
++		SDL_DestroyTexture(TheTexture);
++		TheTexture = nullptr;
++	}
++
++	if (TheScreen) {
++		SDL_FreeSurface(TheScreen);
++		TheScreen = nullptr;
++	}
++
+ 	if (TheRenderer) {
+ 		SDL_DestroyRenderer(TheRenderer);
+ 		TheRenderer = nullptr;
+@@ -144,34 +160,28 @@ static void CleanUpVideoSdl()
+ 		TheWindow = nullptr;
+ 	}
+ 
+-	if (Video.blankCursor) {
+-		Video.blankCursor.reset();
+-	}
+-
+-	SDL_StopTextInput();
+ 	SDL_Quit();
+ }
+ 
+-static void OpenSdlController(int deviceIndex)
++static void OpenSdlController(SDL_JoystickID device)
+ {
+-	if (!SDL_IsGameController(deviceIndex)) {
+-		return;
+-	}
+-	SDL_GameController *controller = SDL_GameControllerOpen(deviceIndex);
++	SDL_GameController *controller = SdlCompatOpenGameController(device);
+ 	if (!controller) {
+-		ErrorPrint("Couldn't open game controller %d: %s\n",
+-		           deviceIndex, SDL_GetError());
++		ErrorPrint("Couldn't open game controller %u: %s\n",
++		           static_cast<unsigned>(device), SDL_GetError());
+ 		return;
+ 	}
+-	SDL_Joystick *joystick = SDL_GameControllerGetJoystick(controller);
+-	const SDL_JoystickID instanceId = SDL_JoystickInstanceID(joystick);
+-	if (instanceId < 0 || !SdlControllerRegistry.Connect(instanceId)) {
+-		SDL_GameControllerClose(controller);
++	const SDL_JoystickID instanceId =
++		SdlCompatGameControllerInstanceId(controller);
++	if (!SdlCompatJoystickIdIsValid(instanceId)
++	    || !SdlControllerRegistry.Connect(static_cast<int>(instanceId))) {
++		SdlCompatCloseGameController(controller);
+ 		return;
+ 	}
+ 	SdlControllers.emplace(instanceId, controller);
+-	const char *name = SDL_GameControllerName(controller);
+-	DebugPrint("Opened game controller %d: %s\n", instanceId,
++	const char *name = SdlCompatGameControllerName(controller);
++	DebugPrint("Opened game controller %u: %s\n",
++	           static_cast<unsigned>(instanceId),
+ 	           name ? name : "unknown controller");
+ }
+ 
+@@ -182,14 +192,7 @@ static void OpenSdlController(int deviceIndex)
+ static int GetRefreshRate()
+ {
+ 	if (!RefreshRate) {
+-		int displayCount = SDL_GetNumVideoDisplays();
+-		SDL_DisplayMode mode;
+-		for (int i = 0; i < displayCount; i++) {
+-			SDL_GetDesktopDisplayMode(0, &mode);
+-			if (mode.refresh_rate > RefreshRate) {
+-				RefreshRate = mode.refresh_rate;
+-			}
+-		}
++		RefreshRate = SdlCompatMaximumDisplayRefreshRate();
+ 		if (!RefreshRate) {
+ 			RefreshRate = 60;
+ 		}
+@@ -210,11 +213,11 @@ void SetVideoSync()
+ 	if (fps < CyclesPerSecond) {
+ 		fprintf(stdout, "WARNING: Game speed is faster than monitor refresh rate.\n");
+ 		FrameTicks = 1000.0 / CyclesPerSecond;
+-		SDL_GL_SetSwapInterval(0); // disable vsync, so we can run faster than the refresh
++		SdlCompatSetSwapInterval(0); // disable vsync, so we can run faster than the refresh
+ 	} else {
+ 		FrameTicks = 1000.0 / fps;
+-		if (SDL_GL_SetSwapInterval(-1) < 0) { // try to set adaptive vsync
+-			SDL_GL_SetSwapInterval(1); // if it failed, set vsync
++		if (!SdlCompatSetSwapInterval(-1)) { // try to set adaptive vsync
++			SdlCompatSetSwapInterval(1); // if it failed, set vsync
+ 		}
+ 	}
+ 	SkipCycles = (static_cast<double>(fps) / CyclesPerSecond) - 1;
+@@ -371,7 +374,7 @@ static void setDpiAware() {
+ */
+ void InitVideoSdl()
+ {
+-	Uint32 flags = SDL_WINDOW_ALLOW_HIGHDPI;
++	Uint64 flags = SDL_WINDOW_ALLOW_HIGHDPI;
+ 
+ #ifdef PEONPAD_IOS
+ 	// Keep the game immersive while requiring a deliberate second swipe for
+@@ -381,20 +384,16 @@ void InitVideoSdl()
+ 
+ 	if (SDL_WasInit(SDL_INIT_VIDEO) == 0) {
+ 		// Fix tablet input in full-screen mode
+-		SDL_setenv("SDL_MOUSE_RELATIVE", "0", 1);
+-		int res = SDL_Init(
+-					  SDL_INIT_AUDIO | SDL_INIT_VIDEO |
+-					  SDL_INIT_EVENTS | SDL_INIT_TIMER);
+-		if (res < 0) {
++		if (!SdlCompatSetEnvironmentVariable(
++			    "SDL_MOUSE_RELATIVE", "0", true)) {
++			ErrorPrint("Couldn't configure SDL tablet input: %s\n",
++			           SDL_GetError());
++			exit(1);
++		}
++		if (!SdlCompatInitCore()) {
+ 			ErrorPrint("Couldn't initialize SDL: %s\n", SDL_GetError());
+ 			exit(1);
+ 		}
+-		SDL_CUSTOM_KEY_UP = SDL_RegisterEvents(1);
+-		SDL_StartTextInput();
+-
+-		// Clean up on exit
+-		atexit(CleanUpVideoSdl);
+-
+ 		// If debug is enabled, Stratagus disable SDL Parachute.
+ 		// So we need gracefully handle segfaults and aborts.
+ #if defined(DEBUG) && !defined(USE_WIN32)
+@@ -410,14 +409,23 @@ void InitVideoSdl()
+ 		signal(SIGABRT, +cleanExit);
+ #endif
+ 	}
+-	if (SDL_WasInit(SDL_INIT_GAMECONTROLLER) == 0
+-	    && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0) {
++	if (SDL_CUSTOM_KEY_UP == 0
++	    && !SdlCompatRegisterUserEvent(&SDL_CUSTOM_KEY_UP)) {
++		ErrorPrint("Couldn't register SDL user event: %s\n", SDL_GetError());
++		exit(1);
++	}
++	static const bool cleanupRegistered = [] {
++		atexit(CleanUpVideoSdl);
++		return true;
++	}();
++	(void)cleanupRegistered;
++	if (!SdlCompatInitGameControllers()) {
+ 		ErrorPrint("Couldn't initialize SDL game controllers: %s\n",
+ 		           SDL_GetError());
+ 	} else {
+-		SDL_GameControllerEventState(SDL_ENABLE);
+-		for (int deviceIndex = 0; deviceIndex < SDL_NumJoysticks(); ++deviceIndex) {
+-			OpenSdlController(deviceIndex);
++		for (const SDL_JoystickID device :
++		     SdlCompatGetGameControllerDevices()) {
++			OpenSdlController(device);
+ 		}
+ 	}
+ 
+@@ -463,8 +471,8 @@ void InitVideoSdl()
+ 		ss >> y;     // Y
+ 		printf("[Window Pos] %d,%d\n", x, y);
+ 	}
+-	TheWindow = SDL_CreateWindow(win_title, x, y,
+-	                             Video.WindowWidth, Video.WindowHeight, flags);
++	TheWindow = SdlCompatCreateWindow(
++		win_title, x, y, Video.WindowWidth, Video.WindowHeight, flags);
+ 	if (TheWindow == nullptr) {
+ 		ErrorPrint("Couldn't set %dx%dx%d video mode: %s\n",
+ 		           Video.Width,
+@@ -478,30 +486,35 @@ void InitVideoSdl()
+ #else
+ 	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+ #endif
+-	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+-	int rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
+-	if (!Parameters::Instance.benchmark) {
+-		rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
+-	}
+ 	if (!TheRenderer) {
+-		TheRenderer = SDL_CreateRenderer(TheWindow, -1, rendererFlags);
++		TheRenderer = SdlCompatCreateRenderer(
++			TheWindow, !Parameters::Instance.benchmark);
+ 	}
+ 	if (!TheRenderer) {
+ 		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
+ 		exit(1);
+ 	}
+-	SDL_RendererInfo rendererInfo;
+-	if (!SDL_GetRendererInfo(TheRenderer, &rendererInfo)) {
+-		printf("[Renderer] %s\n", rendererInfo.name);
+-		if (strlen(rendererInfo.name) == 0) {
++	const char *rendererName = SdlCompatRendererName(TheRenderer);
++	if (rendererName != nullptr) {
++		printf("[Renderer] %s\n", rendererName);
++		if (strlen(rendererName) == 0) {
+ 			dummyRenderer = true;
+ 		}
+-		if (starts_with(rendererInfo.name, "opengl")) {
++		if (starts_with(rendererName, "opengl")) {
+ 			LoadShaderExtensions();
+ 		}
+ 	}
+-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
+-	Video.ResizeScreen(Video.Width, Video.Height);
++	if (!SdlCompatStartTextInput(TheWindow)) {
++		ErrorPrint("Couldn't start SDL text input: %s\n", SDL_GetError());
++		exit(1);
++	}
++	if (!SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255)) {
++		ErrorPrint("Couldn't set renderer draw color: %s\n", SDL_GetError());
++		exit(1);
++	}
++	if (!Video.ResizeScreen(Video.Width, Video.Height)) {
++		exit(1);
++	}
+ #ifdef PEONPAD_IOS
+ 	PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
+ 	                                Video.Width,
+@@ -568,33 +581,39 @@ void InitVideoSdl()
+ 			}
+ 		}
+ 		if (icon) {
+-			SDL_SetWindowIcon(TheWindow, icon);
++			if (!SdlCompatSetWindowIcon(TheWindow, icon)) {
++				ErrorPrint("Unable to set window icon: %s\n", SDL_GetError());
++			}
+ 		}
+ #endif
+ 	Video.FullScreen = (SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+-	Video.Depth = TheScreen->format->BitsPerPixel;
++	Video.Depth = SdlCompatGetPixelFormatDetails(TheScreen).BitsPerPixel;
+ 
+ 	// Must not allow SDL to switch to relative mouse coordinates when going
+ 	// fullscreen. So we don't hide the cursor, but instead set a transparent
+ 	// 1px cursor
+ 	Uint8 emptyCursor[] = {'\0'};
+ 	Video.blankCursor.reset(SDL_CreateCursor(emptyCursor, emptyCursor, 1, 1, 0, 0));
+-	SDL_SetCursor(Video.blankCursor.get());
++	if (!Video.blankCursor
++	    || !SdlCompatSetCursor(Video.blankCursor.get())) {
++		ErrorPrint("Unable to create blank cursor: %s\n", SDL_GetError());
++		exit(1);
++	}
+ 
+ 	InitKey2Str();
+ 
+-	ColorBlack = Video.MapRGB(TheScreen->format, 0, 0, 0);
+-	ColorDarkGreen = Video.MapRGB(TheScreen->format, 48, 100, 4);
+-	ColorLightBlue = Video.MapRGB(TheScreen->format, 52, 113, 166);
+-	ColorBlue = Video.MapRGB(TheScreen->format, 0, 0, 252);
+-	ColorOrange = Video.MapRGB(TheScreen->format, 248, 140, 20);
+-	ColorWhite = Video.MapRGB(TheScreen->format, 252, 248, 240);
+-	ColorLightGray = Video.MapRGB(TheScreen->format, 192, 192, 192);
+-	ColorGray = Video.MapRGB(TheScreen->format, 128, 128, 128);
+-	ColorDarkGray = Video.MapRGB(TheScreen->format, 64, 64, 64);
+-	ColorRed = Video.MapRGB(TheScreen->format, 252, 0, 0);
+-	ColorGreen = Video.MapRGB(TheScreen->format, 0, 252, 0);
+-	ColorYellow = Video.MapRGB(TheScreen->format, 252, 252, 0);
++	ColorBlack = Video.MapRGB(TheScreen, 0, 0, 0);
++	ColorDarkGreen = Video.MapRGB(TheScreen, 48, 100, 4);
++	ColorLightBlue = Video.MapRGB(TheScreen, 52, 113, 166);
++	ColorBlue = Video.MapRGB(TheScreen, 0, 0, 252);
++	ColorOrange = Video.MapRGB(TheScreen, 248, 140, 20);
++	ColorWhite = Video.MapRGB(TheScreen, 252, 248, 240);
++	ColorLightGray = Video.MapRGB(TheScreen, 192, 192, 192);
++	ColorGray = Video.MapRGB(TheScreen, 128, 128, 128);
++	ColorDarkGray = Video.MapRGB(TheScreen, 64, 64, 64);
++	ColorRed = Video.MapRGB(TheScreen, 252, 0, 0);
++	ColorGreen = Video.MapRGB(TheScreen, 0, 252, 0);
++	ColorYellow = Video.MapRGB(TheScreen, 252, 252, 0);
+ 
+ 	UI.MouseWarpPos.x = UI.MouseWarpPos.y = -1;
+ }
+@@ -722,7 +741,7 @@ static void RemoveSdlController(const EventCallback &callbacks,
+ 	if (wasActive) {
+ 		CancelSdlControllerInput(callbacks, ticks);
+ 	}
+-	SDL_GameControllerClose(controller->second);
++	SdlCompatCloseGameController(controller->second);
+ 	SdlControllers.erase(controller);
+ 	SdlControllerRegistry.Disconnect(instanceId);
+ 
+@@ -777,6 +796,77 @@ static void PeonPadCancelTouches(const EventCallback &callbacks, unsigned ticks)
+ }
+ #endif
+ 
++static bool HandleSdlWindowEvent(const EventCallback &callbacks,
++                                 SDL_Event &event)
++{
++	if (!SdlCompatIsWindowEvent(event)) {
++		return false;
++	}
++
++	const Uint32 windowEvent = SdlCompatWindowEventType(event);
++	switch (windowEvent) {
++		case SDL_WINDOWEVENT_SIZE_CHANGED:
++			SizeChangeCounter++;
++#ifdef PEONPAD_IOS
++			PeonPadIOSApplySafeAreaViewport(
++				TheWindow, TheRenderer, Video.Width,
++				static_cast<int>(Video.Height * Video.VerticalPixelSize));
++#endif
++			break;
++
++		case SDL_WINDOWEVENT_ENTER:
++		case SDL_WINDOWEVENT_LEAVE:
++		{
++			static bool inMainWindow = true;
++			if (inMainWindow && windowEvent == SDL_WINDOWEVENT_LEAVE) {
++				RouteSdlInput(
++					callbacks,
++					{InputIntentKind::PointerExit, InputIntentPhase::Cancel,
++					 {}, {}, KeyModifiers, SdlCompatTicks()});
++			}
++			inMainWindow = windowEvent == SDL_WINDOWEVENT_ENTER;
++			break;
++		}
++
++		case SDL_WINDOWEVENT_FOCUS_GAINED:
++		case SDL_WINDOWEVENT_FOCUS_LOST:
++		{
++			const SdlFocusEventPolicy focusPolicy =
++				GetSdlFocusEventPolicy(
++					windowEvent, IsNetworkGame(), Preference.PauseOnLeave);
++			if (focusPolicy.CancelInput) {
++				CancelSdlPointerInput(callbacks, SdlCompatTicks());
++				CancelSdlControllerInput(callbacks, SdlCompatTicks());
++#ifdef PEONPAD_IOS
++				PeonPadRouteTouchIntents(
++					callbacks,
++					PeonPadTouchInput.Cancel(SdlCompatTicks(), KeyModifiers));
++#endif
++			}
++			if (focusPolicy.ManagePause) {
++				static bool togglePauseOnFocus = false;
++				if (IsSDLWindowVisible
++				    && windowEvent == SDL_WINDOWEVENT_FOCUS_LOST) {
++					IsSDLWindowVisible = false;
++					if (!GamePaused) {
++						togglePauseOnFocus = true;
++						GamePaused = true;
++					}
++				} else if (!IsSDLWindowVisible
++				           && windowEvent == SDL_WINDOWEVENT_FOCUS_GAINED) {
++					IsSDLWindowVisible = true;
++					if (GamePaused && togglePauseOnFocus) {
++						togglePauseOnFocus = false;
++						GamePaused = false;
++					}
++				}
++			}
++			break;
++		}
++	}
++	return true;
++}
++
+ /**
+ **  Handle interactive input event.
+ **
+@@ -787,34 +877,58 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ {
+ 	unsigned int keysym = 0;
+ 
++	if (!SdlCompatConvertEventToRenderCoordinates(TheRenderer, &event)) {
++		ErrorPrint("Unable to convert SDL event coordinates: %s\n",
++		           SDL_GetError());
++		return;
++	}
++
++	if (HandleSdlWindowEvent(callbacks, event)) {
++		if (&callbacks == GetCallbacks()) {
++			handleInput(&event);
++		}
++		return;
++	}
++
++	const int logicalHeight = static_cast<int>(
++		Video.Height * Video.VerticalPixelSize);
++	if (SdlCompatPointerPressIsOutside(
++		    event, Video.Width, logicalHeight)) {
++		return;
++	}
++
+ 	switch (event.type) {
+ 		case SDL_CONTROLLERDEVICEADDED:
+ 			OpenSdlController(event.cdevice.which);
+ 			break;
+ 
+ 		case SDL_CONTROLLERDEVICEREMOVED:
+-			RemoveSdlController(callbacks, event.cdevice.which, SDL_GetTicks());
++			RemoveSdlController(callbacks, event.cdevice.which, SdlCompatTicks());
+ 			break;
+ 
+ 		case SDL_CONTROLLERAXISMOTION:
+-			if (ActivateSdlController(callbacks, event.caxis.which,
+-			                         SDL_GetTicks(), false)) {
++			if (ActivateSdlController(
++				    callbacks, SdlCompatControllerAxisEvent(event).which,
++				    SdlCompatTicks(), false)) {
+ 				RouteSdlControllerIntents(
+ 					callbacks,
+ 					AdaptSdlControllerAxisEvent(
+-						SdlControllerState, event.caxis, SDL_GetTicks()));
++						SdlControllerState,
++						SdlCompatControllerAxisEvent(event), SdlCompatTicks()));
+ 			}
+ 			break;
+ 
+ 		case SDL_CONTROLLERBUTTONDOWN:
+ 		case SDL_CONTROLLERBUTTONUP:
+ 			if (ActivateSdlController(
+-				    callbacks, event.cbutton.which, SDL_GetTicks(),
++				    callbacks, SdlCompatControllerButtonEvent(event).which,
++				    SdlCompatTicks(),
+ 				    event.type == SDL_CONTROLLERBUTTONDOWN)) {
+ 				RouteSdlControllerIntents(
+ 					callbacks,
+ 					AdaptSdlControllerButtonEvent(
+-						SdlControllerState, event.cbutton, SDL_GetTicks()));
++						SdlControllerState,
++						SdlCompatControllerButtonEvent(event), SdlCompatTicks()));
+ 			}
+ 			break;
+ 
+@@ -828,49 +942,64 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			break;
+ 
+ 		case SDL_MOUSEBUTTONDOWN:
++		{
+ #ifdef PEONPAD_IOS
+ 			if (event.button.which == SDL_TOUCH_MOUSEID
+ 			    && PeonPadTouchInput.SuppressPointerEvents()) {
+ 				break;
+ 			}
+ #endif
+-			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
++			const int buttonDownX =
++				static_cast<int>(std::floor(event.button.x + 0.5f));
++			const int buttonDownY = static_cast<int>(
++				std::floor(event.button.y / Video.VerticalPixelSize + 0.5f));
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
+-			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button, 0,
++			               {buttonDownX, buttonDownY}, {}, KeyModifiers,
++			               SdlCompatTicks(), event.button.button, 0,
+ 			               SdlPointerSource(event.button.which)});
+ 			break;
++		}
+ 
+ 		case SDL_MOUSEBUTTONUP:
++		{
+ #ifdef PEONPAD_IOS
+ 			if (event.button.which == SDL_TOUCH_MOUSEID
+ 			    && PeonPadTouchInput.SuppressPointerEvents()) {
+ 				break;
+ 			}
+ #endif
+-			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
++			const int buttonUpX =
++				static_cast<int>(std::floor(event.button.x + 0.5f));
++			const int buttonUpY = static_cast<int>(
++				std::floor(event.button.y / Video.VerticalPixelSize + 0.5f));
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
+-			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button, 0,
++			               {buttonUpX, buttonUpY}, {}, KeyModifiers,
++			               SdlCompatTicks(), event.button.button, 0,
+ 			               SdlPointerSource(event.button.which)});
+ 			break;
++		}
+ 
+ 		case SDL_MOUSEMOTION:
++		{
+ #ifdef PEONPAD_IOS
+ 			if (event.motion.which == SDL_TOUCH_MOUSEID
+ 			    && PeonPadTouchInput.SuppressPointerEvents()) {
+ 				break;
+ 			}
+ #endif
+-			event.motion.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
++			const int motionX =
++				static_cast<int>(std::floor(event.motion.x + 0.5f));
++			const int motionY = static_cast<int>(
++				std::floor(event.motion.y / Video.VerticalPixelSize + 0.5f));
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerMotion, InputIntentPhase::Update,
+-			               {event.motion.x, event.motion.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), 0, 0,
++			               {motionX, motionY}, {}, KeyModifiers,
++			               SdlCompatTicks(), 0, 0,
+ 			               SdlPointerSource(event.motion.which)});
+ 			break;
++		}
+ 
+ #ifdef PEONPAD_IOS
+ 		case SDL_FINGERDOWN:
+@@ -878,26 +1007,33 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 		case SDL_FINGERUP:
+ 		case SDL_FINGERCANCEL:
+ 			if (&callbacks != &GameCallbacks) {
+-				PeonPadCancelTouches(callbacks, SDL_GetTicks());
++				PeonPadCancelTouches(callbacks, SdlCompatTicks());
+ 				break;
+ 			}
+ 			PeonPadRouteTouchIntents(
+ 				callbacks,
+ 				AdaptSdlTouchEvent(PeonPadTouchInput, event.tfinger,
+-				                   Video.Width, Video.Height,
+-				                   SDL_GetTicks(), KeyModifiers));
++				                   Video.Width, logicalHeight,
++				                   SdlCompatTicks(), KeyModifiers));
+ 			if (event.type == SDL_FINGERCANCEL) {
+ 				CancelSdlPointerInputSource(
+-					callbacks, SDL_GetTicks(), InputIntentSource::Touch);
++					callbacks, SdlCompatTicks(), InputIntentSource::Touch);
+ 			}
+ 			break;
+ 
+ 		case SDL_APP_WILLENTERBACKGROUND:
+ 		case SDL_APP_DIDENTERBACKGROUND:
+ 		case SDL_APP_TERMINATING:
+-			PeonPadCancelTouches(callbacks, SDL_GetTicks());
+-			CancelSdlPointerInput(callbacks, SDL_GetTicks());
+-			CancelSdlControllerInput(callbacks, SDL_GetTicks());
++			PeonPadCancelTouches(callbacks, SdlCompatTicks());
++			CancelSdlPointerInput(callbacks, SdlCompatTicks());
++			CancelSdlControllerInput(callbacks, SdlCompatTicks());
++			break;
++
++		case SDL_APP_WILLENTERFOREGROUND:
++		case SDL_APP_DIDENTERFOREGROUND:
++			PeonPadIOSApplySafeAreaViewport(
++				TheWindow, TheRenderer, Video.Width,
++				static_cast<int>(Video.Height * Video.VerticalPixelSize));
+ 			break;
+ #endif
+ 
+@@ -907,102 +1043,40 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				SDL_Event event;
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYDOWN;
+-				event.key.keysym.sym = SDLK_LCTRL;
++				SdlCompatSetEventKeycode(event, SDLK_LCTRL);
+ 				SDL_PushEvent(&event);
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYDOWN;
+-				event.key.keysym.sym = SDLK_LALT;
++				SdlCompatSetEventKeycode(event, SDLK_LALT);
+ 				SDL_PushEvent(&event);
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYDOWN;
+-				event.key.keysym.sym = key;
++				SdlCompatSetEventKeycode(event, key);
+ 				SDL_PushEvent(&event);
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYUP;
+-				event.key.keysym.sym = key;
++				SdlCompatSetEventKeycode(event, key);
+ 				SDL_PushEvent(&event);
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYUP;
+-				event.key.keysym.sym = SDLK_LALT;
++				SdlCompatSetEventKeycode(event, SDLK_LALT);
+ 				SDL_PushEvent(&event);
+ 				SDL_zero(event);
+ 				event.type = SDL_KEYUP;
+-				event.key.keysym.sym = SDLK_LCTRL;
++				SdlCompatSetEventKeycode(event, SDLK_LCTRL);
+ 				SDL_PushEvent(&event);
+ 			}
+ 			break;
+ 
+-		case SDL_WINDOWEVENT:
+-			switch (event.window.event) {
+-				case SDL_WINDOWEVENT_SIZE_CHANGED:
+-					SizeChangeCounter++;
+-#ifdef PEONPAD_IOS
+-					PeonPadIOSApplySafeAreaViewport(TheWindow, TheRenderer,
+-					                                Video.Width,
+-					                                static_cast<int>(Video.Height * Video.VerticalPixelSize));
+-#endif
+-					break;
+-
+-				case SDL_WINDOWEVENT_ENTER:
+-				case SDL_WINDOWEVENT_LEAVE:
+-				{
+-					static bool InMainWindow = true;
+-
+-					if (InMainWindow && (event.window.event == SDL_WINDOWEVENT_LEAVE)) {
+-						RouteSdlInput(callbacks,
+-						              {InputIntentKind::PointerExit, InputIntentPhase::Cancel,
+-						               {}, {}, KeyModifiers, SDL_GetTicks()});
+-					}
+-					InMainWindow = (event.window.event == SDL_WINDOWEVENT_ENTER);
+-				}
+-				break;
+-
+-				case SDL_WINDOWEVENT_FOCUS_GAINED:
+-				case SDL_WINDOWEVENT_FOCUS_LOST:
+-				{
+-				const SdlFocusEventPolicy focusPolicy =
+-					GetSdlFocusEventPolicy(event.window.event,
+-					                       IsNetworkGame(), Preference.PauseOnLeave);
+-				if (focusPolicy.CancelInput) {
+-					CancelSdlPointerInput(callbacks, SDL_GetTicks());
+-					CancelSdlControllerInput(callbacks, SDL_GetTicks());
+-#ifdef PEONPAD_IOS
+-					PeonPadRouteTouchIntents(
+-						callbacks,
+-						PeonPadTouchInput.Cancel(SDL_GetTicks(), KeyModifiers));
+-#endif
+-				}
+-				if (focusPolicy.ManagePause) {
+-					static bool DoTogglePause = false;
+-
+-					if (IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)) {
+-						IsSDLWindowVisible = false;
+-						if (!GamePaused) {
+-							DoTogglePause = !GamePaused;
+-							GamePaused = true;
+-						}
+-					} else if (!IsSDLWindowVisible && (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)) {
+-						IsSDLWindowVisible = true;
+-						if (GamePaused && DoTogglePause) {
+-							DoTogglePause = false;
+-							GamePaused = false;
+-						}
+-					}
+-				}
+-				}
+-				break;
+-			}
+-			break;
+-
+ 		case SDL_TEXTINPUT:
+ 		{
+-			char *text = event.text.text;
++			const char *text = event.text.text;
+ 			if (isTextInput((uint8_t) text[0])) {
+ 				// we only accept US-ascii chars for now
+ 				char lastKey = text[0];
+ 				RouteSdlInput(callbacks,
+ 				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
+-				               KeyModifiers, SDL_GetTicks(),
++				               KeyModifiers, SdlCompatTicks(),
+ 				               static_cast<unsigned char>(lastKey),
+ 				               static_cast<unsigned char>(lastKey)});
+ 				// fabricate a keyup event for later
+@@ -1016,7 +1090,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 		}
+ 
+ 		case SDL_KEYDOWN:
+-			keysym = event.key.keysym.sym;
++			keysym = SdlCompatEventKeycode(event);
+ 		#ifdef PEONPAD_IOS
+ 			if (keysym == SDLK_BACKQUOTE) {
+ 				keysym = SDLK_ESCAPE;
+@@ -1028,13 +1102,13 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				// only report non-printing keys here, the characters will be reported with the textinput event
+ 				RouteSdlInput(callbacks,
+ 				              {InputIntentKind::Key, InputIntentPhase::Begin, {}, {},
+-				               KeyModifiers, SDL_GetTicks(), keysym,
++				               KeyModifiers, SdlCompatTicks(), keysym,
+ 				               keysym < 128 ? keysym : 0});
+ 			}
+ 			break;
+ 
+ 		case SDL_KEYUP:
+-			keysym = event.key.keysym.sym;
++			keysym = SdlCompatEventKeycode(event);
+ 		#ifdef PEONPAD_IOS
+ 			if (keysym == SDLK_BACKQUOTE) {
+ 				keysym = SDLK_ESCAPE;
+@@ -1046,7 +1120,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				// only report non-printing keys here, the characters will be reported with the textinput event
+ 				RouteSdlInput(callbacks,
+ 				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
+-				               KeyModifiers, SDL_GetTicks(), keysym,
++				               KeyModifiers, SdlCompatTicks(), keysym,
+ 				               keysym < 128 ? keysym : 0});
+ 			}
+ 			break;
+@@ -1062,7 +1136,7 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 				char key = static_cast<char>(event.user.code);
+ 				RouteSdlInput(callbacks,
+ 				              {InputIntentKind::Key, InputIntentPhase::End, {}, {},
+-				               KeyModifiers, SDL_GetTicks(),
++				               KeyModifiers, SdlCompatTicks(),
+ 				               static_cast<unsigned char>(key),
+ 				               static_cast<unsigned char>(key)});
+ 			}
+@@ -1081,13 +1155,13 @@ void SetCallbacks(const EventCallback *callbacks)
+ {
+ 	if (Callbacks != callbacks) {
+ 		if (Callbacks) {
+-			CancelSdlControllerInput(*Callbacks, SDL_GetTicks());
++			CancelSdlControllerInput(*Callbacks, SdlCompatTicks());
+ 		}
+ 		SdlControllerState.SetContext(ControllerContextForCallbacks(callbacks));
+ 	}
+ #ifdef PEONPAD_IOS
+ 	if (Callbacks && Callbacks != callbacks) {
+-		PeonPadCancelTouches(*Callbacks, SDL_GetTicks());
++		PeonPadCancelTouches(*Callbacks, SdlCompatTicks());
+ 	}
+ #endif
+ 	Callbacks = callbacks;
+@@ -1117,7 +1191,7 @@ void WaitEventsOneFrame()
+ 		return;
+ 	}
+ 
+-	Uint32 ticks = SDL_GetTicks();
++	Uint32 ticks = SdlCompatTicks();
+ 	if (ticks > NextFrameTicks) { // We are too slow :(
+ 		++SlowFrameCounter;
+ 	}
+@@ -1137,10 +1211,10 @@ void WaitEventsOneFrame()
+ 
+ 	for (;;) {
+ 		// Time of frame over? This makes the CPU happy. :(
+-		ticks = SDL_GetTicks();
++		ticks = SdlCompatTicks();
+ 		if (!interrupts && ticks < NextFrameTicks) {
+ 			SDL_Delay(NextFrameTicks - ticks);
+-			ticks = SDL_GetTicks();
++			ticks = SdlCompatTicks();
+ 		}
+ 		while (ticks >= (unsigned long)(NextFrameTicks)) {
+ 			++interrupts;
+@@ -1187,26 +1261,34 @@ void WaitEventsOneFrame()
+ 
+ static Uint32 LastTick = 0;
+ 
+-static void RenderBenchmarkOverlay()
++static bool RenderBenchmarkOverlay()
+ {
+ 	int RefreshRate = GetRefreshRate();
+ 	// show a bar representing fps, where the entire bar is the max refresh rate of attached displays
+-	Uint32 nextTick = SDL_GetTicks();
++	Uint32 nextTick = SdlCompatTicks();
+ 	Uint32 frameTime = nextTick - LastTick;
+ 	int fps = std::min(RefreshRate, static_cast<int>(frameTime > 0 ? (1000.0 / frameTime) : 0));
+ 	LastTick = nextTick;
+ 
+ 	// draw the full bar
+-	SDL_SetRenderDrawColor(TheRenderer, 255, 0, 0, 255);
++	if (!SdlCompatSetRenderDrawColor(TheRenderer, 255, 0, 0, 255)) {
++		return false;
++	}
+ 	SDL_Rect frame = { Video.Width - 10, 2, 8, RefreshRate };
+-	SDL_RenderDrawRect(TheRenderer, &frame);
++	if (!SdlCompatRenderDrawRect(TheRenderer, &frame)) {
++		return false;
++	}
+ 
+ 	// draw the inner fps gage
+-	SDL_SetRenderDrawColor(TheRenderer, 0, 255, 0, 255);
++	if (!SdlCompatSetRenderDrawColor(TheRenderer, 0, 255, 0, 255)) {
++		return false;
++	}
+ 	SDL_Rect bar = { Video.Width - 8, 2 + RefreshRate - fps, 4, fps };
+-	SDL_RenderFillRect(TheRenderer, &bar);
++	if (!SdlCompatRenderFillRect(TheRenderer, &bar)) {
++		return false;
++	}
+ 
+-	SDL_SetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
++	return SdlCompatSetRenderDrawColor(TheRenderer, 0, 0, 0, 255);
+ }
+ 
+ void RealizeVideoMemory()
+@@ -1220,17 +1302,35 @@ void RealizeVideoMemory()
+ 	}
+ 	if (NumRects) {
+ 		//SDL_UpdateWindowSurfaceRects(TheWindow, Rects, NumRects);
+-		SDL_UpdateTexture(TheTexture, nullptr, TheScreen->pixels, TheScreen->pitch);
++		if (!SdlCompatUpdateTexture(
++			    TheTexture, nullptr, TheScreen->pixels, TheScreen->pitch)) {
++			ErrorPrint("Unable to update screen texture: %s\n", SDL_GetError());
++			return;
++		}
+ 		if (!RenderWithShader(TheRenderer, TheWindow, TheTexture)) {
+-			SDL_RenderClear(TheRenderer);
++			if (!SdlCompatRenderClear(TheRenderer)) {
++				ErrorPrint("Unable to clear renderer: %s\n", SDL_GetError());
++				return;
++			}
+ 			//for (int i = 0; i < NumRects; i++)
+ 			//    SDL_UpdateTexture(TheTexture, &Rects[i], TheScreen->pixels, TheScreen->pitch);
+-			SDL_RenderCopy(TheRenderer, TheTexture, nullptr, nullptr);
++			if (!SdlCompatRenderCopy(TheRenderer, TheTexture, nullptr, nullptr)) {
++				ErrorPrint("Unable to render screen texture: %s\n",
++				           SDL_GetError());
++				return;
++			}
+ 		}
+ 		if (Parameters::Instance.benchmark) {
+-			RenderBenchmarkOverlay();
++			if (!RenderBenchmarkOverlay()) {
++				ErrorPrint("Unable to render benchmark overlay: %s\n",
++				           SDL_GetError());
++				return;
++			}
++		}
++		if (!SdlCompatRenderPresent(TheRenderer)) {
++			ErrorPrint("Unable to present renderer: %s\n", SDL_GetError());
++			return;
+ 		}
+-		SDL_RenderPresent(TheRenderer);
+ 		NumRects = 0;
+ 	}
+ 	if (!Preference.HardwareCursor) {
+@@ -1291,7 +1391,7 @@ int Str2SdlKey(const char *str)
+ */
+ bool SdlGetGrabMouse()
+ {
+-	return SDL_GetWindowGrab(TheWindow);
++	return SdlCompatGetWindowMouseGrab(TheWindow);
+ }
+ 
+ /**
+@@ -1304,9 +1404,9 @@ void ToggleGrabMouse(int mode)
+ 	bool grabbed = SdlGetGrabMouse();
+ 
+ 	if (mode <= 0 && grabbed) {
+-		SDL_SetWindowGrab(TheWindow, SDL_FALSE);
++		SdlCompatSetWindowMouseGrab(TheWindow, false);
+ 	} else if (mode >= 0 && !grabbed) {
+-		SDL_SetWindowGrab(TheWindow, SDL_TRUE);
++		SdlCompatSetWindowMouseGrab(TheWindow, true);
+ 	}
+ }
+ 
+@@ -1318,13 +1418,17 @@ void ToggleFullScreen()
+ 	if (!TheWindow) { // don't bother if there's no surface.
+ 		return;
+ 	}
+-	const Uint32 flags = SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP;
+-	SDL_SetWindowFullscreen(TheWindow, flags ^ SDL_WINDOW_FULLSCREEN_DESKTOP);
++	const bool fullscreen =
++		(SDL_GetWindowFlags(TheWindow) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
++	if (!SdlCompatSetWindowFullscreen(TheWindow, !fullscreen)) {
++		ErrorPrint("Unable to toggle fullscreen: %s\n", SDL_GetError());
++		return;
++	}
+ 
+ #ifdef USE_WIN32
+ 	Invalidate(); // Update display
+ #endif
+-	Video.FullScreen = (flags ^ SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
++	Video.FullScreen = !fullscreen;
+ }
+ 
+ //@}
+diff --git a/src/video/sdl_controller_adapter.cpp b/src/video/sdl_controller_adapter.cpp
+index 8c10f3e..4749d41 100644
+--- a/src/video/sdl_controller_adapter.cpp
++++ b/src/video/sdl_controller_adapter.cpp
+@@ -1,5 +1,8 @@
+ #include "sdl_controller_adapter.h"
+ 
++#ifdef PEONPAD_USE_SDL3
++#include "PeonPadSDL3InputAdapter.h"
++#else
+ #include <SDL_gamecontroller.h>
+ #include <optional>
+ 
+@@ -46,11 +49,15 @@ float NormalizeAxis(Sint16 value, bool trigger)
+ }
+ 
+ } // namespace
++#endif
+ 
+ std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state,
+                                                      const SDL_ControllerAxisEvent &event,
+                                                      std::uint32_t timestamp)
+ {
++#ifdef PEONPAD_USE_SDL3
++	return PeonPadAdaptSDL3GamepadAxisEvent(state, event, timestamp);
++#else
+ 	const std::optional<ControllerAxis> axis = AdaptAxis(event.axis);
+ 	if (!axis) {
+ 		return {};
+@@ -58,15 +65,20 @@ std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state
+ 	const bool trigger =
+ 		*axis == ControllerAxis::LeftTrigger || *axis == ControllerAxis::RightTrigger;
+ 	return state.SetAxis(*axis, NormalizeAxis(event.value, trigger), timestamp);
++#endif
+ }
+ 
+ std::vector<InputIntent> AdaptSdlControllerButtonEvent(ControllerInputState &state,
+                                                        const SDL_ControllerButtonEvent &event,
+                                                        std::uint32_t timestamp)
+ {
++#ifdef PEONPAD_USE_SDL3
++	return PeonPadAdaptSDL3GamepadButtonEvent(state, event, timestamp);
++#else
+ 	const std::optional<ControllerButton> button = AdaptButton(event.button);
+ 	if (!button) {
+ 		return {};
+ 	}
+ 	return state.SetButton(*button, event.state == SDL_PRESSED, timestamp);
++#endif
+ }
+diff --git a/src/video/sdl_input_adapter.cpp b/src/video/sdl_input_adapter.cpp
+index 442bddf..62c719d 100644
+--- a/src/video/sdl_input_adapter.cpp
++++ b/src/video/sdl_input_adapter.cpp
+@@ -1,10 +1,18 @@
+ #include "sdl_input_adapter.h"
+ 
++#ifdef PEONPAD_USE_SDL3
++#include "PeonPadSDL3InputAdapter.h"
++#endif
++
+ std::vector<InputIntent> AdaptSdlTouchEvent(TouchInputState &touchInput,
+                                             const SDL_TouchFingerEvent &event,
+                                             int width, int height,
+                                             std::uint32_t timestamp, int modifiers)
+ {
++#ifdef PEONPAD_USE_SDL3
++	return PeonPadAdaptSDL3TouchEvent(
++		touchInput, event, width, height, timestamp, modifiers);
++#else
+ 	const TouchPoint position{event.x * width, event.y * height};
+ 	switch (event.type) {
+ 		case SDL_FINGERDOWN:
+@@ -18,16 +26,25 @@ std::vector<InputIntent> AdaptSdlTouchEvent(TouchInputState &touchInput,
+ 		default:
+ 			return {};
+ 	}
++#endif
+ }
+ 
+-SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint8 windowEvent,
++SdlFocusEventPolicy GetSdlFocusEventPolicy(Uint32 windowEvent,
+                                             bool networkGame,
+                                             bool pauseOnLeave)
+ {
++#ifdef PEONPAD_USE_SDL3
++	const PeonPadSDL3FocusEventPolicy policy =
++		PeonPadGetSDL3FocusEventPolicy(
++			static_cast<SDL_EventType>(windowEvent),
++			networkGame, pauseOnLeave);
++	return {policy.CancelInput, policy.ManagePause};
++#else
+ 	return {
+ 		windowEvent == SDL_WINDOWEVENT_FOCUS_LOST,
+ 		!networkGame && pauseOnLeave
+ 		    && (windowEvent == SDL_WINDOWEVENT_FOCUS_LOST
+ 		        || windowEvent == SDL_WINDOWEVENT_FOCUS_GAINED)
+ 	};
++#endif
+ }
+diff --git a/src/video/shaders.cpp b/src/video/shaders.cpp
+index 61b52a3..d8110f5 100644
+--- a/src/video/shaders.cpp
++++ b/src/video/shaders.cpp
+@@ -34,6 +34,7 @@
+ #include "iolib.h"
+ #include "parameters.h"
+ #include "script.h"
++#include "sdl_gl_compat.h"
+ #include "video.h"
+ 
+ #include <SDL_opengl.h>
+@@ -286,10 +287,18 @@ bool RenderWithShader(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* back
+ static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SDL_Texture* backBuffer) {
+ 	GLint oldProgramId;
+ 	// Detach the texture
+-	SDL_SetRenderTarget(renderer, nullptr);
+-	SDL_RenderClear(renderer);
++	if (!SdlCompatSetRenderTarget(renderer, nullptr)
++	    || !SdlCompatRenderClear(renderer)) {
++		ErrorPrint("Unable to prepare shader render path: %s\n", SDL_GetError());
++		return false;
++	}
++	SdlCompatOpenGlTextureBinding textureBinding;
++	if (!SdlCompatBindOpenGlTexture(
++		    renderer, backBuffer, &textureBinding)) {
++		ErrorPrint("Unable to bind shader texture: %s\n", SDL_GetError());
++		return false;
++	}
+ 
+-	SDL_GL_BindTexture(backBuffer, nullptr, nullptr);
+ 	if (LastShaderIndex != currentShaderIdx) {
+ 		LastShaderIndex = currentShaderIdx;
+ 		// force to recalculate everything based on size, too
+@@ -333,7 +342,14 @@ static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SD
+ 		LastVideoVerticalPixelSize = Video.VerticalPixelSize;
+ 
+ 		// Window coordinates
+-		SDL_GL_GetDrawableSize(win, &DrawableWidth, &DrawableHeight);
++		if (!SdlCompatGetWindowDrawableSize(
++			    win, &DrawableWidth, &DrawableHeight)
++		    || DrawableWidth <= 0 || DrawableHeight <= 0) {
++			ErrorPrint("Unable to query shader drawable size: %s\n",
++			           SDL_GetError());
++			SdlCompatUnbindOpenGlTexture(&textureBinding);
++			return false;
++		}
+ 
+ 		// letterboxing
+ 		double xScale = (double)DrawableWidth / LastVideoWidth;
+@@ -407,6 +423,10 @@ static bool RenderWithShaderInternal(SDL_Renderer *renderer, SDL_Window* win, SD
+ 		glUseProgram(oldProgramId);
+ 	}
+ 
++	if (!SdlCompatUnbindOpenGlTexture(&textureBinding)) {
++		ErrorPrint("Unable to release shader texture: %s\n", SDL_GetError());
++		return false;
++	}
+ 	return true;
+ }
+ 
+diff --git a/src/video/video.cpp b/src/video/video.cpp
+index ca44880..0afb0e9 100644
+--- a/src/video/video.cpp
++++ b/src/video/video.cpp
+@@ -264,27 +264,38 @@ bool CVideo::ResizeScreen(int w, int h)
+ 		&& Height == WindowHeight) {
+ 		// if initially window was the same size as res, keep it that way, unless we've resized
+ 		int ww, wh;
+-		SDL_GetWindowSize(TheWindow, &ww, &wh);
++		if (!SdlCompatGetWindowSize(TheWindow, &ww, &wh)) {
++			ErrorPrint("Unable to query window size: %s\n", SDL_GetError());
++			return false;
++		}
+ 		if (ww == Width && wh == Height) {
+ 			WindowWidth = w;
+ 			WindowHeight = h;
+-			SDL_SetWindowSize(TheWindow, w, h);
++			if (!SdlCompatSetWindowSize(TheWindow, w, h)) {
++				ErrorPrint("Unable to resize window: %s\n", SDL_GetError());
++				return false;
++			}
+ 		}
+ 	}
+ 	Width = w;
+ 	Height = h;
+ 
+-	SDL_RenderSetLogicalSize(TheRenderer, w, h * VerticalPixelSize);
++	if (!SdlCompatSetRenderLogicalSize(
++		    TheRenderer, w, h * VerticalPixelSize)) {
++		ErrorPrint("Unable to set renderer logical size: %s\n", SDL_GetError());
++		return false;
++	}
+ 
+ 	// new surface
+ 	if (TheScreen) {
+ 		SDL_FreeSurface(TheScreen);
+ 	}
+-	TheScreen = SDL_CreateRGBSurface(0, w, h, 32,
+-									 RMASK,
+-									 GMASK,
+-									 BMASK,
+-									 0); // AMASK);
++	TheScreen =
++		SdlCompatCreateSurface(w, h, 32, RMASK, GMASK, BMASK, 0);
++	if (TheScreen == nullptr) {
++		ErrorPrint("Unable to create screen surface: %s\n", SDL_GetError());
++		return false;
++	}
+ 	Assert(SDL_MUSTLOCK(TheScreen) == 0);
+ 
+ 	if (Gui) {
+@@ -301,6 +312,15 @@ bool CVideo::ResizeScreen(int w, int h)
+ 	                               SDL_PIXELFORMAT_ARGB8888,
+ 	                               SDL_TEXTUREACCESS_STREAMING,
+ 	                               w, h);
++	if (TheTexture == nullptr) {
++		ErrorPrint("Unable to create screen texture: %s\n", SDL_GetError());
++		return false;
++	}
++	if (!SdlCompatSetTextureNearest(TheTexture)) {
++		ErrorPrint("Unable to set screen texture scale mode: %s\n",
++		           SDL_GetError());
++		return false;
++	}
+ 
+ 	SetClipping(0, 0, w - 1, h - 1);
+ 
+@@ -434,7 +454,8 @@ void BlitSurfaceAlphaBlending_32bpp(const SDL_Surface *srcSurface, const SDL_Rec
+ */
+ void VideoPaletteListAdd(SDL_Surface *surface)
+ {
+-	if (surface == nullptr || surface->format == nullptr || surface->format->BytesPerPixel != 1) {
++	if (!SdlCompatSurfaceHasFormat(surface)
++	    || SdlCompatGetPixelFormatDetails(surface).BytesPerPixel != 1) {
+ 		return;
+ 	}
+ 	CColorCycling &colorCycling = CColorCycling::GetInstance();
+@@ -488,7 +509,9 @@ void SetColorCycleAll(bool value)
+ */
+ void ColorCycleSurface(SDL_Surface &surface)
+ {
+-	SDL_Color *palcolors = surface.format->palette->colors;
++	SDL_Palette *const palette = SdlCompatGetSurfacePalette(&surface);
++	Assert(palette != nullptr);
++	SDL_Color *palcolors = palette->colors;
+ 	SDL_Color colors[256];
+ 	CColorCycling &colorCycling = CColorCycling::GetInstance();
+ 
+@@ -497,7 +520,7 @@ void ColorCycleSurface(SDL_Surface &surface)
+ 		memcpy(colors + range.begin, palcolors + range.begin + 1, (range.end - range.begin) * sizeof(SDL_Color));
+ 		colors[range.end] = palcolors[range.begin];
+ 	}
+-	SDL_SetPaletteColors(surface.format->palette, colors, 0, 256);
++	SDL_SetPaletteColors(palette, colors, 0, 256);
+ }
+ 
+ /**
+@@ -507,7 +530,9 @@ void ColorCycleSurface(SDL_Surface &surface)
+ static void ColorCycleSurface_Reverse(SDL_Surface &surface, unsigned int count)
+ {
+ 	for (unsigned int i = 0; i != count; ++i) {
+-		SDL_Color *palcolors = surface.format->palette->colors;
++		SDL_Palette *const palette = SdlCompatGetSurfacePalette(&surface);
++		Assert(palette != nullptr);
++		SDL_Color *palcolors = palette->colors;
+ 		SDL_Color colors[256];
+ 		CColorCycling &colorCycling = CColorCycling::GetInstance();
+ 
+@@ -516,7 +541,7 @@ static void ColorCycleSurface_Reverse(SDL_Surface &surface, unsigned int count)
+ 			memcpy(colors + range.begin + 1, palcolors + range.begin, (range.end - range.begin) * sizeof(SDL_Color));
+ 			colors[range.begin] = palcolors[range.end];
+ 		}
+-		SDL_SetPaletteColors(surface.format->palette, colors, 0, 256);
++		SDL_SetPaletteColors(palette, colors, 0, 256);
+ 	}
+ }
+ 
+@@ -536,7 +561,8 @@ void ColorCycle()
+ 		for (SDL_Surface *surface : colorCycling.PaletteList) {
+ 			ColorCycleSurface(*surface);
+ 		}
+-	} else if (Map.TileGraphic->getSurface()->format->BytesPerPixel == 1) {
++	} else if (SdlCompatGetPixelFormatDetails(
++		           Map.TileGraphic->getSurface()).BytesPerPixel == 1) {
+ 		++colorCycling.cycleCount;
+ 		ColorCycleSurface(*Map.TileGraphic->getSurface());
+ 	}
+@@ -549,7 +575,8 @@ void RestoreColorCyclingSurface()
+ 		for (SDL_Surface *surface : colorCycling.PaletteList) {
+ 			ColorCycleSurface_Reverse(*surface, colorCycling.cycleCount);
+ 		}
+-	} else if (Map.TileGraphic->getSurface()->format->BytesPerPixel == 1) {
++	} else if (SdlCompatGetPixelFormatDetails(
++		           Map.TileGraphic->getSurface()).BytesPerPixel == 1) {
+ 		ColorCycleSurface_Reverse(*Map.TileGraphic->getSurface(), colorCycling.cycleCount);
+ 	}
+ 	colorCycling.cycleCount = 0;
+diff --git a/tests/sdl3_engine_compat_test.cpp b/tests/sdl3_engine_compat_test.cpp
+new file mode 100644
+index 0000000..d9efe42
+--- /dev/null
++++ b/tests/sdl3_engine_compat_test.cpp
+@@ -0,0 +1,483 @@
++#include "iolib.h"
++#include "sdl_compat.h"
++#include "sdl_gl_compat.h"
++
++#include <SDL.h>
++
++#include <cerrno>
++#include <cstdio>
++#include <cstring>
++#include <fcntl.h>
++#include <filesystem>
++#include <fstream>
++#include <memory>
++#include <string>
++#include <sys/resource.h>
++#include <vector>
++
++namespace
++{
++
++int Failures = 0;
++
++void Check(bool condition, const char *message)
++{
++	if (!condition) {
++		++Failures;
++		std::fprintf(stderr, "CHECK FAILED: %s (%s)\n",
++		             message, SDL_GetError());
++	}
++}
++
++int CountOpenFileDescriptors()
++{
++	struct rlimit limit {};
++	if (getrlimit(RLIMIT_NOFILE, &limit) != 0) {
++		return -1;
++	}
++	const rlim_t maximum = std::min<rlim_t>(limit.rlim_cur, 4096);
++	int count = 0;
++	for (int descriptor = 0; descriptor < static_cast<int>(maximum);
++	     ++descriptor) {
++		errno = 0;
++		if (fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) {
++			++count;
++		}
++	}
++	return count;
++}
++
++Uint32 ReadPixel(SDL_Surface *surface, int x, int y)
++{
++	Uint32 pixel = 0;
++	const auto *source = static_cast<const Uint8 *>(surface->pixels)
++		+ y * surface->pitch + x * sizeof(pixel);
++	std::memcpy(&pixel, source, sizeof(pixel));
++	return pixel;
++}
++
++void TestCFileIO()
++{
++	SDL_ClearError();
++	Check(CFile::to_SDL_RWops(nullptr) == nullptr,
++	      "null CFile owner is rejected");
++	Check(SDL_GetError()[0] != '\0', "null CFile reports an SDL error");
++
++	const std::filesystem::path path =
++		std::filesystem::temp_directory_path()
++		/ ("peonpad-sdl3-io-" + std::to_string(SDL_GetTicksNS()) + ".bin");
++	const std::vector<Uint8> expected{1, 3, 5, 7, 9, 11};
++	{
++		std::ofstream output(path, std::ios::binary);
++		output.write(reinterpret_cast<const char *>(expected.data()),
++		             static_cast<std::streamsize>(expected.size()));
++		Check(output.good(), "temporary IO fixture is written");
++	}
++
++	const int descriptorsBefore = CountOpenFileDescriptors();
++	Check(descriptorsBefore >= 0, "open file descriptors can be counted");
++	auto file = std::make_unique<CFile>();
++	Check(file->open(path.string().c_str(), CL_OPEN_READ) == 0,
++	      "CFile opens a plain file");
++	SDL_IOStream *stream = CFile::to_SDL_RWops(std::move(file));
++	Check(stream != nullptr, "CFile ownership transfers to SDL_IOStream");
++	if (stream != nullptr) {
++		Check(SDL_GetIOSize(stream) == static_cast<Sint64>(expected.size()),
++		      "SDL_IOStream reports CFile size");
++		Check(SDL_SeekIO(stream, 2, SDL_IO_SEEK_SET) == 2,
++		      "SDL_IOStream seeks CFile");
++		Uint8 bytes[3]{};
++		Check(SDL_ReadIO(stream, bytes, sizeof(bytes)) == sizeof(bytes),
++		      "SDL_IOStream reads CFile");
++		Check(std::memcmp(bytes, expected.data() + 2, sizeof(bytes)) == 0,
++		      "SDL_IOStream preserves CFile bytes");
++		const Uint8 writeByte = 42;
++		Check(SDL_WriteIO(stream, &writeByte, 1) == 0,
++		      "read-only CFile stream rejects writes");
++		Check(SDL_GetIOStatus(stream) == SDL_IO_STATUS_READONLY,
++		      "read-only CFile stream exposes its error status");
++		Check(SDL_CloseIO(stream), "SDL_IOStream closes its CFile owner");
++	}
++	Check(CountOpenFileDescriptors() == descriptorsBefore,
++	      "closing SDL_IOStream releases the owned file descriptor");
++	std::error_code removeError;
++	std::filesystem::remove(path, removeError);
++	Check(!removeError, "temporary IO fixture is removed");
++}
++
++void TestReadinessMarker()
++{
++	FILE *output = std::tmpfile();
++	Check(output != nullptr, "readiness marker output opens");
++	if (output != nullptr) {
++		Check(SdlCompatWriteReadinessMarker(output),
++		      "readiness marker writes and flushes");
++		std::rewind(output);
++		char marker[64]{};
++		Check(std::fgets(marker, sizeof(marker), output) != nullptr
++		      && std::strcmp(marker, "PEONPAD_ENGINE_READY\n") == 0,
++		      "readiness marker is one exact raw line");
++		std::fclose(output);
++	}
++	SDL_ClearError();
++	Check(!SdlCompatWriteReadinessMarker(nullptr),
++	      "readiness marker rejects a missing output stream");
++	Check(SDL_GetError()[0] != '\0',
++	      "readiness marker failure reports an SDL error");
++}
++
++void TestCompressedCFileIO(long compressionFlag, const char *extension,
++                           const char *description)
++{
++	const std::filesystem::path path =
++		std::filesystem::temp_directory_path()
++		/ ("peonpad-sdl3-compressed-"
++		   + std::to_string(SDL_GetTicksNS()) + description);
++	const std::string expected =
++		"PeonPad compressed IO seek coverage: "
++		"0123456789abcdefghijklmnopqrstuvwxyz";
++	{
++		CFile output;
++		Check(output.open(
++			      path.string().c_str(), CL_OPEN_WRITE | compressionFlag) == 0,
++		      "compressed CFile fixture opens for writing");
++		output.write(expected);
++		Check(output.close() == 0, "compressed CFile fixture closes");
++	}
++
++	const int descriptorsBefore = CountOpenFileDescriptors();
++	auto file = std::make_unique<CFile>();
++	Check(file->open(path.string().c_str(), CL_OPEN_READ) == 0,
++	      "compressed CFile opens through extension discovery");
++	Check(file->tell() == 0, "compressed CFile starts at offset zero");
++	Check(file->size() == static_cast<long>(expected.size()),
++	      "compressed CFile reports its uncompressed size");
++	Check(file->tell() == 0,
++	      "compressed CFile size query preserves its position");
++
++	SDL_IOStream *stream = CFile::to_SDL_RWops(std::move(file));
++	Check(stream != nullptr, "compressed CFile transfers to SDL_IOStream");
++	if (stream != nullptr) {
++		Check(SDL_GetIOSize(stream) == static_cast<Sint64>(expected.size()),
++		      "compressed SDL_IOStream reports uncompressed size");
++		Check(SDL_TellIO(stream) == 0,
++		      "compressed SDL_IOStream size preserves offset");
++		Check(SDL_SeekIO(stream, 7, SDL_IO_SEEK_SET) == 7,
++		      "compressed SDL_IOStream seeks from start");
++		char bytes[4]{};
++		Check(SDL_ReadIO(stream, bytes, 3) == 3
++		      && std::memcmp(bytes, expected.data() + 7, 3) == 0,
++		      "compressed SDL_IOStream reads after absolute seek");
++		Check(SDL_SeekIO(stream, 5, SDL_IO_SEEK_CUR) == 15,
++		      "compressed SDL_IOStream seeks from current position");
++		Check(SDL_SeekIO(stream, -4, SDL_IO_SEEK_END)
++		      == static_cast<Sint64>(expected.size() - 4),
++		      "compressed SDL_IOStream seeks from uncompressed end");
++		std::memset(bytes, 0, sizeof(bytes));
++		Check(SDL_ReadIO(stream, bytes, 4) == 4
++		      && std::memcmp(
++			      bytes, expected.data() + expected.size() - 4, 4) == 0,
++		      "compressed SDL_IOStream reads its tail");
++		const Sint64 beforeInvalidSeek = SDL_TellIO(stream);
++		Check(SDL_SeekIO(
++			      stream, -static_cast<Sint64>(expected.size()) - 1,
++			      SDL_IO_SEEK_END) == -1,
++		      "compressed SDL_IOStream rejects a negative target");
++		Check(SDL_TellIO(stream) == beforeInvalidSeek,
++		      "failed compressed seek preserves its position");
++		Check(SDL_CloseIO(stream),
++		      "compressed SDL_IOStream closes its CFile owner");
++	}
++	Check(CountOpenFileDescriptors() == descriptorsBefore,
++	      "compressed SDL_IOStream releases its file descriptor");
++
++	std::error_code removeError;
++	std::filesystem::remove(path.string() + extension, removeError);
++	Check(!removeError, "compressed CFile fixture is removed");
++}
++
++void TestSurfaces()
++{
++	SDL_Surface *indexed =
++		SdlCompatCreateSurface(2, 1, 8, 0, 0, 0, 0);
++	Check(indexed != nullptr, "indexed surface is created");
++	if (indexed == nullptr) {
++		return;
++	}
++
++	SDL_Palette *palette = SdlCompatGetSurfacePalette(indexed);
++	Check(palette != nullptr, "indexed surface owns a palette");
++	const SDL_Color colors[] = {
++		{10, 20, 30, 17},
++		{80, 120, 160, 231},
++	};
++	if (palette != nullptr) {
++		Check(SDL_SetPaletteColors(palette, colors, 0, 2),
++		      "palette colors and alpha are assigned");
++	}
++	auto *indices = static_cast<Uint8 *>(indexed->pixels);
++	indices[0] = 0;
++	indices[1] = 1;
++	Check(SdlCompatSetColorKey(indexed, true, 0),
++	      "indexed surface color key is assigned");
++	Check(SDL_SetSurfaceColorMod(indexed, 90, 100, 110),
++	      "surface color modulation is assigned");
++	Check(SDL_SetSurfaceAlphaMod(indexed, 123),
++	      "surface alpha modulation is assigned");
++
++	SDL_Surface *duplicate = SdlCompatDuplicateSurface(indexed);
++	Check(duplicate != nullptr, "indexed surface is duplicated");
++	if (duplicate != nullptr) {
++		Uint32 colorKey = 99;
++		Check(SdlCompatGetColorKey(duplicate, &colorKey) && colorKey == 0,
++		      "surface duplication preserves the color key");
++		SDL_Palette *duplicatePalette =
++			SdlCompatGetSurfacePalette(duplicate);
++		Check(duplicatePalette != nullptr
++		      && duplicatePalette->colors[0].a == colors[0].a
++		      && duplicatePalette->colors[1].a == colors[1].a,
++		      "surface duplication preserves palette alpha");
++		Uint8 red = 0;
++		Uint8 green = 0;
++		Uint8 blue = 0;
++		Uint8 alpha = 0;
++		Check(SDL_GetSurfaceColorMod(duplicate, &red, &green, &blue)
++		      && red == 90 && green == 100 && blue == 110,
++		      "surface duplication preserves color modulation");
++		Check(SDL_GetSurfaceAlphaMod(duplicate, &alpha) && alpha == 123,
++		      "surface duplication preserves alpha modulation");
++	}
++
++	SDL_Surface *rgba = SdlCompatConvertSurface(
++		indexed, static_cast<Uint32>(SDL_PIXELFORMAT_RGBA32));
++	Check(rgba != nullptr, "indexed surface converts to RGBA");
++	if (rgba != nullptr) {
++		const Uint32 mapped =
++			SdlCompatMapRGBA(rgba, 4, 8, 12, 200);
++		Uint8 red = 0;
++		Uint8 green = 0;
++		Uint8 blue = 0;
++		Uint8 alpha = 0;
++		SdlCompatGetRGBA(rgba, mapped, &red, &green, &blue, &alpha);
++		Check(red == 4 && green == 8 && blue == 12 && alpha == 200,
++		      "RGBA map/get round trip preserves channels");
++		const bool locked = SDL_LockSurface(rgba);
++		Check(locked, "RGBA surface locks");
++		if (locked) {
++			SDL_UnlockSurface(rgba);
++		}
++	}
++
++	std::vector<Uint32> pixels(4, 0xff102030);
++	SDL_Surface *preallocated = SdlCompatCreateSurfaceFrom(
++		pixels.data(), 2, 2, 32, 2 * sizeof(Uint32),
++		0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
++	Check(preallocated != nullptr, "preallocated surface is created");
++	if (preallocated != nullptr) {
++		Check(SdlCompatSurfaceUsesPreallocatedPixels(preallocated),
++		      "preallocated surface ownership is identified");
++		SDL_DestroySurface(preallocated);
++		pixels[0] = 0xff405060;
++		Check(pixels[0] == 0xff405060,
++		      "destroying a preallocated surface leaves caller pixels owned");
++	}
++
++	SDL_ClearError();
++	SDL_Surface *invalid =
++		SdlCompatCreateSurface(1, 1, 7, 0, 0, 0, 0);
++	Check(invalid == nullptr, "unsupported surface masks fail explicitly");
++	Check(SDL_GetError()[0] != '\0',
++	      "unsupported surface masks report an SDL error");
++
++	SDL_DestroySurface(rgba);
++	SDL_DestroySurface(duplicate);
++	SDL_DestroySurface(indexed);
++}
++
++void TestRenderer()
++{
++	SDL_Surface *output =
++		SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
++	SDL_Renderer *renderer =
++		output != nullptr ? SDL_CreateSoftwareRenderer(output) : nullptr;
++	Check(renderer != nullptr, "software renderer is created");
++	if (renderer == nullptr) {
++		SDL_DestroySurface(output);
++		return;
++	}
++
++	Check(SdlCompatSetRenderLogicalSize(renderer, 8, 8),
++	      "renderer logical presentation is configured");
++	int width = 0;
++	int height = 0;
++	Check(SdlCompatGetRenderLogicalSize(renderer, &width, &height)
++	      && width == 8 && height == 8,
++	      "renderer logical presentation is queried");
++	Check(SdlCompatGetRenderOutputSize(renderer, &width, &height)
++	      && width == 8 && height == 8,
++	      "renderer drawable size is queried");
++	Check(SdlCompatSetRenderScale(renderer, 1.0f, 1.0f),
++	      "renderer scale is configured");
++	const SDL_Rect viewport{0, 0, 8, 8};
++	Check(SdlCompatSetRenderViewport(renderer, &viewport),
++	      "renderer viewport is configured");
++
++	Check(SdlCompatSetRenderDrawColor(renderer, 200, 10, 20, 255),
++	      "renderer draw color is configured");
++	Check(SdlCompatRenderFillRect(renderer, nullptr),
++	      "renderer fill helper accepts a full target");
++
++	SDL_Texture *texture = SDL_CreateTexture(
++		renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, 1, 1);
++	Check(texture != nullptr, "renderer texture is created");
++	if (texture != nullptr) {
++		const Uint32 green = SdlCompatMapRGBA(output, 0, 240, 0, 255);
++		Check(SdlCompatUpdateTexture(
++			      texture, nullptr, &green, sizeof(green)),
++		      "renderer texture pixels are uploaded");
++		const SDL_Rect target{3, 4, 1, 1};
++		Check(SdlCompatRenderCopy(renderer, texture, nullptr, &target),
++		      "integer renderer copy converts to SDL3 float geometry");
++	}
++	Check(SdlCompatRenderPresent(renderer), "software renderer presents");
++
++	SDL_Surface *readback =
++		SDL_CreateSurface(8, 8, SDL_PIXELFORMAT_RGBA32);
++	Check(readback != nullptr
++	      && SdlCompatRenderReadPixels(renderer, nullptr, readback),
++	      "renderer readback copies into caller-owned surface");
++	if (readback != nullptr) {
++		Uint8 red = 0;
++		Uint8 green = 0;
++		Uint8 blue = 0;
++		Uint8 alpha = 0;
++		SdlCompatGetRGBA(
++			readback, ReadPixel(readback, 3, 4),
++			&red, &green, &blue, &alpha);
++		Check(red == 0 && green == 240 && blue == 0 && alpha == 255,
++		      "renderer readback preserves copied texture pixels");
++	}
++
++	SDL_DestroySurface(readback);
++	SDL_DestroyTexture(texture);
++	SDL_DestroyRenderer(renderer);
++	SDL_DestroySurface(output);
++}
++
++void TestRendererEventCoordinates()
++{
++	SDL_Window *window = nullptr;
++	SDL_Renderer *renderer = nullptr;
++	window = SDL_CreateWindow(
++		"PeonPad coordinate conversion", 256, 192, SDL_WINDOW_HIDDEN);
++	if (window != nullptr) {
++		renderer = SDL_CreateRenderer(window, "software");
++	}
++	Check(window != nullptr && renderer != nullptr,
++	      "coordinate conversion window and software renderer are created");
++	if (window == nullptr || renderer == nullptr) {
++		SDL_DestroyRenderer(renderer);
++		SDL_DestroyWindow(window);
++		return;
++	}
++	const SDL_WindowID windowId = SDL_GetWindowID(window);
++
++	Check(SdlCompatDisableRenderLogicalPresentation(renderer),
++	      "coordinate conversion disables logical presentation");
++	Check(SdlCompatSetRenderScale(renderer, 2.0f, 2.0f),
++	      "coordinate conversion uses a non-unit renderer scale");
++	const SDL_Rect viewport{50, 25, 80, 60};
++	Check(SdlCompatSetRenderViewport(renderer, &viewport),
++	      "coordinate conversion uses an inset renderer viewport");
++
++	float windowX = 0.0f;
++	float windowY = 0.0f;
++	Check(SDL_RenderCoordinatesToWindow(
++		      renderer, 2.0f, 2.0f, &windowX, &windowY),
++	      "logical point converts to window coordinates");
++	SDL_Event mouse{};
++	mouse.type = SDL_EVENT_MOUSE_MOTION;
++	mouse.motion.windowID = windowId;
++	mouse.motion.x = windowX;
++	mouse.motion.y = windowY;
++	Check(SdlCompatConvertEventToRenderCoordinates(renderer, &mouse),
++	      "mouse event converts through renderer state");
++	if (mouse.motion.x != 2.0f || mouse.motion.y != 2.0f) {
++		std::fprintf(stderr, "mouse conversion: %.6f, %.6f\n",
++		             mouse.motion.x, mouse.motion.y);
++	}
++	Check(mouse.motion.x == 2.0f && mouse.motion.y == 2.0f,
++	      "mouse event receives one inverse scale and viewport offset");
++
++	int windowWidth = 0;
++	int windowHeight = 0;
++	Check(SDL_GetWindowSize(window, &windowWidth, &windowHeight),
++	      "touch conversion window dimensions are available");
++	Check(SDL_RenderCoordinatesToWindow(
++		      renderer, -1.0f, 2.0f, &windowX, &windowY),
++	      "outside logical point converts to window coordinates");
++	SDL_Event touch{};
++	touch.type = SDL_EVENT_FINGER_DOWN;
++	touch.tfinger.windowID = windowId;
++	touch.tfinger.x = windowX / windowWidth;
++	touch.tfinger.y = windowY / windowHeight;
++	Check(SdlCompatConvertEventToRenderCoordinates(renderer, &touch),
++	      "touch event converts through renderer state");
++	if (!SdlCompatPointerPressIsOutside(touch, 80, 60)) {
++		std::fprintf(stderr, "touch conversion: %.6f, %.6f\n",
++		             touch.tfinger.x, touch.tfinger.y);
++	}
++	Check(SdlCompatPointerPressIsOutside(touch, 80, 60),
++	      "touch begin in the inset bar is rejected");
++
++	SDL_Event release = touch;
++	release.type = SDL_EVENT_FINGER_UP;
++	Check(!SdlCompatPointerPressIsOutside(release, 80, 60),
++	      "outside touch release remains eligible for cancellation cleanup");
++
++	SDL_DestroyRenderer(renderer);
++	SDL_DestroyWindow(window);
++}
++
++void TestOpenGlCompatibilityErrors()
++{
++	SdlCompatOpenGlTextureBinding binding;
++	SDL_ClearError();
++	Check(!SdlCompatBindOpenGlTexture(nullptr, nullptr, &binding),
++	      "OpenGL texture adapter rejects null owners");
++	Check(SDL_GetError()[0] != '\0',
++	      "OpenGL texture adapter reports invalid ownership");
++}
++
++} // namespace
++
++int main()
++{
++	TestCFileIO();
++	TestReadinessMarker();
++	TestCompressedCFileIO(CL_WRITE_GZ, ".gz", "gzip");
++	TestCompressedCFileIO(CL_WRITE_BZ2, ".bz2", "bzip2");
++
++	Check(SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "dummy"),
++	      "dummy SDL video driver is selected");
++	Check(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS),
++	      "SDL video and events initialize");
++	Check(!SdlCompatGetBasePath().empty(), "SDL base path is available");
++	Uint32 eventType = 0;
++	Check(SdlCompatRegisterUserEvent(&eventType) && eventType != 0,
++	      "SDL3 user event registration uses the SDL3 success contract");
++
++	TestSurfaces();
++	TestRenderer();
++	TestRendererEventCoordinates();
++	TestOpenGlCompatibilityErrors();
++	SDL_Quit();
++
++	if (Failures != 0) {
++		std::fprintf(stderr, "%d SDL3 engine compatibility checks failed\n",
++		             Failures);
++		return 1;
++	}
++	std::puts("SDL3 engine compatibility checks passed");
++	return 0;
++}
+diff --git a/third-party/CMakeLists.txt b/third-party/CMakeLists.txt
+index 68eecf5..55782b3 100644
+--- a/third-party/CMakeLists.txt
++++ b/third-party/CMakeLists.txt
+@@ -319,9 +319,9 @@ macro(vendored_mng)
+     set(MNG_DEFINITIONS -DMNG_NO_INCLUDE_JNG) # see patch
+     set(MNG_INCLUDE_DIR "${CMAKE_CURRENT_MACRO_LIST_DIR}/libmng/")
+     if(MSVC)
+-      set(MNG_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/mng/src/mng-build/$<CONFIGURATION>/mng.lib" ${ZLIB_LIBRARIES} ${LCMS_LIBRARIES})
++      set(MNG_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/mng/src/mng-build/$<CONFIGURATION>/mng.lib" ${ZLIB_LIBRARIES} ${LCMS_LIBRARIES} ${JPEG_LIBRARIES})
+     else()
+-      set(MNG_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/mng/src/mng-build/libmng.a" ${ZLIB_LIBRARIES} ${LCMS_LIBRARIES})
++      set(MNG_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/mng/src/mng-build/libmng.a" ${ZLIB_LIBRARIES} ${LCMS_LIBRARIES} ${JPEG_LIBRARIES})
+     endif()
+   endif()
+ endmacro()
+diff --git a/third-party/guisan/include/guisan/sdl/sdlpixel.hpp b/third-party/guisan/include/guisan/sdl/sdlpixel.hpp
+index 2e3da8f..a1eea5f 100644
+--- a/third-party/guisan/include/guisan/sdl/sdlpixel.hpp
++++ b/third-party/guisan/include/guisan/sdl/sdlpixel.hpp
+@@ -6,11 +6,11 @@
+  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
+  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
+  *
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
++ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
+  *
+  *                                                         Js_./
+  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
+- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
++ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+  *                                                 _Qhm`] _f "'c  1!5m
+  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
+  *                                               .)j(] .d_/ '-(  P .   S
+@@ -58,6 +58,7 @@
+ #define GCN_SDLPIXEL_HPP
+ 
+ #include "SDL.h"
++#include "sdl_compat.h"
+ #include "guisan/color.hpp"
+ 
+ namespace gcn
+@@ -73,7 +74,7 @@ namespace gcn
+      */
+     inline const Color SDLgetPixel(SDL_Surface* surface, int x, int y)
+     {
+-        int bpp = surface->format->BytesPerPixel;
++        int bpp = SdlCompatGetPixelFormatDetails(surface).BytesPerPixel;
+ 
+         SDL_LockSurface(surface);
+ 
+@@ -110,7 +111,7 @@ namespace gcn
+ 
+         unsigned char r,g,b,a;
+ 
+-        SDL_GetRGBA(color, surface->format, &r, &g, &b, &a);
++        SdlCompatGetRGBA(surface, color, &r, &g, &b, &a);
+         SDL_UnlockSurface(surface);
+ 
+         return Color(r,g,b,a);
+@@ -125,13 +126,13 @@ namespace gcn
+      */
+     inline void SDLputPixel(SDL_Surface* surface, int x, int y, const Color& color)
+     {
+-        int bpp = surface->format->BytesPerPixel;
++        int bpp = SdlCompatGetPixelFormatDetails(surface).BytesPerPixel;
+ 
+         SDL_LockSurface(surface);
+ 
+         Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+ 
+-        Uint32 pixel = SDL_MapRGB(surface->format, color.r, color.g, color.b);
++        Uint32 pixel = SdlCompatMapRGB(surface, color.r, color.g, color.b);
+ 
+         switch(bpp)
+         {
+@@ -189,13 +190,13 @@ namespace gcn
+      * @param dst the destination color.
+      * @param a alpha.
+      */
+-    inline unsigned short SDLAlpha16(unsigned short src, unsigned short dst, unsigned char a, const SDL_PixelFormat *f)
++    inline unsigned short SDLAlpha16(unsigned short src, unsigned short dst, unsigned char a, const SdlCompatPixelFormatDetails &f)
+     {
+-        unsigned int b = ((src & f->Rmask) * a + (dst & f->Rmask) * (255 - a)) >> 8;
+-        unsigned int g = ((src & f->Gmask) * a + (dst & f->Gmask) * (255 - a)) >> 8;
+-        unsigned int r = ((src & f->Bmask) * a + (dst & f->Bmask) * (255 - a)) >> 8;
++        unsigned int b = ((src & f.Rmask) * a + (dst & f.Rmask) * (255 - a)) >> 8;
++        unsigned int g = ((src & f.Gmask) * a + (dst & f.Gmask) * (255 - a)) >> 8;
++        unsigned int r = ((src & f.Bmask) * a + (dst & f.Bmask) * (255 - a)) >> 8;
+ 
+-        return (unsigned short)((b & f->Rmask) | (g & f->Gmask) | (r & f->Bmask));
++        return (unsigned short)((b & f.Rmask) | (g & f.Gmask) | (r & f.Bmask));
+     }
+ 
+     /*
+@@ -220,13 +221,15 @@ namespace gcn
+      */
+     inline void SDLputPixelAlpha(SDL_Surface* surface, int x, int y, const Color& color)
+     {
+-        int bpp = surface->format->BytesPerPixel;
++        const SdlCompatPixelFormatDetails details =
++            SdlCompatGetPixelFormatDetails(surface);
++        int bpp = details.BytesPerPixel;
+ 
+         SDL_LockSurface(surface);
+ 
+         Uint8 *p = (Uint8 *)surface->pixels + y * surface->pitch + x * bpp;
+ 
+-        Uint32 pixel = SDL_MapRGB(surface->format, color.r, color.g, color.b);
++        Uint32 pixel = SdlCompatMapRGB(surface, color.r, color.g, color.b);
+ 
+         switch(bpp)
+         {
+@@ -235,7 +238,7 @@ namespace gcn
+               break;
+ 
+           case 2:
+-              *(Uint16 *)p = SDLAlpha16(pixel, *(Uint32 *)p, color.a, surface->format);
++              *(Uint16 *)p = SDLAlpha16(pixel, *(Uint16 *)p, color.a, details);
+               break;
+ 
+           case 3:
+diff --git a/third-party/guisan/src/sdl/sdl2graphics.cpp b/third-party/guisan/src/sdl/sdl2graphics.cpp
+index 20b28b5..93d99b6 100644
+--- a/third-party/guisan/src/sdl/sdl2graphics.cpp
++++ b/third-party/guisan/src/sdl/sdl2graphics.cpp
+@@ -6,11 +6,11 @@
+  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
+  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
+  *
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
++ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
+  * Copyright (c) 2016, 2018, 2019 Gwilherm Baudic
+  *                                                         Js_./
+  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
+- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
++ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+  *                                                 _Qhm`] _f "'c  1!5m
+  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
+  *                                               .)j(] .d_/ '-(  P .   S
+@@ -65,6 +65,7 @@
+ #include "guisan/image.hpp"
+ #include "guisan/sdl/sdlimage.hpp"
+ #include "guisan/sdl/sdlpixel.hpp"
++#include "sdl_compat.h"
+ 
+ // For some reason an old version of MSVC did not like std::abs,
+ // so we added this macro.
+@@ -103,9 +104,9 @@ namespace gcn
+     {
+         mRenderTarget = renderer;
+         // An internal surface is still required to be able to handle surfaces and colorkeys
+-        mTarget = SDL_CreateRGBSurface(0, width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+-        SDL_FillRect(mTarget, nullptr, SDL_MapRGB(mTarget->format, 0xff, 0, 0xff));
+-        SDL_SetColorKey(mTarget, SDL_TRUE, SDL_MapRGB(mTarget->format, 0xff, 0, 0xff)); // magenta, Guisan default
++        mTarget = SdlCompatCreateSurface(width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
++        SDL_FillRect(mTarget, nullptr, SdlCompatMapRGB(mTarget, 0xff, 0, 0xff));
++        SDL_SetColorKey(mTarget, SDL_TRUE, SdlCompatMapRGB(mTarget, 0xff, 0, 0xff)); // magenta, Guisan default
+         SDL_SetSurfaceBlendMode(mTarget, SDL_BLENDMODE_NONE); // needed to cleanup temp data properly
+         mTexture = SDL_CreateTextureFromSurface(mRenderTarget, mTarget);
+         SDL_SetTextureBlendMode(mTexture, SDL_BLENDMODE_BLEND);
+@@ -188,14 +189,14 @@ namespace gcn
+         
+         if (srcImage->getTexture() == nullptr)
+         {
+-            SDL_FillRect(mTarget, &temp, SDL_MapRGBA(mTarget->format, 0xff, 0, 0xff, 0));
++            SDL_FillRect(mTarget, &temp, SdlCompatMapRGBA(mTarget, 0xff, 0, 0xff, 0));
+             SDL_BlitSurface(srcImage->getSurface(), &src, mTarget, &temp);
+             SDL_UpdateTexture(mTexture, &temp, mTarget->pixels, mTarget->pitch);
+-            SDL_RenderCopy(mRenderTarget, mTexture, &temp, &dst);
++            SdlCompatRenderCopy(mRenderTarget, mTexture, &temp, &dst);
+         } 
+         else 
+         {
+-            SDL_RenderCopy(mRenderTarget, srcImage->getTexture(), &src, &dst);
++            SdlCompatRenderCopy(mRenderTarget, srcImage->getTexture(), &src, &dst);
+         }    
+     }
+ 
+@@ -232,7 +233,7 @@ namespace gcn
+             
+             saveRenderColor();
+             SDL_SetRenderDrawColor(mRenderTarget, mColor.r, mColor.g, mColor.b, mColor.a);
+-            SDL_RenderFillRect(mRenderTarget, &rect);
++            SdlCompatRenderFillRect(mRenderTarget, &rect);
+             restoreRenderColor();
+         }
+         else
+@@ -245,7 +246,7 @@ namespace gcn
+ 
+             saveRenderColor();
+             SDL_SetRenderDrawColor(mRenderTarget, mColor.r, mColor.g, mColor.b, mColor.a);
+-            SDL_RenderFillRect(mRenderTarget, &rect);
++            SdlCompatRenderFillRect(mRenderTarget, &rect);
+             restoreRenderColor();
+         }
+     }
+@@ -436,10 +437,10 @@ namespace gcn
+         temp.w = source.w;
+         temp.h = source.h;
+ 
+-        SDL_FillRect(mTarget, &temp, SDL_MapRGBA(mTarget->format, 0xff, 0, 0xff, 0));
++        SDL_FillRect(mTarget, &temp, SdlCompatMapRGBA(mTarget, 0xff, 0, 0xff, 0));
+         SDL_BlitSurface(surface, &source, mTarget, &temp);
+         SDL_UpdateTexture(mTexture, &temp, mTarget->pixels, mTarget->pitch);
+-        SDL_RenderCopy(mRenderTarget, mTexture, &temp, &destination);
++        SdlCompatRenderCopy(mRenderTarget, mTexture, &temp, &destination);
+     }
+ 
+     void SDL2Graphics::drawSDLTexture(SDL_Texture * texture, SDL_Rect source, 
+@@ -456,7 +457,7 @@ namespace gcn
+         destination.w = source.w;
+         destination.h = source.h;
+ 
+-        SDL_RenderCopy(mRenderTarget, texture, &source, &destination);
++        SdlCompatRenderCopy(mRenderTarget, texture, &source, &destination);
+     }
+     
+     void SDL2Graphics::saveRenderColor()
+diff --git a/third-party/guisan/src/sdl/sdlgraphics.cpp b/third-party/guisan/src/sdl/sdlgraphics.cpp
+index cfae933..0efa4a1 100644
+--- a/third-party/guisan/src/sdl/sdlgraphics.cpp
++++ b/third-party/guisan/src/sdl/sdlgraphics.cpp
+@@ -6,11 +6,11 @@
+  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
+  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
+  *
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
++ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
+  *
+  *                                                         Js_./
+  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
+- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
++ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+  *                                                 _Qhm`] _f "'c  1!5m
+  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
+  *                                               .)j(] .d_/ '-(  P .   S
+@@ -65,6 +65,7 @@
+ #include "guisan/image.hpp"
+ #include "guisan/sdl/sdlimage.hpp"
+ #include "guisan/sdl/sdlpixel.hpp"
++#include "sdl_compat.h"
+ 
+ // For some reason an old version of MSVC did not like std::abs,
+ // so we added this macro.
+@@ -212,7 +213,7 @@ namespace gcn
+             rect.w = area.width;
+             rect.h = area.height;
+ 
+-            const Uint32 color = SDL_MapRGBA(mTarget->format, mColor.r, mColor.g, mColor.b, mColor.a);
++            const Uint32 color = SdlCompatMapRGBA(mTarget, mColor.r, mColor.g, mColor.b, mColor.a);
+             SDL_FillRect(mTarget, &rect, color);
+         }
+     }
+@@ -282,13 +283,13 @@ namespace gcn
+             x2 = top.x + top.width -1;
+         }
+ 
+-        const int bpp = mTarget->format->BytesPerPixel;
++        const int bpp = SdlCompatGetPixelFormatDetails(mTarget).BytesPerPixel;
+ 
+         SDL_LockSurface(mTarget);
+ 
+         Uint8 *p = (Uint8 *)mTarget->pixels + y * mTarget->pitch + x1 * bpp;
+ 
+-        Uint32 pixel = SDL_MapRGB(mTarget->format, mColor.r, mColor.g, mColor.b);
++        Uint32 pixel = SdlCompatMapRGB(mTarget, mColor.r, mColor.g, mColor.b);
+ 
+         switch(bpp) {
+           case 1:
+@@ -393,13 +394,13 @@ namespace gcn
+             y2 = top.y + top.height - 1;
+         }
+ 
+-        const int bpp = mTarget->format->BytesPerPixel;
++        const int bpp = SdlCompatGetPixelFormatDetails(mTarget).BytesPerPixel;
+ 
+         SDL_LockSurface(mTarget);
+ 
+         Uint8 *p = (Uint8 *)mTarget->pixels + y1 * mTarget->pitch + x * bpp;
+ 
+-        Uint32 pixel = SDL_MapRGB(mTarget->format, mColor.r, mColor.g, mColor.b);
++        Uint32 pixel = SdlCompatMapRGB(mTarget, mColor.r, mColor.g, mColor.b);
+ 
+         switch(bpp) {
+           case 1:
+diff --git a/third-party/guisan/src/sdl/sdlimage.cpp b/third-party/guisan/src/sdl/sdlimage.cpp
+index 23cc97b..3b3bf7b 100644
+--- a/third-party/guisan/src/sdl/sdlimage.cpp
++++ b/third-party/guisan/src/sdl/sdlimage.cpp
+@@ -6,11 +6,11 @@
+  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
+  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
+  *
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
++ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
+  *
+  *                                                         Js_./
+  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
+- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
++ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+  *                                                 _Qhm`] _f "'c  1!5m
+  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
+  *                                               .)j(] .d_/ '-(  P .   S
+@@ -62,6 +62,7 @@
+ 
+ #include "guisan/exception.hpp"
+ #include "guisan/sdl/sdlpixel.hpp"
++#include "sdl_compat.h"
+ 
+ namespace gcn
+ {
+@@ -149,7 +150,7 @@ namespace gcn
+ 
+         for (i = 0; i < mSurface->w * mSurface->h; ++i)
+         {
+-            if (((unsigned int*)mSurface->pixels)[i] == SDL_MapRGB(mSurface->format, 255, 0, 255))
++            if (((unsigned int*)mSurface->pixels)[i] == SdlCompatMapRGB(mSurface, 255, 0, 255))
+             {
+                 hasPink = true;
+                 break;
+@@ -160,8 +161,8 @@ namespace gcn
+         {
+             Uint8 r, g, b, a;
+ 
+-            SDL_GetRGBA(((unsigned int*)mSurface->pixels)[i], mSurface->format,
+-                        &r, &g, &b, &a);
++            SdlCompatGetRGBA(mSurface, ((unsigned int*)mSurface->pixels)[i],
++                             &r, &g, &b, &a);
+ 
+             if (a != 255)
+             {
+@@ -170,7 +171,7 @@ namespace gcn
+             }
+         }
+ 
+-        SDL_Surface* tmp = SDL_ConvertSurfaceFormat(mSurface, surfaceMask, 0);
++        SDL_Surface* tmp = SdlCompatConvertSurface(mSurface, surfaceMask);
+         SDL_FreeSurface(mSurface);
+         mSurface = nullptr;
+ 
+@@ -182,7 +183,7 @@ namespace gcn
+         if (hasPink)
+         {
+             SDL_SetColorKey(tmp, SDL_TRUE,
+-                            SDL_MapRGB(tmp->format,255,0,255));
++                            SdlCompatMapRGB(tmp,255,0,255));
+         }
+ 
+         if (surfaceMask == SDL_PIXELFORMAT_RGBA8888)
+diff --git a/third-party/guisan/src/sdl/sdlimageloader.cpp b/third-party/guisan/src/sdl/sdlimageloader.cpp
+index 21587b6..9b468f6 100644
+--- a/third-party/guisan/src/sdl/sdlimageloader.cpp
++++ b/third-party/guisan/src/sdl/sdlimageloader.cpp
+@@ -6,11 +6,11 @@
+  * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
+  * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
+  *
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
++ * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
+  *
+  *                                                         Js_./
+  * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
+- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
++ * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+  *                                                 _Qhm`] _f "'c  1!5m
+  * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
+  *                                               .)j(] .d_/ '-(  P .   S
+@@ -64,6 +64,7 @@
+ 
+ #include "guisan/exception.hpp"
+ #include "guisan/sdl/sdlimageloader.hpp"
++#include "sdl_compat.h"
+ 
+ namespace gcn
+ {
+@@ -128,19 +129,8 @@ namespace gcn
+         amask = 0xff000000;
+ #endif
+ 
+-        SDL_Surface *colorSurface = SDL_CreateRGBSurface(SDL_SWSURFACE,
+-                0, 0, 32,
+-                rmask, gmask, bmask, amask);
+-
+-        SDL_Surface *tmp = nullptr;
+-
+-        if (colorSurface != nullptr)
+-        {
+-            tmp = SDL_ConvertSurface(surface, colorSurface->format,
+-                                     SDL_SWSURFACE);
+-            SDL_FreeSurface(colorSurface);
+-        }
+-
+-        return tmp;
++        const Uint32 format =
++            SdlCompatPixelFormatForMasks(32, rmask, gmask, bmask, amask);
++        return SdlCompatConvertSurface(surface, format);
+     }
+ }
+diff --git a/third-party/guisan/src/sdl/sdlinput.cpp b/third-party/guisan/src/sdl/sdlinput.cpp
+index 2006900..d7e8b19 100644
+--- a/third-party/guisan/src/sdl/sdlinput.cpp
++++ b/third-party/guisan/src/sdl/sdlinput.cpp
+@@ -61,6 +61,7 @@
+ #include "guisan/sdl/sdlinput.hpp"
+ 
+ #include "guisan/exception.hpp"
++#include "sdl_compat.h"
+ 
+ namespace gcn
+ {
+@@ -162,12 +163,12 @@ namespace gcn
+           case SDL_KEYDOWN:
+               keyInput.setKey(convertSDLEventToGuichanKeyValue(event));
+               keyInput.setType(KeyInput::Pressed);
+-              keyInput.setShiftPressed(event.key.keysym.mod & KMOD_SHIFT);
+-              keyInput.setControlPressed(event.key.keysym.mod & KMOD_CTRL);
+-              keyInput.setAltPressed(event.key.keysym.mod & KMOD_ALT);
+-              keyInput.setMetaPressed(event.key.keysym.mod & KMOD_GUI);
+-              keyInput.setNumericPad(event.key.keysym.sym >= SDLK_KP_0
+-                                     && event.key.keysym.sym <= SDLK_KP_EQUALS);
++              keyInput.setShiftPressed(SdlCompatEventKeymod(event) & KMOD_SHIFT);
++              keyInput.setControlPressed(SdlCompatEventKeymod(event) & KMOD_CTRL);
++              keyInput.setAltPressed(SdlCompatEventKeymod(event) & KMOD_ALT);
++              keyInput.setMetaPressed(SdlCompatEventKeymod(event) & KMOD_GUI);
++              keyInput.setNumericPad(SdlCompatEventKeycode(event) >= SDLK_KP_0
++                                     && SdlCompatEventKeycode(event) <= SDLK_KP_EQUALS);
+ 
+               if (!keyInput.getKey().isPrintable() || keyInput.isAltPressed()
+                   || keyInput.isControlPressed())
+@@ -179,12 +180,12 @@ namespace gcn
+           case SDL_KEYUP:
+               keyInput.setKey(convertSDLEventToGuichanKeyValue(event));
+               keyInput.setType(KeyInput::Released);
+-              keyInput.setShiftPressed(event.key.keysym.mod & KMOD_SHIFT);
+-              keyInput.setControlPressed(event.key.keysym.mod & KMOD_CTRL);
+-              keyInput.setAltPressed(event.key.keysym.mod & KMOD_ALT);
+-              keyInput.setMetaPressed(event.key.keysym.mod & KMOD_GUI);
+-              keyInput.setNumericPad(event.key.keysym.sym >= SDLK_KP_0
+-                                     && event.key.keysym.sym <= SDLK_KP_EQUALS);
++              keyInput.setShiftPressed(SdlCompatEventKeymod(event) & KMOD_SHIFT);
++              keyInput.setControlPressed(SdlCompatEventKeymod(event) & KMOD_CTRL);
++              keyInput.setAltPressed(SdlCompatEventKeymod(event) & KMOD_ALT);
++              keyInput.setMetaPressed(SdlCompatEventKeymod(event) & KMOD_GUI);
++              keyInput.setNumericPad(SdlCompatEventKeycode(event) >= SDLK_KP_0
++                                     && SdlCompatEventKeycode(event) <= SDLK_KP_EQUALS);
+ 
+               mKeyInputQueue.push(keyInput);
+               break;
+@@ -225,12 +226,12 @@ namespace gcn
+                   mouseInput.setType(MouseInput::WheelMovedDown);
+               break;
+ 
+-          case SDL_WINDOWEVENT:
++          default:
+               /*
+                * This occurs when the mouse leaves the window and the Gui-chan
+                * application loses its mousefocus.
+                */
+-              if (event.window.event & SDL_WINDOWEVENT_LEAVE)
++              if (SdlCompatIsWindowEvent(event, SDL_WINDOWEVENT_LEAVE))
+               {
+                   mMouseInWindow = false;
+ 
+@@ -244,7 +245,7 @@ namespace gcn
+                   }
+               }
+ 
+-              if (event.window.event & SDL_WINDOWEVENT_ENTER)
++              if (SdlCompatIsWindowEvent(event, SDL_WINDOWEVENT_ENTER))
+               {
+                   mMouseInWindow = true;
+               }
+@@ -275,7 +276,7 @@ namespace gcn
+     {
+         int value = -1;
+ 
+-        switch (event.key.keysym.sym)
++        switch (SdlCompatEventKeycode(event))
+         {
+           case SDLK_TAB:
+               value = Key::Tab;
+@@ -414,13 +415,13 @@ namespace gcn
+               break;
+ 
+           default:
+-              value = event.key.keysym.sym;
++              value = SdlCompatEventKeycode(event);
+               break;
+         }
+ 
+-        if (!(event.key.keysym.mod & KMOD_NUM))
++        if (!(SdlCompatEventKeymod(event) & KMOD_NUM))
+         {
+-            switch (event.key.keysym.sym)
++            switch (SdlCompatEventKeycode(event))
+             {
+               case SDLK_KP_0:
+                   value = Key::Insert;
+@@ -458,7 +459,7 @@ namespace gcn
+         }
+         else
+         {
+-            switch (event.key.keysym.sym)
++            switch (SdlCompatEventKeycode(event))
+             {
+               case SDLK_KP_0:
+                   value = SDLK_0;
+diff --git a/third-party/lua-5.1.5/src/loslib.c b/third-party/lua-5.1.5/src/loslib.c
+index 80a1feb..a4e6bb1 100644
+--- a/third-party/lua-5.1.5/src/loslib.c
++++ b/third-party/lua-5.1.5/src/loslib.c
+@@ -11,6 +11,10 @@
+ #include <string.h>
+ #include <time.h>
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++
+ #define loslib_c
+ #define LUA_LIB
+ 
+@@ -36,8 +40,10 @@ static int os_pushresult (lua_State *L, int i, const char *filename) {
+ 
+ 
+ static int os_execute (lua_State *L) {
+-#if defined(__APPLE__) && defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+-  return luaL_error(L, "os.execute is unavailable on iOS");
++#if defined(__APPLE__) && \
++    (defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) || \
++     (defined(TARGET_OS_VISION) && TARGET_OS_VISION))
++  return luaL_error(L, "os.execute is unavailable on iOS and visionOS");
+ #else
+   lua_pushinteger(L, system(luaL_optstring(L, 1, NULL)));
+   return 1;

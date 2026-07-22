@@ -11,6 +11,10 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #define loslib_c
 #define LUA_LIB
 
@@ -36,8 +40,10 @@ static int os_pushresult (lua_State *L, int i, const char *filename) {
 
 
 static int os_execute (lua_State *L) {
-#if defined(__APPLE__) && defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
-  return luaL_error(L, "os.execute is unavailable on iOS");
+#if defined(__APPLE__) && \
+    (defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) || \
+     (defined(TARGET_OS_VISION) && TARGET_OS_VISION))
+  return luaL_error(L, "os.execute is unavailable on iOS and visionOS");
 #else
   lua_pushinteger(L, system(luaL_optstring(L, 1, NULL)));
   return 1;

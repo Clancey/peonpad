@@ -1,5 +1,8 @@
 #include "sdl_controller_adapter.h"
 
+#ifdef PEONPAD_USE_SDL3
+#include "PeonPadSDL3InputAdapter.h"
+#else
 #include <SDL_gamecontroller.h>
 #include <optional>
 
@@ -46,11 +49,15 @@ float NormalizeAxis(Sint16 value, bool trigger)
 }
 
 } // namespace
+#endif
 
 std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state,
                                                      const SDL_ControllerAxisEvent &event,
                                                      std::uint32_t timestamp)
 {
+#ifdef PEONPAD_USE_SDL3
+	return PeonPadAdaptSDL3GamepadAxisEvent(state, event, timestamp);
+#else
 	const std::optional<ControllerAxis> axis = AdaptAxis(event.axis);
 	if (!axis) {
 		return {};
@@ -58,15 +65,20 @@ std::vector<InputIntent> AdaptSdlControllerAxisEvent(ControllerInputState &state
 	const bool trigger =
 		*axis == ControllerAxis::LeftTrigger || *axis == ControllerAxis::RightTrigger;
 	return state.SetAxis(*axis, NormalizeAxis(event.value, trigger), timestamp);
+#endif
 }
 
 std::vector<InputIntent> AdaptSdlControllerButtonEvent(ControllerInputState &state,
                                                        const SDL_ControllerButtonEvent &event,
                                                        std::uint32_t timestamp)
 {
+#ifdef PEONPAD_USE_SDL3
+	return PeonPadAdaptSDL3GamepadButtonEvent(state, event, timestamp);
+#else
 	const std::optional<ControllerButton> button = AdaptButton(event.button);
 	if (!button) {
 		return {};
 	}
 	return state.SetButton(*button, event.state == SDL_PRESSED, timestamp);
+#endif
 }

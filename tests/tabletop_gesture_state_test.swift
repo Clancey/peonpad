@@ -448,6 +448,93 @@ func testCommandReducerIgnoresLeftHand() {
     expectEqual(reducer.update(right: leftEnded), .none, "the command reducer ignores non-right-hand samples")
 }
 
+// MARK: - Command reducer: two-hand suppression (defect regression)
+
+func testCommandReducerSuppressedIDDoesNotFireOnEnded() {
+    var reducer = TabletopCommandReducer()
+    reducer.suppressRightHandID(200)
+
+    let ended = TabletopGestureSample(
+        id: 200, chirality: .right, phase: .ended,
+        location3D: .zero, targetedEntityName: "unit.footman.0"
+    )
+    expectEqual(
+        reducer.update(right: ended),
+        .none,
+        "a suppressed right-hand event does not fire a command when it ends"
+    )
+}
+
+func testCommandReducerSuppressedIDClearedAfterTerminalPhase() {
+    var reducer = TabletopCommandReducer()
+    reducer.suppressRightHandID(201)
+
+    // The suppressed event ends: its ID must be removed from the set.
+    let ended = TabletopGestureSample(id: 201, chirality: .right, phase: .ended, location3D: .zero, targetedEntityName: "unit.A")
+    _ = reducer.update(right: ended)
+
+    // A fresh, independent event with the same numeric ID must fire normally.
+    let freshEnded = TabletopGestureSample(id: 201, chirality: .right, phase: .ended, location3D: .zero, targetedEntityName: "unit.A")
+    expectEqual(
+        reducer.update(right: freshEnded),
+        .tappedEntity(name: "unit.A", boardPoint: .zero),
+        "after the suppressed terminal event, a fresh event with the same ID is no longer suppressed"
+    )
+}
+
+func testCommandReducerSuppressedCancelledAlsoClearsID() {
+    var reducer = TabletopCommandReducer()
+    reducer.suppressRightHandID(202)
+
+    let cancelled = TabletopGestureSample(id: 202, chirality: .right, phase: .cancelled, location3D: .zero, targetedEntityName: "unit.B")
+    expectEqual(reducer.update(right: cancelled), .none, "a suppressed event does not fire on cancel")
+
+    // After cancel the ID should be gone; a fresh ended event fires normally.
+    let freshEnded = TabletopGestureSample(id: 202, chirality: .right, phase: .ended, location3D: .zero, targetedEntityName: "unit.B")
+    expectEqual(
+        reducer.update(right: freshEnded),
+        .tappedEntity(name: "unit.B", boardPoint: .zero),
+        "after the cancelled suppressed event, a fresh same-ID event fires normally"
+    )
+}
+
+func testCommandReducerTwoHandStaggeredReleaseDoesNotFireCommand() {
+    // Regression: staggered two-hand release must never dispatch an accidental
+    // right-hand gameplay command. Scenario:
+    //   1. Both hands active → suppress the right-hand event ID.
+    //   2. Left hand releases (left disappears from events).
+    //   3. Right hand ends → must NOT fire a command.
+    var reducer = TabletopCommandReducer()
+
+    let rightID = 203
+    reducer.suppressRightHandID(rightID)  // simulates both-hands-active frame
+
+    let rightEnded = TabletopGestureSample(
+        id: rightID, chirality: .right, phase: .ended,
+        location3D: TabletopPoint3D(x: 0.1, y: 0, z: 0.1),
+        targetedEntityName: "unit.sentry.north"
+    )
+    expectEqual(
+        reducer.update(right: rightEnded),
+        .none,
+        "staggered two-hand release does not fire an accidental gameplay command"
+    )
+}
+
+func testCommandReducerNonSuppressedRightHandFiresNormally() {
+    var reducer = TabletopCommandReducer()
+
+    let ended = TabletopGestureSample(
+        id: 204, chirality: .right, phase: .ended,
+        location3D: .zero, targetedEntityName: "unit.sentry.north"
+    )
+    expectEqual(
+        reducer.update(right: ended),
+        .tappedEntity(name: "unit.sentry.north", boardPoint: .zero),
+        "an unsuppressed right-hand event fires a gameplay command normally"
+    )
+}
+
 @main
 struct TabletopGestureStateTestRunner {
     static func main() {
@@ -472,6 +559,11 @@ struct TabletopGestureStateTestRunner {
         testCommandReducerTappedEmptyBoard()
         testCommandReducerCancelledNeverFires()
         testCommandReducerIgnoresLeftHand()
+        testCommandReducerSuppressedIDDoesNotFireOnEnded()
+        testCommandReducerSuppressedIDClearedAfterTerminalPhase()
+        testCommandReducerSuppressedCancelledAlsoClearsID()
+        testCommandReducerTwoHandStaggeredReleaseDoesNotFireCommand()
+        testCommandReducerNonSuppressedRightHandFiresNormally()
 
         if failureCount > 0 {
             print("FAILED: \(failureCount)/\(checkCount) checks failed")

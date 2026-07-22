@@ -14,13 +14,25 @@ import SwiftUI
 struct PeonPadTabletopApp: App {
     private static let immersiveSpaceID = "org.peonpad.visionos.tabletop.board-space"
 
+    // The launcher window uses an explicit scene id so the immersive space can
+    // dismiss it programmatically once it opens successfully.
+    private static let launcherWindowID = "org.peonpad.visionos.tabletop.launcher"
+
+    // Production session: LiveTabletopSession with no transport bound yet.
+    // The board view surfaces a diagnostic overlay when the stream is empty.
+    // TODO: replace nil with the engine-side C-ABI transport once bound.
+    @State private var gameplaySession = LiveTabletopSession(transport: nil)
+
     var body: some SwiftUI.Scene {
-        WindowGroup {
-            TabletopLauncherView(immersiveSpaceID: Self.immersiveSpaceID)
+        WindowGroup(id: Self.launcherWindowID) {
+            TabletopLauncherView(
+                immersiveSpaceID: Self.immersiveSpaceID,
+                launcherWindowID: Self.launcherWindowID
+            )
         }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
-            TabletopBoardView()
+            TabletopBoardView(session: gameplaySession)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
@@ -33,8 +45,10 @@ struct PeonPadTabletopApp: App {
 /// palette instead.
 struct TabletopLauncherView: View {
     let immersiveSpaceID: String
+    let launcherWindowID: String
 
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var isOpening = false
     @State private var openFailed = false
 
@@ -73,7 +87,7 @@ struct TabletopLauncherView: View {
             isOpening = false
             switch result {
             case .opened:
-                break
+                dismissWindow(id: launcherWindowID)
             case .error:
                 print("[Tabletop] immersive space open returned .error")
                 openFailed = true

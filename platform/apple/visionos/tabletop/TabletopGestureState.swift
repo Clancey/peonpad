@@ -279,10 +279,29 @@ public enum TabletopRightHandEvent: Equatable {
 
 /// Deterministically turns right-hand samples into edge-triggered command
 /// events, firing exactly once per completed (`.ended`) gesture.
+///
+/// Two-hand suppression: right-hand event IDs that participate in a two-hand
+/// board-manipulation gesture must never also dispatch a gameplay command when
+/// their gesture ends (even if the left hand releases first). Call
+/// `suppressRightHandID(_:)` whenever both hands are simultaneously active;
+/// the reducer silently drops the `.ended`/`.cancelled` phase of any
+/// suppressed ID and clears it from the suppression set so the same ID can
+/// fire normally in a subsequent, independent gesture.
 public struct TabletopCommandReducer: Equatable {
     private var lastFiredID: Int?
+    /// Event IDs of right-hand gestures that overlapped a left-hand gesture
+    /// and therefore must not dispatch a gameplay command on termination.
+    private var suppressedIDs: Set<Int> = []
 
     public init() {}
+
+    /// Marks a right-hand event ID as having participated in two-hand board
+    /// manipulation. Its next `.ended` or `.cancelled` event will be silently
+    /// dropped and the ID removed from the suppression set, so the same
+    /// numeric ID can safely fire in a later, unrelated gesture.
+    public mutating func suppressRightHandID(_ id: Int) {
+        suppressedIDs.insert(id)
+    }
 
     @discardableResult
     public mutating func update(right: TabletopGestureSample?) -> TabletopRightHandEvent {
@@ -293,8 +312,17 @@ public struct TabletopCommandReducer: Equatable {
         case .active:
             return .none
         case .cancelled:
+            // Clean up suppression state on any terminal phase.
+            suppressedIDs.remove(right.id)
             return .none
         case .ended:
+            // Remove from suppression set on the terminal event regardless of
+            // whether this event was suppressed, so a future gesture with the
+            // same numeric ID is never accidentally silenced.
+            let wasSuppressed = suppressedIDs.remove(right.id) != nil
+            if wasSuppressed {
+                return .none
+            }
             guard lastFiredID != right.id else {
                 return .none
             }

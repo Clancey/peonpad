@@ -108,6 +108,7 @@ SDK_PATH=$(xcrun --sdk "$TARGET" --show-sdk-path) || {
 TABLETOP_SRC_DIR="$ROOT_DIR/platform/apple/visionos/tabletop"
 SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopGestureState.swift"
+  "$TABLETOP_SRC_DIR/TabletopGameplayState.swift"
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
   "$TABLETOP_SRC_DIR/TabletopPaletteView.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"

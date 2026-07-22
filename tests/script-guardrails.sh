@@ -42,6 +42,11 @@ fi
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
+IOS_DATA_STAGE_SCRIPT="$ROOT_DIR/scripts/stage-ios-wc2-test-data.sh"
+rg -Fq -- "--exclude '*.[Mm][Pp][Qq]'" "$IOS_DATA_STAGE_SCRIPT"
+rg -Fq -- \
+  "--exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]'" \
+  "$IOS_DATA_STAGE_SCRIPT"
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
   print -u2 "prepare script accepted multiple input modes"

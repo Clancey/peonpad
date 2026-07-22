@@ -44,6 +44,17 @@ if(PEONPAD_ENABLE_SDL3)
   include(cmake/PeonPadSDL3.cmake)
 endif()
 
+# ── Tabletop bridge library (pure infrastructure, no Stratagus globals) ─────
+# This target compiles without PEONPAD_TABLETOP so it carries no engine
+# dependencies and can be linked into the standalone test binary.
+add_library(peonpad_tabletop_bridge STATIC
+  platform/bridge/PeonPadTabletopBridge.cpp
+)
+target_include_directories(peonpad_tabletop_bridge PUBLIC
+  platform/bridge
+)
+target_compile_features(peonpad_tabletop_bridge PUBLIC cxx_std_17)
+
 if(BUILD_TESTING AND
     NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
     NOT PEONPAD_VISIONOS)
@@ -89,6 +100,16 @@ if(BUILD_TESTING AND
     NAME peonpad_script_guardrails
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/script-guardrails.sh"
   )
+
+  add_executable(peonpad_tabletop_bridge_test
+    tests/tabletop_bridge_test.cpp
+  )
+  target_compile_features(peonpad_tabletop_bridge_test PRIVATE cxx_std_17)
+  target_link_libraries(peonpad_tabletop_bridge_test PRIVATE
+    peonpad_tabletop_bridge
+  )
+  add_test(NAME peonpad_tabletop_bridge
+    COMMAND peonpad_tabletop_bridge_test)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -197,6 +218,25 @@ if(PEONPAD_ENABLE_ENGINE)
     if(TARGET peonpad_stratagus_host_tolua)
       add_dependencies(stratagus_lib peonpad_stratagus_host_tolua)
     endif()
+
+    # Tabletop bridge variant compiled with engine include paths and
+    # PEONPAD_TABLETOP=1, so the simulation-thread capture functions can
+    # reach Stratagus globals (UnitManager, Map, Selected, GameCycle…).
+    # This object is linked into stratagus_lib so the extern "C" symbols
+    # declared in mainloop.cpp's #ifdef PEONPAD_TABLETOP block resolve at
+    # link time.
+    add_library(peonpad_tabletop_bridge_engine STATIC
+      "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/PeonPadTabletopBridge.cpp"
+    )
+    target_compile_definitions(peonpad_tabletop_bridge_engine PRIVATE
+      PEONPAD_TABLETOP=1
+    )
+    target_include_directories(peonpad_tabletop_bridge_engine PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge"
+      "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus/src/include"
+    )
+    target_compile_features(peonpad_tabletop_bridge_engine PRIVATE cxx_std_17)
+    target_link_libraries(stratagus_lib PRIVATE peonpad_tabletop_bridge_engine)
   else()
     ExternalProject_Add(peonpad_stratagus
       SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus"

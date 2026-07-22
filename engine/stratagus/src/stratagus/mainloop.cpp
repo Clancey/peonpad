@@ -58,6 +58,15 @@
 # include <coz.h>
 #endif
 
+#ifdef PEONPAD_TABLETOP
+// Engine-side visionOS tabletop bridge hook.
+// The full implementation lives in platform/bridge/PeonPadTabletopBridge.cpp
+// and is only compiled into the SDL3 peonpad_tabletop_bridge target.
+// The header is found via the PEONPAD_APPLE_PLATFORM_DIR include path.
+extern "C" void peonpad_tabletop_drain_commands(void);
+extern "C" void peonpad_tabletop_publish_snapshot(void);
+#endif
+
 void DrawGuichanWidgets();
 
 
@@ -373,7 +382,13 @@ static void SingleGameLoop()
 {
 	while (GameRunning) {
 		DisplayLoop();
+#ifdef PEONPAD_TABLETOP
+		peonpad_tabletop_drain_commands();
+#endif
 		GameLogicLoop();
+#ifdef PEONPAD_TABLETOP
+		peonpad_tabletop_publish_snapshot();
+#endif
 	}
 }
 

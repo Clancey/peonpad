@@ -386,6 +386,7 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
+  0012-tabletop-bridge-gamehook.patch \
   0011-visionos-indirect-controls.patch \
   0010-direct-sdl3-engine.patch \
   0009-game-controller-input.patch \
@@ -420,6 +421,8 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
 EXPECTED_STRATAGUS_TREE_SHA=$(awk -F ' *= *' '
@@ -450,6 +453,38 @@ if [[ "$MODE" == maintainer ]]; then
     print -u2 "reference material changed during script guardrail tests"
     exit 1
   }
+fi
+
+# Tabletop bridge: verify the ABI header and engine hook exist and are
+# structurally consistent (no proprietary assets; pure C interface).
+BRIDGE_HEADER="$ROOT_DIR/platform/bridge/PeonPadTabletopBridge.h"
+BRIDGE_IMPL="$ROOT_DIR/platform/bridge/PeonPadTabletopBridge.cpp"
+BRIDGE_PATCH="$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
+[[ -f "$BRIDGE_HEADER" ]] || { print -u2 "bridge header missing"; exit 1; }
+[[ -f "$BRIDGE_IMPL" ]]   || { print -u2 "bridge impl missing"; exit 1; }
+[[ -f "$BRIDGE_PATCH" ]]  || { print -u2 "bridge patch missing"; exit 1; }
+rg -q 'PEONPAD_TABLETOP_ABI_VERSION' "$BRIDGE_HEADER"
+rg -q 'PeonPadSnapshot' "$BRIDGE_HEADER"
+rg -q 'PeonPadTerrainCell' "$BRIDGE_HEADER"
+rg -q 'PeonPadUnitRecord' "$BRIDGE_HEADER"
+rg -q 'PeonPadCommand' "$BRIDGE_HEADER"
+rg -q 'peonpad_tabletop_publish_synthetic' "$BRIDGE_HEADER"
+rg -q 'extern "C"' "$BRIDGE_HEADER"
+# The bridge header must not include any C++ or SDL or Stratagus headers.
+if rg -q '#include <SDL|#include "SDL|#include "stratagus|#include "unit' \
+    "$BRIDGE_HEADER"; then
+  print -u2 "bridge public header contains engine or SDL includes"
+  exit 1
+fi
+# The game loop hook must guard with PEONPAD_TABLETOP.
+rg -q 'PEONPAD_TABLETOP' "$BRIDGE_PATCH"
+rg -q 'peonpad_tabletop_publish_snapshot' "$BRIDGE_PATCH"
+rg -q 'peonpad_tabletop_drain_commands' "$BRIDGE_PATCH"
+# Verify no proprietary assets were committed alongside the bridge.
+if find "$ROOT_DIR/platform/bridge" -name '*.wav' -o -name '*.mpq' \
+    -o -name '*.pud' | grep -q .; then
+  print -u2 "proprietary assets found in platform/bridge"
+  exit 1
 fi
 
 print "script guardrails passed"

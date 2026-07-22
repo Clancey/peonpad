@@ -1,0 +1,437 @@
+// PeonPadTabletopBridge.cpp
+//
+// Engine-side implementation of the visionOS live tabletop bridge.
+//
+// When compiled with PEONPAD_TABLETOP defined (the engine build) this file
+// reads from Stratagus global state (UnitManager, Map, ThisPlayer, FogOfWar,
+// GameCycle, Selected, …) and exposes it through the C ABI declared in
+// PeonPadTabletopBridge.h.
+//
+// Without PEONPAD_TABLETOP (the standalone test build) the engine-specific
+// peonpad_tabletop_publish_snapshot() and peonpad_tabletop_drain_commands()
+// are no-ops.  All infrastructure (snapshot lifecycle, command queue,
+// peonpad_tabletop_publish_synthetic) is always compiled and testable.
+
+#include "PeonPadTabletopBridge.h"
+
+#include <atomic>
+#include <cassert>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <vector>
+
+// ── Engine state includes (simulation thread only) ───────────────────────
+
+#ifdef PEONPAD_TABLETOP
+#include "commands.h"
+#include "fow.h"
+#include "map.h"
+#include "player.h"
+#include "stratagus.h"
+#include "tile.h"
+#include "unit.h"
+#include "unit_manager.h"
+#include "vec2i.h"
+#endif
+
+// ── Internal snapshot struct ──────────────────────────────────────────────
+
+struct PeonPadSnapshot {
+    std::atomic<int>                refcount{1};
+    uint64_t                        generation  = 0;
+    uint32_t                        map_width   = 0;
+    uint32_t                        map_height  = 0;
+    std::vector<PeonPadTerrainCell> terrain;    // map_width * map_height cells
+    std::vector<PeonPadUnitRecord>  units;
+};
+
+// ── Bridge state (owned by simulation thread) ─────────────────────────────
+
+namespace {
+
+struct TabletopBridgeState {
+    // cmd_mutex protects initialized, pending, and lifecycle transitions.
+    // Holding cmd_mutex when reading/writing initialized prevents the
+    // check-then-enqueue race between post_command() and cleanup().
+    std::mutex                  cmd_mutex;
+    bool                        initialized = false;  // guarded by cmd_mutex
+
+    // Snapshot double-buffer: snap_mutex is independent of cmd_mutex.
+    std::mutex                  snap_mutex;
+    PeonPadSnapshot            *latest      = nullptr;  // guarded by snap_mutex
+
+    std::vector<PeonPadCommand> pending;                // guarded by cmd_mutex
+};
+
+TabletopBridgeState g_bridge;
+
+// Release a snapshot (NULL-safe).
+void SnapRelease(PeonPadSnapshot *s) noexcept
+{
+    if (!s) return;
+    if (s->refcount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        delete s;
+    }
+}
+
+// Publish a fully-constructed snapshot as the new latest.
+// Takes ownership of |snap| (caller must not use it afterwards).
+// Drops the previous latest snapshot's bridge reference.
+void PublishSnap(PeonPadSnapshot *snap) noexcept
+{
+    PeonPadSnapshot *old = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.snap_mutex);
+        old = g_bridge.latest;
+        g_bridge.latest = snap;
+    }
+    SnapRelease(old);
+}
+
+// Validate a command posted by the UI thread.
+bool CommandIsValid(const PeonPadCommand *cmd) noexcept
+{
+    if (!cmd) return false;
+    if (cmd->abi_ver != PEONPAD_TABLETOP_ABI_VERSION) return false;
+    switch (static_cast<PeonPadCommandType>(cmd->type)) {
+        case PEONPAD_CMD_SELECT:
+        case PEONPAD_CMD_DESELECT:
+        case PEONPAD_CMD_STOP:
+            return true;
+        case PEONPAD_CMD_MOVE:
+            // Reject tiles beyond the hard map limit.
+            return (cmd->tile_x >= 0 && cmd->tile_y >= 0
+                    && static_cast<uint32_t>(cmd->tile_x) < PEONPAD_TABLETOP_MAX_MAP_DIM
+                    && static_cast<uint32_t>(cmd->tile_y) < PEONPAD_TABLETOP_MAX_MAP_DIM);
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
+// ── Public C API: snapshot accessors ─────────────────────────────────────
+
+extern "C" {
+
+uint32_t peonpad_snapshot_abi_version(const PeonPadSnapshot *s)
+{
+    if (!s) return 0;
+    return PEONPAD_TABLETOP_ABI_VERSION;
+}
+
+uint64_t peonpad_snapshot_generation(const PeonPadSnapshot *s)
+{
+    return s ? s->generation : 0u;
+}
+
+uint32_t peonpad_snapshot_map_width(const PeonPadSnapshot *s)
+{
+    return s ? s->map_width : 0u;
+}
+
+uint32_t peonpad_snapshot_map_height(const PeonPadSnapshot *s)
+{
+    return s ? s->map_height : 0u;
+}
+
+uint32_t peonpad_snapshot_terrain_count(const PeonPadSnapshot *s)
+{
+    return s ? static_cast<uint32_t>(s->terrain.size()) : 0u;
+}
+
+const PeonPadTerrainCell *peonpad_snapshot_terrain(const PeonPadSnapshot *s)
+{
+    if (!s || s->terrain.empty()) return nullptr;
+    return s->terrain.data();
+}
+
+uint32_t peonpad_snapshot_unit_count(const PeonPadSnapshot *s)
+{
+    return s ? static_cast<uint32_t>(s->units.size()) : 0u;
+}
+
+const PeonPadUnitRecord *peonpad_snapshot_units(const PeonPadSnapshot *s)
+{
+    if (!s || s->units.empty()) return nullptr;
+    return s->units.data();
+}
+
+int peonpad_snapshot_retain(PeonPadSnapshot *s)
+{
+    if (!s) return -1;
+    s->refcount.fetch_add(1, std::memory_order_relaxed);
+    return 0;
+}
+
+void peonpad_snapshot_release(PeonPadSnapshot *s)
+{
+    SnapRelease(s);
+}
+
+// ── Bridge lifecycle ───────────────────────────────────────────────────────
+
+int peonpad_tabletop_init(void)
+{
+    std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+    if (g_bridge.initialized) return -1;
+    g_bridge.initialized = true;
+    return 0;
+}
+
+void peonpad_tabletop_cleanup(void)
+{
+    // Clear the command queue and mark uninitialized atomically under cmd_mutex
+    // so no in-flight post_command can enqueue after cleanup returns.
+    std::vector<PeonPadCommand> old_cmds;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        old_cmds.swap(g_bridge.pending);
+        g_bridge.initialized = false;
+    }
+    // Drop the latest snapshot.
+    PeonPadSnapshot *old = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.snap_mutex);
+        old = g_bridge.latest;
+        g_bridge.latest = nullptr;
+    }
+    SnapRelease(old);
+}
+
+// ── Command intake ─────────────────────────────────────────────────────────
+
+int peonpad_tabletop_post_command(const PeonPadCommand *cmd)
+{
+    if (!CommandIsValid(cmd)) return -2;
+    std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+    // Check initialized under the same lock that cleanup() holds when it
+    // clears initialized — prevents enqueueing after cleanup returns.
+    if (!g_bridge.initialized) return -1;
+    if (g_bridge.pending.size() >= PEONPAD_TABLETOP_MAX_COMMANDS) return -3;
+    g_bridge.pending.push_back(*cmd);
+    return 0;
+}
+
+PeonPadSnapshot *peonpad_tabletop_latest_snapshot(void)
+{
+    // No initialized check needed: when the bridge is uninitialized the
+    // snapshot pointer is null (set to null in cleanup), so callers safely
+    // receive nullptr.  Snap_mutex provides the required ordering.
+    PeonPadSnapshot *s = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.snap_mutex);
+        s = g_bridge.latest;
+        if (s) s->refcount.fetch_add(1, std::memory_order_relaxed);
+    }
+    return s;
+}
+
+// ── Synthetic publish (test support) ────────────────────────────────────
+
+int peonpad_tabletop_publish_synthetic(
+    uint64_t                    generation,
+    uint32_t                    map_width,
+    uint32_t                    map_height,
+    const PeonPadTerrainCell   *terrain,
+    uint32_t                    terrain_count,
+    const PeonPadUnitRecord    *units,
+    uint32_t                    unit_count)
+{
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        if (!g_bridge.initialized) return -1;
+    }
+
+    // Validate counts.
+    const uint64_t expected_cells =
+        static_cast<uint64_t>(map_width) * static_cast<uint64_t>(map_height);
+    if (expected_cells > PEONPAD_TABLETOP_MAX_MAP_DIM * PEONPAD_TABLETOP_MAX_MAP_DIM) return -2;
+    if (terrain_count != static_cast<uint32_t>(expected_cells)) return -2;
+    if (unit_count > PEONPAD_TABLETOP_MAX_UNITS) return -2;
+    if (terrain_count > 0 && !terrain) return -2;
+    if (unit_count > 0 && !units) return -2;
+
+    auto *snap = new (std::nothrow) PeonPadSnapshot;
+    if (!snap) return -1;
+
+    snap->generation = generation;
+    snap->map_width  = map_width;
+    snap->map_height = map_height;
+
+    if (terrain_count > 0) {
+        snap->terrain.assign(terrain, terrain + terrain_count);
+    }
+    if (unit_count > 0) {
+        snap->units.assign(units, units + unit_count);
+    }
+
+    PublishSnap(snap);
+    return 0;
+}
+
+// ── Engine capture (simulation thread) ───────────────────────────────────
+
+#ifdef PEONPAD_TABLETOP
+
+// Drain queued commands and apply them to the running game state.
+// Called from the simulation thread before GameLogicLoop().
+void peonpad_tabletop_drain_commands(void)
+{
+    if (!g_bridge.initialized) return;
+    if (!ThisPlayer) return;
+
+    std::vector<PeonPadCommand> batch;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        batch.swap(g_bridge.pending);
+    }
+    if (batch.empty()) return;
+
+    for (const PeonPadCommand &cmd : batch) {
+        if (cmd.type == PEONPAD_CMD_SELECT || cmd.type == PEONPAD_CMD_DESELECT) {
+            CUnit *target = nullptr;
+            const unsigned slot_count = UnitManager->GetUsedSlotCount();
+            for (unsigned i = 0; i < slot_count; ++i) {
+                CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
+                if (u.IsAliveOnMap()
+                    && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id) {
+                    target = &u;
+                    break;
+                }
+            }
+            if (target) {
+                if (cmd.type == PEONPAD_CMD_SELECT) {
+                    SelectUnit(*target);
+                    SelectedUnitChanged();
+                } else {
+                    UnSelectUnit(*target);
+                    SelectedUnitChanged();
+                }
+            }
+        } else if (cmd.type == PEONPAD_CMD_MOVE) {
+            // Issue move orders for every currently-selected unit.
+            const Vec2i dest{static_cast<int>(cmd.tile_x),
+                             static_cast<int>(cmd.tile_y)};
+            // Reject coordinates outside the loaded map — static
+            // PEONPAD_TABLETOP_MAX_MAP_DIM only catches the absolute
+            // maximum; real maps are much smaller.
+            if (!Map.Info.IsPointOnMap(dest)) continue;
+            for (CUnit *u : Selected) {
+                if (u && u->IsAliveOnMap()
+                    && u->Player == ThisPlayer) {
+                    SendCommandMove(*u, dest, EFlushMode::On);
+                }
+            }
+        } else if (cmd.type == PEONPAD_CMD_STOP) {
+            const unsigned slot_count = UnitManager->GetUsedSlotCount();
+            for (unsigned i = 0; i < slot_count; ++i) {
+                CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
+                if (u.IsAliveOnMap()
+                    && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id
+                    && u.Player == ThisPlayer) {
+                    SendCommandStopUnit(u);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Capture the current game state and publish it as the new latest snapshot.
+// Called from the simulation thread after GameLogicLoop().
+void peonpad_tabletop_publish_snapshot(void)
+{
+    if (!g_bridge.initialized) return;
+    if (!UnitManager) return;
+    if (Map.Info.MapWidth <= 0 || Map.Info.MapHeight <= 0) return;
+
+    const uint32_t mw = static_cast<uint32_t>(Map.Info.MapWidth);
+    const uint32_t mh = static_cast<uint32_t>(Map.Info.MapHeight);
+    if (mw > PEONPAD_TABLETOP_MAX_MAP_DIM || mh > PEONPAD_TABLETOP_MAX_MAP_DIM) return;
+
+    auto *snap = new (std::nothrow) PeonPadSnapshot;
+    if (!snap) return;
+
+    snap->generation = static_cast<uint64_t>(GameCycle);
+    snap->map_width  = mw;
+    snap->map_height = mh;
+
+    // ── Terrain + fog ───────────────────────────────────────────────────
+    const uint32_t cell_count = mw * mh;
+    snap->terrain.resize(cell_count);
+
+    for (uint32_t y = 0; y < mh; ++y) {
+        for (uint32_t x = 0; x < mw; ++x) {
+            const CMapField *field = Map.Field(static_cast<int>(x),
+                                               static_cast<int>(y));
+            PeonPadTerrainCell &out = snap->terrain[y * mw + x];
+            out.tile_index = static_cast<uint16_t>(field->getTileIndex());
+            out._pad       = 0;
+
+            if (Map.NoFogOfWar || !ThisPlayer) {
+                out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
+            } else {
+                const CMapFieldPlayerInfo &info = field->playerInfo;
+                if (info.IsTeamVisible(*ThisPlayer)) {
+                    out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
+                } else if (info.IsExplored(*ThisPlayer)) {
+                    out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_EXPLORED);
+                } else {
+                    out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_UNSEEN);
+                }
+            }
+        }
+    }
+
+    // ── Units ────────────────────────────────────────────────────────────
+    // Include: all own/allied units (always known to the local player);
+    // enemy/neutral units only if currently visible (fog of war).
+    // Dead own units are included (alive==0) so the UI can animate removal.
+    // Dead enemy units outside visibility are omitted.
+    const std::vector<CUnit *> &engine_units = UnitManager->GetUnits();
+    snap->units.reserve(std::min(engine_units.size(),
+                                 static_cast<size_t>(PEONPAD_TABLETOP_MAX_UNITS)));
+
+    for (CUnit *u : engine_units) {
+        if (!u) continue;
+        if (snap->units.size() >= PEONPAD_TABLETOP_MAX_UNITS) break;
+
+        const bool is_own = (ThisPlayer && u->Player == ThisPlayer);
+        if (!is_own) {
+            // Fog-of-war filter: skip enemy/neutral units that are not
+            // currently visible to the local player.  Dead enemy units
+            // that weren't visible are also excluded.
+            if (!u->IsAliveOnMap()) continue;
+            if (!Map.NoFogOfWar && ThisPlayer
+                && !u->IsVisibleOnMap(*ThisPlayer)) continue;
+        }
+
+        PeonPadUnitRecord rec{};
+        rec.id       = static_cast<uint32_t>(UnitNumber(*u));
+        rec.owner    = u->Player ? static_cast<uint8_t>(u->Player->Index) : 0u;
+        rec.alive    = u->IsAliveOnMap() ? 1u : 0u;
+        rec.selected = u->Selected ? 1u : 0u;
+        rec.facing   = u->Direction;
+        rec.hp       = u->Variable[HP_INDEX].Value;
+        rec.max_hp   = u->Variable[HP_INDEX].Max;
+        rec.tile_x   = static_cast<int16_t>(u->tilePos.x);
+        rec.tile_y   = static_cast<int16_t>(u->tilePos.y);
+        rec.world_x  = static_cast<float>(u->IX);
+        rec.world_y  = static_cast<float>(u->IY);
+
+        snap->units.push_back(rec);
+    }
+
+    PublishSnap(snap);
+}
+
+#else // PEONPAD_TABLETOP not defined ─ stub out the engine-only functions
+
+void peonpad_tabletop_publish_snapshot(void) {}
+void peonpad_tabletop_drain_commands(void) {}
+
+#endif // PEONPAD_TABLETOP
+
+} // extern "C"

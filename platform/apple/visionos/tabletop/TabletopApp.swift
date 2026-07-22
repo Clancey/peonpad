@@ -18,6 +18,11 @@ struct PeonPadTabletopApp: App {
     // dismiss it programmatically once it opens successfully.
     private static let launcherWindowID = "org.peonpad.visionos.tabletop.launcher"
 
+    // Production session: LiveTabletopSession with no transport bound yet.
+    // The board view surfaces a diagnostic overlay when the stream is empty.
+    // TODO: replace nil with the engine-side C-ABI transport once bound.
+    @State private var gameplaySession = LiveTabletopSession(transport: nil)
+
     var body: some SwiftUI.Scene {
         WindowGroup(id: Self.launcherWindowID) {
             TabletopLauncherView(
@@ -27,7 +32,7 @@ struct PeonPadTabletopApp: App {
         }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
-            TabletopBoardView()
+            TabletopBoardView(session: gameplaySession)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }

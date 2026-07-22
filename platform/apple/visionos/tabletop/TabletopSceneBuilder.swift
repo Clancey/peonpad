@@ -90,9 +90,21 @@ final class TabletopLiveUnit {
     private(set) var isSelected = false
     private var currentHue: UIColor
 
+    /// The unit's current board-space facing (radians, 0 = board north,
+    /// increasing clockwise). Starts from `spec.facingRadians` and may be
+    /// updated incrementally from engine snapshots without recreating the
+    /// entity. Read by `applyDirectionalFrame` every SceneEvents.Update tick.
+    var currentFacingRadians: Double
+
+    /// The unit's current owner/team tint. Updated when an engine snapshot
+    /// reports an ownership change; drives both body and quad materials.
+    private var currentOwnerTint: UIColor
+
     init(spec: TabletopUnitSpec) {
         self.spec = spec
         self.currentHue = spec.tint
+        self.currentFacingRadians = spec.facingRadians
+        self.currentOwnerTint = spec.tint
 
         let root = Entity()
         root.name = "unit.\(spec.id)"
@@ -144,6 +156,24 @@ final class TabletopLiveUnit {
         applyBodyMaterial()
     }
 
+    /// Shows or hides this unit to reflect its alive/dead state. A dead unit
+    /// (hp == 0) is disabled so it neither renders nor receives input.
+    func setAlive(_ alive: Bool) {
+        root.isEnabled = alive
+    }
+
+    /// Updates the owner/team tint (e.g. after a capture or engine-driven
+    /// ownership change) and refreshes all materials immediately.
+    func updateOwnerTint(_ tint: UIColor) {
+        currentOwnerTint = tint
+        // Reset the directional hue to the new base tint so the next
+        // applyDirectionalFrame uses the correct colour for canonical-
+        // direction shading.
+        currentHue = tint
+        applyQuadMaterial()
+        applyBodyMaterial()
+    }
+
     /// Applies the current directional hue and the current selection alpha
     /// to the quad in one material assignment, so neither `setSelected` nor
     /// `applyDirectionalFrame` ever clobbers the other's contribution.
@@ -152,19 +182,21 @@ final class TabletopLiveUnit {
         quad.model?.materials = [translucentUnlitMaterial(currentHue.withAlphaComponent(CGFloat(alpha)))]
     }
 
-    /// Applies the current selection alpha to the cylindrical body. The
-    /// body has no directional hue of its own (it always uses the unit's
-    /// base tint), so this only needs the selection state.
+    /// Applies the current selection alpha to the cylindrical body using the
+    /// current owner tint. The body has no directional hue of its own, so
+    /// this only needs selection state and the current owner colour.
     private func applyBodyMaterial() {
         let alpha = TabletopUnitAppearance.bodyAlpha(selected: isSelected)
-        body.model?.materials = [translucentUnlitMaterial(spec.tint.withAlphaComponent(CGFloat(alpha)))]
+        body.model?.materials = [translucentUnlitMaterial(currentOwnerTint.withAlphaComponent(CGFloat(alpha)))]
     }
 
     /// Applies this frame's directional-frame resolution: rotates the quad
     /// to face the viewer around the board's vertical normal, mirrors it
     /// horizontally when the resolved canonical facing requires it, and
     /// tints it to make the selected canonical direction legible even
-    /// without real sprite art.
+    /// without real sprite art. Uses `currentFacingRadians` rather than
+    /// the immutable `spec.facingRadians` so engine-driven facing updates
+    /// take effect on the next frame without recreating the entity.
     func applyDirectionalFrame(viewerBoardPosition: TabletopPoint3D, boardRoot: Entity) {
         let unitBoardPosition = TabletopPoint3D(
             x: Double(root.position(relativeTo: boardRoot).x),
@@ -173,7 +205,7 @@ final class TabletopLiveUnit {
         )
         let viewerAzimuth = TabletopViewerAzimuth.aroundBoardCenter(viewerBoardPosition: viewerBoardPosition)
         let resolution = TabletopDirectionalFrame.resolve(
-            unitFacingRadians: spec.facingRadians,
+            unitFacingRadians: currentFacingRadians,
             viewerAzimuthRadians: viewerAzimuth
         )
 
@@ -240,7 +272,7 @@ extension TabletopUnitSpec {
 
 // MARK: - Terrain color mapping
 
-private extension TabletopTerrainKind {
+extension TabletopTerrainKind {
     /// A representative `UIColor` for each terrain kind, used to tint board
     /// tiles when the board is built from a `TabletopGameplaySnapshot`.
     var tileColor: UIColor {
@@ -265,14 +297,25 @@ enum TabletopBoardBuilder {
         }
     }
 
-    /// Builds the board surface from a gameplay snapshot: one tile quad per
-    /// map cell (terrain-coloured) plus a translucent fog-of-war plane just
-    /// above it. Both are parented to `boardRoot` so any board
-    /// translate/rotate/scale carries them together.
-    static func addSurface(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) {
+    /// Builds the board surface from a gameplay snapshot: one terrain quad per
+    /// map cell plus a per-tile fog-of-war quad above it (hidden when the tile
+    /// is revealed, shown as a dark overlay when not). A very faint global
+    /// haze plane sits above everything for aesthetic continuity.
+    ///
+    /// Returns a dictionary from tile key to `ModelEntity`. Keys use two
+    /// namespaces so both categories can live in one dictionary:
+    ///   `tileEntityKey(tileX:tileZ:)`  — terrain quads ("tileX.tileZ")
+    ///   `fogEntityKey(tileX:tileZ:)`   — per-tile fog quads ("fog.tileX.tileZ")
+    @discardableResult
+    static func addSurface(
+        to boardRoot: Entity,
+        snapshot: TabletopGameplaySnapshot
+    ) -> [String: ModelEntity] {
+        var tileEntities: [String: ModelEntity] = [:]
         let half = TabletopBoardMetrics.tileCountPerSide / 2
         for tileZ in -half...half {
             for tileX in -half...half {
+                // Terrain quad.
                 let color = snapshot.terrain(atTileX: tileX, tileZ: tileZ).tileColor
                 let tile = ModelEntity(
                     mesh: .generatePlane(
@@ -284,29 +327,85 @@ enum TabletopBoardBuilder {
                 tile.name = "board.tile.\(tileX).\(tileZ)"
                 tile.position = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
                 boardRoot.addChild(tile)
+                tileEntities[tileEntityKey(tileX: tileX, tileZ: tileZ)] = tile
+
+                // Per-tile fog overlay quad, slightly above the terrain.
+                // Enabled (dark) when unrevealed; disabled (invisible) when revealed.
+                let fogQuad = ModelEntity(
+                    mesh: .generatePlane(
+                        width: TabletopBoardMetrics.tileSize * 0.96,
+                        depth: TabletopBoardMetrics.tileSize * 0.96
+                    ),
+                    materials: [translucentUnlitMaterial(UIColor(white: 0.06, alpha: 0.88))]
+                )
+                fogQuad.name = "board.fog.\(tileX).\(tileZ)"
+                var fogPos = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
+                fogPos.y = 0.005  // just above the terrain quad
+                fogQuad.position = fogPos
+                fogQuad.isEnabled = !snapshot.fog(atTileX: tileX, tileZ: tileZ)
+                boardRoot.addChild(fogQuad)
+                tileEntities[fogEntityKey(tileX: tileX, tileZ: tileZ)] = fogQuad
             }
         }
 
-        let fog = ModelEntity(
+        // Subtle global haze plane for aesthetic continuity (very low alpha).
+        let haze = ModelEntity(
             mesh: .generatePlane(
                 width: TabletopBoardMetrics.boardExtent * 1.02,
                 depth: TabletopBoardMetrics.boardExtent * 1.02
             ),
-            materials: [translucentUnlitMaterial(UIColor(white: 0.85, alpha: 0.12))]
+            materials: [translucentUnlitMaterial(UIColor(white: 0.85, alpha: 0.06))]
         )
-        fog.name = "board.fog"
-        fog.position = [0, 0.01, 0]
-        boardRoot.addChild(fog)
+        haze.name = "board.haze"
+        haze.position = [0, 0.01, 0]
+        boardRoot.addChild(haze)
+        return tileEntities
     }
 
-    /// Builds live RealityKit units from the snapshot's unit roster and
-    /// parents them all to `boardRoot`.
-    static func addUnits(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) -> [TabletopLiveUnit] {
-        snapshot.units.map { gameplayUnit in
-            let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
-            let liveUnit = TabletopLiveUnit(spec: spec)
-            boardRoot.addChild(liveUnit.root)
-            return liveUnit
+    /// Builds a single live RealityKit unit from a gameplay snapshot unit and
+    /// parents it to `boardRoot`. Returns the live unit for tracking.
+    static func addUnit(
+        _ gameplayUnit: TabletopGameplayUnit,
+        to boardRoot: Entity,
+        snapshot: TabletopGameplaySnapshot
+    ) -> TabletopLiveUnit {
+        let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
+        let liveUnit = TabletopLiveUnit(spec: spec)
+        liveUnit.setAlive(gameplayUnit.isAlive)
+        liveUnit.setSelected(snapshot.selection.selectedUnitID == gameplayUnit.id)
+        boardRoot.addChild(liveUnit.root)
+        return liveUnit
+    }
+
+    /// Updates terrain tile materials in `tileEntities` for tiles listed in
+    /// `changedTiles`. Tiles not present in the dictionary are silently skipped.
+    static func updateTerrainTiles(
+        _ changedTiles: [TabletopTerrainTile],
+        in tileEntities: [String: ModelEntity]
+    ) {
+        for tile in changedTiles {
+            guard let entity = tileEntities[tileEntityKey(tileX: tile.tileX, tileZ: tile.tileZ)] else { continue }
+            entity.model?.materials = [translucentUnlitMaterial(tile.kind.tileColor)]
         }
     }
+
+    /// Reveals or conceals per-tile fog entities for the tiles listed in
+    /// `changedTiles`. The fog quad is disabled (invisible) when a tile is
+    /// revealed and enabled (dark overlay) when it becomes hidden again.
+    static func updateFogTiles(
+        _ changedTiles: [TabletopFogTile],
+        in tileEntities: [String: ModelEntity]
+    ) {
+        for tile in changedTiles {
+            guard let entity = tileEntities[fogEntityKey(tileX: tile.tileX, tileZ: tile.tileZ)] else { continue }
+            entity.isEnabled = !tile.isRevealed
+        }
+    }
+
+    /// Stable dictionary key for a terrain `ModelEntity`.
+    static func tileEntityKey(tileX: Int, tileZ: Int) -> String { "\(tileX).\(tileZ)" }
+
+    /// Stable dictionary key for a per-tile fog overlay `ModelEntity`.
+    static func fogEntityKey(tileX: Int, tileZ: Int) -> String { "fog.\(tileX).\(tileZ)" }
 }
+

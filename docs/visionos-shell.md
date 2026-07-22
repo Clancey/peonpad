@@ -5,6 +5,10 @@ visionOS 2.0 or newer. It launches only the public SDL3 foundation payload. It
 does **not** enable Stratagus, load a map, include game data, or provide playable
 gameplay.
 
+This SDL3 smoke target remains unchanged and independently accepted. The
+separate SwiftUI/RealityKit tabletop foundation is documented in
+[`visionos-tabletop.md`](visionos-tabletop.md).
+
 ## Reproducible configurations
 
 The device and Simulator slices are deliberately separate:
@@ -63,9 +67,10 @@ metadata, no simulator slice, no signing artifacts, and a failing strict
 signature verification. It does not sign, install, or launch on hardware.
 
 `all` additionally performs a fresh Release SDL3 host configuration and complete
-default build, runs every configured CTest (currently 7/7), the direct
+default build, runs every configured CTest (currently 8/8), the direct
 `-DNDEBUG` viewport/input checks, public preflight, and Designed-for-iPad
-compatibility preflight. Before any configure or build, acceptance rejects
+compatibility preflight. The host suite includes the separate tabletop
+gesture reducer test. Before any configure or build, acceptance rejects
 staged, unstaged, or untracked source changes. Ignored generated build paths
 remain allowed, and explicit evidence paths must remain outside the repository.
 Any failed build, test, lifecycle check, log scan, cleanup, or result write
@@ -229,4 +234,5 @@ inside its application container.
 
 RealityKit, SwiftUI ornaments, immersive spaces, ARKit or custom hand skeletons,
 true 3D rendering, controller-remapping UX, and the guarded full SDL3 gameplay
-engine are explicitly out of scope for this shell.
+engine remain explicitly out of scope for this shell. RealityKit and SwiftUI are
+used only by the isolated `peonpad_tabletop` executable.

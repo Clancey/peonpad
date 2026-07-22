@@ -38,8 +38,10 @@ fi
 "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-sdl3-foundation.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-visionos-shell.sh" --help >/dev/null
+"$ROOT_DIR/scripts/build-visionos-tabletop.sh" --help >/dev/null
 "$ROOT_DIR/scripts/accept-visionos.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-tabletop-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
 rg -q 'PEONPAD_IOS_CONTROL_DOCK=ON' \
@@ -71,6 +73,11 @@ fi
 if "$ROOT_DIR/scripts/build-visionos-shell.sh" \
     unsupported >/dev/null 2>&1; then
   print -u2 "visionOS shell build accepted an unsupported target"
+  exit 1
+fi
+if "$ROOT_DIR/scripts/build-visionos-tabletop.sh" \
+    xros >/dev/null 2>&1; then
+  print -u2 "tabletop device build bypassed its explicit signing mode"
   exit 1
 fi
 
@@ -139,6 +146,30 @@ rg -q 'PEONPAD_VISIONOS_DEVICE_INSTALL' \
   "$ROOT_DIR/scripts/install-visionos-device.sh"
 rg -q 'native visionOS configuration \(3\.28\+\)' \
   "$ROOT_DIR/scripts/preflight.sh"
+
+TABLETOP_SOURCE="$ROOT_DIR/platform/apple/visionos/tabletop/TabletopBoardView.swift"
+TABLETOP_STATE="$ROOT_DIR/platform/apple/visionos/tabletop/TabletopGestureState.swift"
+TABLETOP_PLIST="$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in"
+rg -q 'windowStyle\(\.volumetric\)' \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/PeonPadTabletopApp.swift"
+rg -q 'event\.kind == \.directPinch' "$TABLETOP_SOURCE"
+rg -q 'event\.chirality' "$TABLETOP_SOURCE"
+rg -q 'Attachment\(id: "tabletop-palette"\)' "$TABLETOP_SOURCE"
+rg -q 'Button\("Recenter"' "$TABLETOP_SOURCE"
+rg -q 'case commandSelect' "$TABLETOP_STATE"
+rg -q 'case boardPoseChanged' "$TABLETOP_STATE"
+if rg -q 'import ARKit|HandTrackingProvider|HandSkeleton' \
+    "$ROOT_DIR/platform/apple/visionos/tabletop"; then
+  print -u2 "tabletop foundation bypassed public spatial events with ARKit hands"
+  exit 1
+fi
+plutil -lint "$TABLETOP_PLIST" >/dev/null
+[[ "$(plutil -extract UIApplicationPreferredDefaultSceneSessionRole raw \
+  "$TABLETOP_PLIST")" == UIWindowSceneSessionRoleVolumetricApplication ]]
+[[ "$(plutil -extract \
+  UIApplicationSceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleVolumetricApplication.0.UISceneClassName \
+  raw "$TABLETOP_PLIST")" == UIWindowScene ]]
+"$ROOT_DIR/scripts/test-tabletop-gestures.sh" >/dev/null
 
 CMAKE_GUARD_ROOT="$TEST_RUNTIME/cmake-version"
 CMAKE_GUARD_BIN="$CMAKE_GUARD_ROOT/bin"

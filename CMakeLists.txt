@@ -30,6 +30,10 @@ option(PEONPAD_ENABLE_SDL3
   "Build the direct SDL3 foundation lane (SDL2 remains the default)"
   OFF
 )
+option(PEONPAD_ENABLE_TABLETOP
+  "Build the separate native SwiftUI/RealityKit visionOS tabletop app"
+  OFF
+)
 
 set(PEONPAD_VISIONOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
@@ -42,6 +46,18 @@ target_compile_features(peonpad_toolchain_probe PUBLIC cxx_std_17)
 include(CTest)
 if(PEONPAD_ENABLE_SDL3)
   include(cmake/PeonPadSDL3.cmake)
+endif()
+if(PEONPAD_ENABLE_TABLETOP)
+  if(NOT PEONPAD_VISIONOS)
+    message(FATAL_ERROR
+      "PEONPAD_ENABLE_TABLETOP is available only for native visionOS builds.")
+  endif()
+  if(NOT CMAKE_GENERATOR STREQUAL "Xcode")
+    message(FATAL_ERROR
+      "PEONPAD_ENABLE_TABLETOP requires the Xcode generator for Swift support.")
+  endif()
+  enable_language(Swift)
+  include(cmake/PeonPadTabletop.cmake)
 endif()
 
 if(BUILD_TESTING AND
@@ -88,6 +104,10 @@ if(BUILD_TESTING AND
   add_test(
     NAME peonpad_script_guardrails
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/script-guardrails.sh"
+  )
+  add_test(
+    NAME peonpad_tabletop_gesture_state
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-tabletop-gestures.sh"
   )
 endif()
 

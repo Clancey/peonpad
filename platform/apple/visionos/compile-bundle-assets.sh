@@ -15,6 +15,12 @@ SOURCE_ICON=$5
 WORK_DIR=$6
 GENERATED_CATALOG="$WORK_DIR/PeonPadAssets.xcassets"
 
+# Xcode leaves CMake's EFFECTIVE_PLATFORM_NAME generator expression escaped in
+# post-build phases. Its own product environment is authoritative there.
+if [ -n "${TARGET_BUILD_DIR:-}" ] && [ -n "${WRAPPER_NAME:-}" ]; then
+  APP="$TARGET_BUILD_DIR/$WRAPPER_NAME"
+fi
+
 case "$SDK" in
   xrsimulator|*XRSimulator*) PLATFORM=xrsimulator ;;
   xros|*XROS*) PLATFORM=xros ;;

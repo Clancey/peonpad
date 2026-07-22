@@ -10,6 +10,13 @@ delegate, while the Objective-C++ slice verifies the public UIKit/Metal window
 properties and requests freeform resizing. It is a non-game smoke shell; the
 guarded full SDL3 Stratagus engine remains disabled.
 
+The separate `visionos/tabletop/` Swift target owns a volumetric SwiftUI scene
+and procedural RealityKit board. It deliberately shares neither an entry point
+nor scene delegate with SDL3. Public `SpatialEventGesture` direct-pinch events
+are reduced by chirality into right-hand command, left-hand board-pose, and
+two-hand scale intents. Its status/recenter palette is a RealityView attachment
+parented to the board rather than a head-locked window.
+
 The iPad application Info.plist template lives in `ios/Info.plist.in`. Build
 the unsigned physical-device bundle with `scripts/build-ios-app.sh`; the
 generated bundle remains under `build/` and is never a reference input.

@@ -138,7 +138,6 @@ cmake -E make_directory "$APP"
 BRIDGE_OBJ="$BUILD_DIR/PeonPadTabletopBridge.o"
 xcrun -sdk "$TARGET" clang++ \
   -target "$SWIFT_TARGET_TRIPLE" \
-  -sdk "$SDK_PATH" \
   -std=c++17 \
   -O \
   -I "$BRIDGE_SRC_DIR" \

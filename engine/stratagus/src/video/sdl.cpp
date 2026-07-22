@@ -491,7 +491,19 @@ void InitVideoSdl()
 			TheWindow, !Parameters::Instance.benchmark);
 	}
 	if (!TheRenderer) {
-		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
+		// The accelerated backend is unavailable — e.g. the SDL "offscreen"
+		// video driver used for headless/embedded runs such as the visionOS
+		// tabletop host, which has no GPU renderer. Fall back to the software
+		// renderer (no vsync) rather than aborting so the simulation loop can
+		// still run and publish snapshots.
+		fprintf(stderr,
+		        "InitVideoSdl: accelerated renderer unavailable (%s); "
+		        "falling back to software\n", SDL_GetError());
+		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
+		TheRenderer = SdlCompatCreateRenderer(TheWindow, false);
+	}
+	if (!TheRenderer) {
+		ErrorPrint("Couldn't create renderer: %s\n", SDL_GetError());
 		exit(1);
 	}
 	const char *rendererName = SdlCompatRendererName(TheRenderer);

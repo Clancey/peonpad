@@ -20,6 +20,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <thread>
 
@@ -49,20 +50,23 @@ static void Run(const char *name, bool (*test_fn)())
 
 static bool test_abi_version_constant()
 {
-    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 1u);
+    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 2u);
     return true;
 }
 
 static bool test_struct_sizes()
 {
-    // PeonPadTerrainCell: tile_index(2) + fog_state(1) + _pad(1) = 4 bytes
+    // PeonPadTerrainCell: tile_index(2) + fog_state(1) + terrain_class(1) = 4
     EXPECT(sizeof(PeonPadTerrainCell) == 4u);
 
-    // PeonPadUnitRecord field layout (explicit accounting):
+    // PeonPadUnitRecord field layout (ABI v2, explicit accounting):
     //   id(4) + owner(1) + alive(1) + selected(1) + facing(1)
     //   + hp(4) + max_hp(4) + tile_x(2) + tile_y(2)
-    //   + world_x(4) + world_y(4)  = 28 bytes (no unexpected padding)
-    EXPECT(sizeof(PeonPadUnitRecord) == 28u);
+    //   + world_x(4) + world_y(4) + type_id(2) + _pad2(2) = 32 bytes
+    EXPECT(sizeof(PeonPadUnitRecord) == 32u);
+
+    // PeonPadUnitType: type_id(2) + _pad(2) + ident(32) = 36 bytes
+    EXPECT(sizeof(PeonPadUnitType) == 36u);
 
     // PeonPadCommand:
     //   type(4) + abi_ver(4) + unit_id(4) + tile_x(4) + tile_y(4)
@@ -74,8 +78,9 @@ static bool test_struct_sizes()
 
 static bool test_struct_field_offsets()
 {
-    EXPECT(offsetof(PeonPadTerrainCell, tile_index) == 0u);
-    EXPECT(offsetof(PeonPadTerrainCell, fog_state)  == 2u);
+    EXPECT(offsetof(PeonPadTerrainCell, tile_index)    == 0u);
+    EXPECT(offsetof(PeonPadTerrainCell, fog_state)     == 2u);
+    EXPECT(offsetof(PeonPadTerrainCell, terrain_class) == 3u);
 
     EXPECT(offsetof(PeonPadUnitRecord, id)       ==  0u);
     EXPECT(offsetof(PeonPadUnitRecord, owner)    ==  4u);
@@ -88,6 +93,10 @@ static bool test_struct_field_offsets()
     EXPECT(offsetof(PeonPadUnitRecord, tile_y)   == 18u);
     EXPECT(offsetof(PeonPadUnitRecord, world_x)  == 20u);
     EXPECT(offsetof(PeonPadUnitRecord, world_y)  == 24u);
+    EXPECT(offsetof(PeonPadUnitRecord, type_id)  == 28u);
+
+    EXPECT(offsetof(PeonPadUnitType, type_id) == 0u);
+    EXPECT(offsetof(PeonPadUnitType, ident)   == 4u);
 
     EXPECT(offsetof(PeonPadCommand, type)     ==  0u);
     EXPECT(offsetof(PeonPadCommand, abi_ver)  ==  4u);
@@ -103,6 +112,15 @@ static bool test_enum_values()
     EXPECT(static_cast<int>(PEONPAD_FOG_UNSEEN)   == 0);
     EXPECT(static_cast<int>(PEONPAD_FOG_EXPLORED) == 1);
     EXPECT(static_cast<int>(PEONPAD_FOG_VISIBLE)  == 2);
+
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_UNKNOWN) == 0);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_GRASS)   == 1);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_DIRT)    == 2);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_WATER)   == 3);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_ROCK)    == 4);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_FOREST)  == 5);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_COAST)   == 6);
+    EXPECT(static_cast<int>(PEONPAD_TERRAIN_WALL)    == 7);
 
     EXPECT(static_cast<int>(PEONPAD_CMD_NONE)         == 0);
     EXPECT(static_cast<int>(PEONPAD_CMD_SELECT)       == 1);
@@ -231,6 +249,79 @@ static bool test_synthetic_publish_with_terrain_and_units()
     EXPECT(ur[1].id       == 202u);
     EXPECT(ur[1].alive    == 0u);
     EXPECT(ur[1].facing   == 128u);
+
+    peonpad_snapshot_release(s);
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
+static bool test_synthetic_v2_unit_type_registry()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    PeonPadTerrainCell cell{5, static_cast<uint8_t>(PEONPAD_FOG_VISIBLE),
+                            static_cast<uint8_t>(PEONPAD_TERRAIN_FOREST)};
+
+    PeonPadUnitRecord units[2] = {};
+    units[0].id = 1; units[0].alive = 1; units[0].type_id = 7;
+    units[1].id = 2; units[1].alive = 1; units[1].type_id = 42;
+
+    PeonPadUnitType types[2] = {};
+    types[0].type_id = 7;
+    std::snprintf(types[0].ident, PEONPAD_TABLETOP_MAX_IDENT, "unit-footman");
+    types[1].type_id = 42;
+    std::snprintf(types[1].ident, PEONPAD_TABLETOP_MAX_IDENT, "unit-grunt");
+
+    EXPECT(peonpad_tabletop_publish_synthetic_v2(
+        3, 1, 1, &cell, 1, units, 2, types, 2) == 0);
+
+    PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+    EXPECT(s != nullptr);
+
+    // Terrain class round-trips.
+    const PeonPadTerrainCell *tc = peonpad_snapshot_terrain(s);
+    EXPECT(tc != nullptr);
+    EXPECT(tc[0].terrain_class == static_cast<uint8_t>(PEONPAD_TERRAIN_FOREST));
+
+    // Unit type_id round-trips.
+    const PeonPadUnitRecord *ur = peonpad_snapshot_units(s);
+    EXPECT(ur != nullptr);
+    EXPECT(ur[0].type_id == 7u);
+    EXPECT(ur[1].type_id == 42u);
+
+    // Type registry is present and correct.
+    EXPECT(peonpad_snapshot_unit_type_count(s) == 2u);
+    const PeonPadUnitType *ut = peonpad_snapshot_unit_types(s);
+    EXPECT(ut != nullptr);
+    EXPECT(ut[0].type_id == 7u);
+    EXPECT(std::strcmp(ut[0].ident, "unit-footman") == 0);
+    EXPECT(ut[1].type_id == 42u);
+    EXPECT(std::strcmp(ut[1].ident, "unit-grunt") == 0);
+
+    peonpad_snapshot_release(s);
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
+static bool test_synthetic_v2_rejects_unterminated_ident()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    PeonPadUnitType type{};
+    type.type_id = 1;
+    // Fill the entire ident buffer with non-NUL bytes (not terminated).
+    std::memset(type.ident, 'A', PEONPAD_TABLETOP_MAX_IDENT);
+
+    EXPECT(peonpad_tabletop_publish_synthetic_v2(
+        1, 0, 0, nullptr, 0, nullptr, 0, &type, 1) == -2);
+
+    // v1 backward-compatibility: the legacy synthetic publish attaches an
+    // empty type registry.
+    EXPECT(peonpad_tabletop_publish_synthetic(1, 0, 0, nullptr, 0, nullptr, 0) == 0);
+    PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+    EXPECT(s != nullptr);
+    EXPECT(peonpad_snapshot_unit_type_count(s) == 0u);
+    EXPECT(peonpad_snapshot_unit_types(s) == nullptr);
 
     peonpad_snapshot_release(s);
     peonpad_tabletop_cleanup();
@@ -532,6 +623,8 @@ int main()
     // Snapshot
     Run("synthetic_publish_min",    test_synthetic_publish_minimal);
     Run("synthetic_publish_full",   test_synthetic_publish_with_terrain_and_units);
+    Run("synthetic_v2_type_registry", test_synthetic_v2_unit_type_registry);
+    Run("synthetic_v2_bad_ident",   test_synthetic_v2_rejects_unterminated_ident);
     Run("retain_release",           test_retain_release);
     Run("null_safety",              test_null_safety);
     Run("data_is_immutable_copy",   test_snapshot_data_is_immutable_copy);

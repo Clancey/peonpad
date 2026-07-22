@@ -30,6 +30,10 @@ option(PEONPAD_ENABLE_SDL3
   "Build the direct SDL3 lane (SDL2 remains the default)"
   OFF
 )
+option(PEONPAD_ENABLE_TABLETOP
+  "Compile the visionOS live-tabletop bridge hooks into the engine (defines PEONPAD_TABLETOP for stratagus_lib so the sim thread publishes snapshots)"
+  OFF
+)
 
 set(PEONPAD_VISIONOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
@@ -219,24 +223,31 @@ if(PEONPAD_ENABLE_ENGINE)
       add_dependencies(stratagus_lib peonpad_stratagus_host_tolua)
     endif()
 
-    # Tabletop bridge variant compiled with engine include paths and
-    # PEONPAD_TABLETOP=1, so the simulation-thread capture functions can
-    # reach Stratagus globals (UnitManager, Map, Selected, GameCycle…).
-    # This object is linked into stratagus_lib so the extern "C" symbols
-    # declared in mainloop.cpp's #ifdef PEONPAD_TABLETOP block resolve at
-    # link time.
-    add_library(peonpad_tabletop_bridge_engine STATIC
-      "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/PeonPadTabletopBridge.cpp"
-    )
-    target_compile_definitions(peonpad_tabletop_bridge_engine PRIVATE
-      PEONPAD_TABLETOP=1
-    )
-    target_include_directories(peonpad_tabletop_bridge_engine PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge"
-      "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus/src/include"
-    )
-    target_compile_features(peonpad_tabletop_bridge_engine PRIVATE cxx_std_17)
-    target_link_libraries(stratagus_lib PRIVATE peonpad_tabletop_bridge_engine)
+    # Engine-side tabletop bridge.
+    #
+    # The capture functions (peonpad_tabletop_publish_snapshot /
+    # _drain_commands) read Stratagus globals (UnitManager, Map, Selected,
+    # GameCycle…) and therefore need the engine's full include tree (SDL3, Lua,
+    # third-party). Rather than re-derive that tree on a standalone target, the
+    # bridge source is compiled directly into stratagus_lib so it inherits the
+    # engine's directory-scoped include paths, and the extern "C" symbols the
+    # mainloop.cpp #ifdef PEONPAD_TABLETOP block references resolve at link time.
+    #
+    # This is gated on PEONPAD_ENABLE_TABLETOP so other lanes (macOS baseline,
+    # Designed-for-iPad) are unaffected: with the option OFF the engine neither
+    # compiles the hooks nor the bridge capture.
+    if(PEONPAD_ENABLE_TABLETOP)
+      target_sources(stratagus_lib PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/PeonPadTabletopBridge.cpp"
+      )
+      target_include_directories(stratagus_lib PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge"
+      )
+      # PEONPAD_TABLETOP on the whole library makes mainloop.cpp emit the
+      # drain/publish hook calls and compiles the bridge's engine-capture path
+      # (rather than the standalone stubs).
+      target_compile_definitions(stratagus_lib PRIVATE PEONPAD_TABLETOP=1)
+    endif()
   else()
     ExternalProject_Add(peonpad_stratagus
       SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/engine/stratagus"

@@ -42,7 +42,19 @@ extern "C" {
 
 /// Increment any time a struct layout or semantic changes.
 /// Consumers check this before trusting field offsets.
-#define PEONPAD_TABLETOP_ABI_VERSION 1u
+///
+/// ABI v2 (backward-compatible extension of v1):
+///   • PeonPadTerrainCell: the former reserved `_pad` byte is now
+///     `terrain_class` (a PeonPadTerrainClass).  Field offsets and struct
+///     size are unchanged, so a v1 consumer reading terrain sees a zero
+///     (PEONPAD_TERRAIN_UNKNOWN) where it previously saw the reserved pad.
+///   • PeonPadUnitRecord: appends `type_id` (+ reserved padding) after the
+///     v1 fields.  Existing field offsets are unchanged; the struct grows.
+///   • New snapshot unit-type registry maps `type_id` → engine ident string
+///     so the UI can resolve real unit art without guessing from unit IDs.
+/// Consumers must check peonpad_snapshot_abi_version() before trusting the
+/// v2 fields; a v1-only consumer can still read every v1 field safely.
+#define PEONPAD_TABLETOP_ABI_VERSION 2u
 
 // ── Hard limits ─────────────────────────────────────────────────────────────
 
@@ -52,6 +64,10 @@ extern "C" {
 #define PEONPAD_TABLETOP_MAX_UNITS    4096u
 /// Maximum pending commands in the intake queue.
 #define PEONPAD_TABLETOP_MAX_COMMANDS 256u
+/// Maximum length (including the terminating NUL) of a unit-type identifier.
+#define PEONPAD_TABLETOP_MAX_IDENT    32u
+/// Maximum number of distinct unit types in a snapshot's type registry.
+#define PEONPAD_TABLETOP_MAX_UNIT_TYPES 512u
 
 // ── Fog-of-war cell state ─────────────────────────────────────────────────
 
@@ -64,12 +80,26 @@ typedef enum PeonPadFogState {
 
 // ── Per-tile terrain record ───────────────────────────────────────────────
 
+/// Transport-neutral terrain classification derived from the engine tileset.
+/// The UI maps this to its own terrain-kind palette; it never needs to know
+/// the tileset-specific graphic index.  (ABI v2.)
+typedef enum PeonPadTerrainClass {
+    PEONPAD_TERRAIN_UNKNOWN = 0, ///< Unclassified / not yet resolved.
+    PEONPAD_TERRAIN_GRASS   = 1, ///< Open, walkable land.
+    PEONPAD_TERRAIN_DIRT    = 2, ///< Bare ground / mud / road.
+    PEONPAD_TERRAIN_WATER   = 3, ///< Deep water (impassable to land units).
+    PEONPAD_TERRAIN_ROCK    = 4, ///< Rock / mountain (blocks movement & sight).
+    PEONPAD_TERRAIN_FOREST  = 5, ///< Trees / harvestable wood.
+    PEONPAD_TERRAIN_COAST   = 6, ///< Shallow water / shoreline transition.
+    PEONPAD_TERRAIN_WALL    = 7, ///< Built or rubble wall.
+} PeonPadTerrainClass;
+
 /// One terrain cell in a snapshot, corresponding to a single map tile.
 /// Cells are stored in row-major order: cell[y * map_width + x].
 typedef struct PeonPadTerrainCell {
-    uint16_t tile_index; ///< Tileset graphic index (transport-layer opaque).
-    uint8_t  fog_state;  ///< PeonPadFogState from the local player's POV.
-    uint8_t  _pad;       ///< Must be zero; reserved for future flags.
+    uint16_t tile_index;    ///< Tileset graphic index (transport-layer opaque).
+    uint8_t  fog_state;     ///< PeonPadFogState from the local player's POV.
+    uint8_t  terrain_class; ///< PeonPadTerrainClass (ABI v2; was reserved _pad).
 } PeonPadTerrainCell;
 
 // ── Per-unit record ───────────────────────────────────────────────────────
@@ -95,7 +125,26 @@ typedef struct PeonPadUnitRecord {
     int16_t  tile_y;    ///< Map tile row.
     float    world_x;   ///< Sub-tile pixel x offset (for smooth animation).
     float    world_y;   ///< Sub-tile pixel y offset (for smooth animation).
+    uint16_t type_id;   ///< Engine unit-type index (ABI v2). Key into the
+                        ///< snapshot's unit-type registry; stable within a
+                        ///< session.  0 is a valid type id; consumers that
+                        ///< need the ident string look it up in the registry.
+    uint8_t  _pad2[2];  ///< Must be zero; reserved for future payload.
 } PeonPadUnitRecord;
+
+// ── Unit-type registry entry (ABI v2) ─────────────────────────────────────
+
+/// Maps a unit record's `type_id` to a stable engine ident string (e.g.
+/// "unit-footman", "unit-grunt").  Each snapshot carries the set of types
+/// referenced by its units so the UI can resolve real art via
+/// TabletopAssetResolver without embedding any proprietary asset.
+/// `ident` is always NUL-terminated and never longer than
+/// PEONPAD_TABLETOP_MAX_IDENT - 1 characters.
+typedef struct PeonPadUnitType {
+    uint16_t type_id;                       ///< Matches PeonPadUnitRecord.type_id.
+    uint8_t  _pad[2];                       ///< Must be zero.
+    char     ident[PEONPAD_TABLETOP_MAX_IDENT]; ///< NUL-terminated engine ident.
+} PeonPadUnitType;
 
 // ── Snapshot (opaque, reference-counted) ─────────────────────────────────
 
@@ -134,6 +183,16 @@ uint32_t peonpad_snapshot_unit_count(const PeonPadSnapshot *s);
 /// Valid until peonpad_snapshot_release() drops the last reference.
 /// Returns NULL when unit_count == 0.
 const PeonPadUnitRecord *peonpad_snapshot_units(const PeonPadSnapshot *s);
+
+/// Number of entries in this snapshot's unit-type registry (ABI v2).
+/// May be zero for a synthetic or terrain-only snapshot.
+uint32_t peonpad_snapshot_unit_type_count(const PeonPadSnapshot *s);
+
+/// Pointer to the unit-type registry array (ABI v2).
+/// Each entry maps a `type_id` to a stable engine ident string.
+/// Valid until peonpad_snapshot_release() drops the last reference.
+/// Returns NULL when unit_type_count == 0.
+const PeonPadUnitType *peonpad_snapshot_unit_types(const PeonPadSnapshot *s);
 
 /// Increment the reference count.  Returns 0 on success, -1 if s is NULL.
 int peonpad_snapshot_retain(PeonPadSnapshot *s);
@@ -227,6 +286,26 @@ int peonpad_tabletop_publish_synthetic(
     uint32_t                    terrain_count,
     const PeonPadUnitRecord    *units,
     uint32_t                    unit_count
+);
+
+/// Synthetic publish including the unit-type registry (ABI v2).
+/// Behaves exactly like peonpad_tabletop_publish_synthetic but also attaches
+/// a unit-type registry so consumers can resolve `type_id` → ident.
+///
+/// types may be NULL when type_count == 0.  Returns 0 on success, -1 if the
+/// bridge is not initialized, -2 if any count exceeds the hard limits, is
+/// inconsistent with map_width × map_height, or a type ident is not
+/// NUL-terminated within PEONPAD_TABLETOP_MAX_IDENT bytes.
+int peonpad_tabletop_publish_synthetic_v2(
+    uint64_t                    generation,
+    uint32_t                    map_width,
+    uint32_t                    map_height,
+    const PeonPadTerrainCell   *terrain,
+    uint32_t                    terrain_count,
+    const PeonPadUnitRecord    *units,
+    uint32_t                    unit_count,
+    const PeonPadUnitType      *types,
+    uint32_t                    type_count
 );
 
 #ifdef __cplusplus

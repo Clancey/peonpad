@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -26,12 +27,15 @@
 #ifdef PEONPAD_TABLETOP
 #include "commands.h"
 #include "fow.h"
+#include "interface.h"
 #include "map.h"
 #include "player.h"
 #include "stratagus.h"
 #include "tile.h"
+#include "tileset.h"
 #include "unit.h"
 #include "unit_manager.h"
+#include "unittype.h"
 #include "vec2i.h"
 #endif
 
@@ -44,6 +48,7 @@ struct PeonPadSnapshot {
     uint32_t                        map_height  = 0;
     std::vector<PeonPadTerrainCell> terrain;    // map_width * map_height cells
     std::vector<PeonPadUnitRecord>  units;
+    std::vector<PeonPadUnitType>    unit_types; // ABI v2: type_id → ident registry
 };
 
 // ── Bridge state (owned by simulation thread) ─────────────────────────────
@@ -159,6 +164,17 @@ const PeonPadUnitRecord *peonpad_snapshot_units(const PeonPadSnapshot *s)
     return s->units.data();
 }
 
+uint32_t peonpad_snapshot_unit_type_count(const PeonPadSnapshot *s)
+{
+    return s ? static_cast<uint32_t>(s->unit_types.size()) : 0u;
+}
+
+const PeonPadUnitType *peonpad_snapshot_unit_types(const PeonPadSnapshot *s)
+{
+    if (!s || s->unit_types.empty()) return nullptr;
+    return s->unit_types.data();
+}
+
 int peonpad_snapshot_retain(PeonPadSnapshot *s)
 {
     if (!s) return -1;
@@ -240,6 +256,23 @@ int peonpad_tabletop_publish_synthetic(
     const PeonPadUnitRecord    *units,
     uint32_t                    unit_count)
 {
+    return peonpad_tabletop_publish_synthetic_v2(
+        generation, map_width, map_height,
+        terrain, terrain_count, units, unit_count,
+        nullptr, 0);
+}
+
+int peonpad_tabletop_publish_synthetic_v2(
+    uint64_t                    generation,
+    uint32_t                    map_width,
+    uint32_t                    map_height,
+    const PeonPadTerrainCell   *terrain,
+    uint32_t                    terrain_count,
+    const PeonPadUnitRecord    *units,
+    uint32_t                    unit_count,
+    const PeonPadUnitType      *types,
+    uint32_t                    type_count)
+{
     {
         std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
         if (!g_bridge.initialized) return -1;
@@ -253,6 +286,15 @@ int peonpad_tabletop_publish_synthetic(
     if (unit_count > PEONPAD_TABLETOP_MAX_UNITS) return -2;
     if (terrain_count > 0 && !terrain) return -2;
     if (unit_count > 0 && !units) return -2;
+    if (type_count > PEONPAD_TABLETOP_MAX_UNIT_TYPES) return -2;
+    if (type_count > 0 && !types) return -2;
+
+    // Every ident must be NUL-terminated within the fixed buffer.
+    for (uint32_t i = 0; i < type_count; ++i) {
+        if (memchr(types[i].ident, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr) {
+            return -2;
+        }
+    }
 
     auto *snap = new (std::nothrow) PeonPadSnapshot;
     if (!snap) return -1;
@@ -267,6 +309,9 @@ int peonpad_tabletop_publish_synthetic(
     if (unit_count > 0) {
         snap->units.assign(units, units + unit_count);
     }
+    if (type_count > 0) {
+        snap->unit_types.assign(types, types + type_count);
+    }
 
     PublishSnap(snap);
     return 0;
@@ -276,12 +321,36 @@ int peonpad_tabletop_publish_synthetic(
 
 #ifdef PEONPAD_TABLETOP
 
+// Classify a tile's engine flags into a transport-neutral terrain class.
+// The order matters: the most visually-salient/blocking classes win so the
+// UI renders forests, rocks and walls distinctly even when a tile also
+// carries land/coast flags.
+static uint8_t ClassifyTerrain(tile_flags flags) noexcept
+{
+    if (flags & MapFieldWall)   return static_cast<uint8_t>(PEONPAD_TERRAIN_WALL);
+    if (flags & MapFieldForest) return static_cast<uint8_t>(PEONPAD_TERRAIN_FOREST);
+    if (flags & MapFieldRocks)  return static_cast<uint8_t>(PEONPAD_TERRAIN_ROCK);
+    if (flags & MapFieldWaterAllowed) return static_cast<uint8_t>(PEONPAD_TERRAIN_WATER);
+    if (flags & MapFieldCoastAllowed) return static_cast<uint8_t>(PEONPAD_TERRAIN_COAST);
+    if (flags & MapFieldLandAllowed)  return static_cast<uint8_t>(PEONPAD_TERRAIN_GRASS);
+    return static_cast<uint8_t>(PEONPAD_TERRAIN_DIRT);
+}
+
 // Drain queued commands and apply them to the running game state.
 // Called from the simulation thread before GameLogicLoop().
 void peonpad_tabletop_drain_commands(void)
 {
     if (!g_bridge.initialized) return;
     if (!ThisPlayer) return;
+
+    // The visionOS tabletop drives the engine headlessly with no in-engine
+    // pause UI. Some scenarios start paused (briefing/objectives) waiting for a
+    // key the headless host never sends, which would freeze GameCycle at 0.
+    // Keep the simulation advancing so snapshots reflect live gameplay and
+    // command round-trips are visible; also clear any cycle-skip left by
+    // replay/fast-forward. This only affects the tabletop bridge build.
+    if (GamePaused) GamePaused = false;
+    if (SkipGameCycle >= 1) SkipGameCycle = 0;
 
     std::vector<PeonPadCommand> batch;
     {
@@ -312,9 +381,10 @@ void peonpad_tabletop_drain_commands(void)
                 }
             }
         } else if (cmd.type == PEONPAD_CMD_MOVE) {
-            // Issue move orders.
-            const Vec2i dest{static_cast<int>(cmd.tile_x),
-                             static_cast<int>(cmd.tile_y)};
+            // Issue move orders.  Vec2i stores short components; map tiles are
+            // bounded well within a short (≤ PEONPAD_TABLETOP_MAX_MAP_DIM).
+            const Vec2i dest{static_cast<short>(cmd.tile_x),
+                             static_cast<short>(cmd.tile_y)};
             // Reject coordinates outside the loaded map — static
             // PEONPAD_TABLETOP_MAX_MAP_DIM only catches the absolute
             // maximum; real maps are much smaller.
@@ -395,8 +465,8 @@ void peonpad_tabletop_publish_snapshot(void)
             const CMapField *field = Map.Field(static_cast<int>(x),
                                                static_cast<int>(y));
             PeonPadTerrainCell &out = snap->terrain[y * mw + x];
-            out.tile_index = static_cast<uint16_t>(field->getTileIndex());
-            out._pad       = 0;
+            out.tile_index    = static_cast<uint16_t>(field->getTileIndex());
+            out.terrain_class = ClassifyTerrain(field->getFlags());
 
             if (Map.NoFogOfWar || !ThisPlayer) {
                 out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
@@ -421,6 +491,10 @@ void peonpad_tabletop_publish_snapshot(void)
     const std::vector<CUnit *> &engine_units = UnitManager->GetUnits();
     snap->units.reserve(std::min(engine_units.size(),
                                  static_cast<size_t>(PEONPAD_TABLETOP_MAX_UNITS)));
+
+    // Track which type_ids have already been added to the registry so each
+    // distinct unit type contributes exactly one ident entry.
+    std::vector<bool> type_seen;
 
     for (CUnit *u : engine_units) {
         if (!u) continue;
@@ -448,6 +522,23 @@ void peonpad_tabletop_publish_snapshot(void)
         rec.tile_y   = static_cast<int16_t>(u->tilePos.y);
         rec.world_x  = static_cast<float>(u->IX);
         rec.world_y  = static_cast<float>(u->IY);
+        rec.type_id  = u->Type ? static_cast<uint16_t>(u->Type->Slot) : 0u;
+
+        // Register the unit type ident once per distinct type_id so the UI
+        // can resolve real art without guessing from unit IDs.
+        if (u->Type) {
+            const size_t slot = static_cast<size_t>(u->Type->Slot);
+            if (slot >= type_seen.size()) type_seen.resize(slot + 1, false);
+            if (!type_seen[slot]
+                && snap->unit_types.size() < PEONPAD_TABLETOP_MAX_UNIT_TYPES) {
+                type_seen[slot] = true;
+                PeonPadUnitType t{};
+                t.type_id = rec.type_id;
+                std::snprintf(t.ident, PEONPAD_TABLETOP_MAX_IDENT, "%s",
+                              u->Type->Ident.c_str());
+                snap->unit_types.push_back(t);
+            }
+        }
 
         snap->units.push_back(rec);
     }

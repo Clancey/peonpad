@@ -98,6 +98,7 @@ bool CommandIsValid(const PeonPadCommand *cmd) noexcept
         case PEONPAD_CMD_SELECT:
         case PEONPAD_CMD_DESELECT:
         case PEONPAD_CMD_STOP:
+        case PEONPAD_CMD_DESELECT_ALL:
             return true;
         case PEONPAD_CMD_MOVE:
             // Reject tiles beyond the hard map limit.
@@ -311,19 +312,46 @@ void peonpad_tabletop_drain_commands(void)
                 }
             }
         } else if (cmd.type == PEONPAD_CMD_MOVE) {
-            // Issue move orders for every currently-selected unit.
+            // Issue move orders.
             const Vec2i dest{static_cast<int>(cmd.tile_x),
                              static_cast<int>(cmd.tile_y)};
             // Reject coordinates outside the loaded map — static
             // PEONPAD_TABLETOP_MAX_MAP_DIM only catches the absolute
             // maximum; real maps are much smaller.
             if (!Map.Info.IsPointOnMap(dest)) continue;
-            for (CUnit *u : Selected) {
-                if (u && u->IsAliveOnMap()
-                    && u->Player == ThisPlayer) {
-                    SendCommandMove(*u, dest, EFlushMode::On);
+
+            if (cmd.unit_id != 0) {
+                // unit_id != 0: select just that unit, then move it.
+                // Matches Swift TabletopTransport.send(.moveUnit(id, dest)).
+                CUnit *target = nullptr;
+                const unsigned slot_count = UnitManager->GetUsedSlotCount();
+                for (unsigned i = 0; i < slot_count; ++i) {
+                    CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
+                    if (u.IsAliveOnMap()
+                        && u.Player == ThisPlayer
+                        && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id) {
+                        target = &u;
+                        break;
+                    }
+                }
+                if (target) {
+                    UnSelectAll();
+                    SelectUnit(*target);
+                    SelectedUnitChanged();
+                    SendCommandMove(*target, dest, EFlushMode::On);
+                }
+            } else {
+                // unit_id == 0: move all currently-selected units.
+                for (CUnit *u : Selected) {
+                    if (u && u->IsAliveOnMap() && u->Player == ThisPlayer) {
+                        SendCommandMove(*u, dest, EFlushMode::On);
+                    }
                 }
             }
+        } else if (cmd.type == PEONPAD_CMD_DESELECT_ALL) {
+            // Clear the entire selection; matches Swift TabletopTransport.send(.deselectAll).
+            UnSelectAll();
+            SelectedUnitChanged();
         } else if (cmd.type == PEONPAD_CMD_STOP) {
             const unsigned slot_count = UnitManager->GetUsedSlotCount();
             for (unsigned i = 0; i < slot_count; ++i) {

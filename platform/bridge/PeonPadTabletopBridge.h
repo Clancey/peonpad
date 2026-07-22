@@ -146,11 +146,15 @@ void peonpad_snapshot_release(PeonPadSnapshot *s);
 
 /// Commands understood by the bridge's intake queue.
 typedef enum PeonPadCommandType {
-    PEONPAD_CMD_NONE     = 0, ///< Sentinel / unused.
-    PEONPAD_CMD_SELECT   = 1, ///< Add unit_id to the local selection.
-    PEONPAD_CMD_DESELECT = 2, ///< Remove unit_id from the local selection.
-    PEONPAD_CMD_MOVE     = 3, ///< Order selected units to move to (tile_x, tile_y).
-    PEONPAD_CMD_STOP     = 4, ///< Order unit_id to stop its current action.
+    PEONPAD_CMD_NONE         = 0, ///< Sentinel / unused.
+    PEONPAD_CMD_SELECT       = 1, ///< Add unit_id to the local selection.
+    PEONPAD_CMD_DESELECT     = 2, ///< Remove unit_id from the local selection.
+    PEONPAD_CMD_MOVE         = 3, ///< Move unit(s) to (tile_x, tile_y).
+                                  ///<   unit_id != 0: select just that unit first,
+                                  ///<                 then issue the move order.
+                                  ///<   unit_id == 0: move all currently-selected units.
+    PEONPAD_CMD_STOP         = 4, ///< Order unit_id to stop its current action.
+    PEONPAD_CMD_DESELECT_ALL = 5, ///< Clear the entire selection (unit_id ignored).
 } PeonPadCommandType;
 
 /// A single command posted from the UI thread to the simulation thread.
@@ -159,6 +163,7 @@ typedef struct PeonPadCommand {
     uint32_t type;          ///< PeonPadCommandType.
     uint32_t abi_ver;       ///< Must equal PEONPAD_TABLETOP_ABI_VERSION.
     uint32_t unit_id;       ///< Target unit (SELECT / DESELECT / STOP).
+                            ///< For MOVE: if non-zero, select this unit then move.
     int32_t  tile_x;        ///< Target tile column (MOVE only).
     int32_t  tile_y;        ///< Target tile row (MOVE only).
     uint8_t  _reserved[8];  ///< Must be zero; reserved for future payload.

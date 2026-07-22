@@ -104,11 +104,12 @@ static bool test_enum_values()
     EXPECT(static_cast<int>(PEONPAD_FOG_EXPLORED) == 1);
     EXPECT(static_cast<int>(PEONPAD_FOG_VISIBLE)  == 2);
 
-    EXPECT(static_cast<int>(PEONPAD_CMD_NONE)     == 0);
-    EXPECT(static_cast<int>(PEONPAD_CMD_SELECT)   == 1);
-    EXPECT(static_cast<int>(PEONPAD_CMD_DESELECT) == 2);
-    EXPECT(static_cast<int>(PEONPAD_CMD_MOVE)     == 3);
-    EXPECT(static_cast<int>(PEONPAD_CMD_STOP)     == 4);
+    EXPECT(static_cast<int>(PEONPAD_CMD_NONE)         == 0);
+    EXPECT(static_cast<int>(PEONPAD_CMD_SELECT)       == 1);
+    EXPECT(static_cast<int>(PEONPAD_CMD_DESELECT)     == 2);
+    EXPECT(static_cast<int>(PEONPAD_CMD_MOVE)         == 3);
+    EXPECT(static_cast<int>(PEONPAD_CMD_STOP)         == 4);
+    EXPECT(static_cast<int>(PEONPAD_CMD_DESELECT_ALL) == 5);
 
     return true;
 }
@@ -412,6 +413,19 @@ static bool test_valid_commands_accepted()
 
     cmd.type    = PEONPAD_CMD_STOP;
     cmd.unit_id = 42;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+
+    // DESELECT_ALL: unit_id irrelevant — accepted when bridge is initialized.
+    cmd.type    = PEONPAD_CMD_DESELECT_ALL;
+    cmd.unit_id = 0;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+
+    // MOVE with explicit unit_id: targets a specific unit rather than the
+    // current selection.  Accepted as long as coords are in range.
+    cmd.type    = PEONPAD_CMD_MOVE;
+    cmd.unit_id = 99;
+    cmd.tile_x  = 5;
+    cmd.tile_y  = 7;
     EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
 
     // drain_commands is a no-op without PEONPAD_TABLETOP but must not crash.

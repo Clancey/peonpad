@@ -25,7 +25,7 @@ private enum TabletopPlacement {
 struct TabletopBoardView: View {
     @State private var manipulator = TabletopBoardManipulator(initial: TabletopPlacement.initialTransform)
     @State private var commandReducer = TabletopCommandReducer()
-    @State private var selectedUnitID: String?
+    @State private var gameplaySnapshot = TabletopGameplaySnapshot.demo()
     @State private var subscriptions: [EventSubscription] = []
 
     // Populated once in `make` and reused by the gesture handlers and the
@@ -43,8 +43,8 @@ struct TabletopBoardView: View {
             applyTransform(manipulator.transform, to: boardRoot)
             content.add(boardRoot)
 
-            TabletopBoardBuilder.addSurface(to: boardRoot)
-            let units = TabletopBoardBuilder.addUnits(to: boardRoot)
+            TabletopBoardBuilder.addSurface(to: boardRoot, snapshot: gameplaySnapshot)
+            let units = TabletopBoardBuilder.addUnits(to: boardRoot, snapshot: gameplaySnapshot)
 
             if let paletteEntity = attachments.entity(for: TabletopPaletteView.attachmentID) {
                 paletteEntity.name = "palette"
@@ -103,6 +103,16 @@ struct TabletopBoardView: View {
             }
         }
 
+        // When both hands are simultaneously active, the right hand is part
+        // of a two-hand board-manipulation gesture. Mark its event ID for
+        // suppression so that a staggered release (left hand drops first,
+        // right hand ends later) cannot accidentally dispatch a gameplay
+        // command from what was never a selection intent.
+        if let leftSample, let rightSample,
+           leftSample.phase == .active, rightSample.phase == .active {
+            commandReducer.suppressRightHandID(rightSample.id)
+        }
+
         let transform = manipulator.update(left: leftSample, right: rightSample)
         if let boardRoot {
             applyTransform(transform, to: boardRoot)
@@ -146,20 +156,54 @@ struct TabletopBoardView: View {
         case .none:
             return
         case let .tappedEntity(name, _):
+            // Entity names follow the "unit.<id>" convention where <id> is
+            // the full unit ID (e.g. "unit.sentry.north"). Strip the prefix
+            // to recover the stable unit ID used by the gameplay snapshot.
             guard name.hasPrefix("unit.") else { return }
             let unitID = String(name.dropFirst("unit.".count))
-                .components(separatedBy: ".").first ?? name
-            selectUnit(unitID)
-        case .tappedEmpty:
-            selectUnit(nil)
+            applyGameplayCommand(.selectUnit(id: unitID))
+        case let .tappedEmpty(boardPoint):
+            if let selected = gameplaySnapshot.validatedSelectedUnit,
+               let boardRoot {
+                // `boardPoint` is in world space (the RealityView's coordinate
+                // space); tile indices are board-local. Convert before dividing
+                // so the move lands on the tile the user actually tapped even
+                // after the board has been translated, rotated, or scaled.
+                let worldPos = SIMD3<Float>(
+                    Float(boardPoint.x),
+                    Float(boardPoint.y),
+                    Float(boardPoint.z)
+                )
+                let localPos = boardRoot.convert(position: worldPos, from: nil)
+                let tileX = Int((Double(localPos.x) / Double(TabletopBoardMetrics.tileSize)).rounded())
+                let tileZ = Int((Double(localPos.z) / Double(TabletopBoardMetrics.tileSize)).rounded())
+                applyGameplayCommand(.moveUnit(id: selected.id, toTileX: tileX, toTileZ: tileZ))
+            } else {
+                applyGameplayCommand(.deselectAll)
+            }
         }
     }
 
-    private func selectUnit(_ unitID: String?) {
-        guard selectedUnitID != unitID else { return }
-        selectedUnitID = unitID
-        for unit in liveUnits {
-            unit.setSelected(unit.spec.id == unitID)
+    /// Applies a gameplay command to the snapshot and reconciles live unit
+    /// entities to reflect the new state.
+    private func applyGameplayCommand(_ command: TabletopGameplayCommand) {
+        let newSnapshot = TabletopGameplayCommandReducer.reduce(gameplaySnapshot, command: command)
+        guard newSnapshot != gameplaySnapshot else { return }
+        gameplaySnapshot = newSnapshot
+        reconcileSnapshot()
+    }
+
+    /// Synchronises live RealityKit entities to the current gameplay snapshot:
+    /// updates unit board positions and highlights the selected unit.
+    private func reconcileSnapshot() {
+        for liveUnit in liveUnits {
+            let unitID = liveUnit.spec.id
+            if let snapUnit = gameplaySnapshot.units.first(where: { $0.id == unitID }) {
+                liveUnit.root.position = TabletopBoardMetrics.tileCenter(
+                    tileX: snapUnit.tileX, tileZ: snapUnit.tileZ
+                )
+            }
+            liveUnit.setSelected(gameplaySnapshot.selection.selectedUnitID == unitID)
         }
     }
 

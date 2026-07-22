@@ -42,6 +42,20 @@ fi
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
+"$ROOT_DIR/scripts/build-visionos-tabletop.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-tabletop-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" --help >/dev/null
+rg -q 'PEONPAD_IOS_CONTROL_DOCK=ON' \
+  "$ROOT_DIR/scripts/build-vision-compat-simulator.sh"
+rg -q 'PEONPAD_IOS_CONTROL_DOCK.*OFF' \
+  "$ROOT_DIR/scripts/generate-ios-xcode.sh"
+rg -q 'indirectPointerMoving:touch' \
+  "$ROOT_DIR/engine/stratagus/third-party/SDL/src/video/uikit/SDL_uikitview.m"
+IOS_DATA_STAGE_SCRIPT="$ROOT_DIR/scripts/stage-ios-wc2-test-data.sh"
+rg -Fq -- "--exclude '*.[Mm][Pp][Qq]'" "$IOS_DATA_STAGE_SCRIPT"
+rg -Fq -- \
+  "--exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]'" \
+  "$IOS_DATA_STAGE_SCRIPT"
 if "$ROOT_DIR/scripts/prepare-ipad-build.sh" --installer missing.exe \
     --data missing-data >/dev/null 2>&1; then
   print -u2 "prepare script accepted multiple input modes"
@@ -174,8 +188,10 @@ for forbidden_key in \
     exit 1
   fi
 done
+
 rg -q 'MACOSX_PACKAGE_LOCATION Resources' \
   "$ROOT_DIR/cmake/PeonPadSDL3.cmake"
+
 VISION_ASSET_ROOT="$TEST_RUNTIME/visionos-assets"
 VISION_ASSET_APP="$VISION_ASSET_ROOT/PeonPadVisionShell.app"
 cmake -E remove_directory "$VISION_ASSET_ROOT"
@@ -234,6 +250,59 @@ fi
 cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 
 "$ROOT_DIR/tests/visionos-acceptance.sh"
+
+# Native visionOS tabletop foundation: pure-logic gesture/board-manipulation/
+# directional-billboard-frame tests (fast, host-only, no Simulator needed),
+# plus static guardrails that the tabletop app stays fully separate from the
+# SDL3 smoke shell (distinct bundle id, distinct scene lifecycle, distinct
+# executable) and carries no proprietary Warcraft II data.
+"$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" >/dev/null
+
+TABLETOP_PLIST="$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in"
+plutil -lint "$TABLETOP_PLIST" >/dev/null
+[[ "$(plutil -extract UIDeviceFamily.0 raw "$TABLETOP_PLIST")" == "7" ]]
+[[ "$(plutil -extract CFBundleExecutable raw "$TABLETOP_PLIST")" == \
+    "PeonPadTabletop" ]]
+if plutil -extract \
+    UIApplicationSceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleApplication.0.UISceneDelegateClassName \
+    raw "$TABLETOP_PLIST" >/dev/null 2>&1; then
+  print -u2 "tabletop app must not declare the SDL3 scene delegate"
+  exit 1
+fi
+for forbidden_key in \
+  'CFBundleIcons~ipad' \
+  UIRequiresFullScreen \
+  'UISupportedInterfaceOrientations~ipad'; do
+  if plutil -extract "$forbidden_key" raw "$TABLETOP_PLIST" \
+      >/dev/null 2>&1; then
+    print -u2 "iPad-only key entered visionOS tabletop metadata: $forbidden_key"
+    exit 1
+  fi
+done
+rg -q '@PEONPAD_TABLETOP_BUNDLE_IDENTIFIER@' "$TABLETOP_PLIST"
+rg -q 'org\.peonpad\.visionos\.tabletop' \
+  "$ROOT_DIR/scripts/build-visionos-tabletop.sh" \
+  "$ROOT_DIR/scripts/verify-tabletop-bundle.sh"
+rg -Fq 'bundle identifier collides with the smoke shell' \
+  "$ROOT_DIR/scripts/verify-tabletop-bundle.sh"
+if rg -q 'SDLUIKitSceneDelegate' \
+    "$ROOT_DIR/platform/apple/visionos/tabletop"/*.swift \
+    "$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in" \
+    2>/dev/null; then
+  print -u2 "the SDL3 scene delegate leaked into the tabletop app"
+  exit 1
+fi
+if rg -Fq -- '-DCMAKE_TOOLCHAIN_FILE' \
+    "$ROOT_DIR/scripts/build-visionos-tabletop.sh"; then
+  print -u2 "the tabletop build script must stay independent of CMake"
+  exit 1
+fi
+if rg -Fq 'assert(' \
+    "$ROOT_DIR/tests/tabletop_gesture_state_test.swift"; then
+  print -u2 "tabletop pure-logic tests rely on Swift assert instead of" \
+    "always-on checks"
+  exit 1
+fi
 
 IOS_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in"
 plutil -lint "$IOS_PLIST" >/dev/null
@@ -317,6 +386,7 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
+  0011-visionos-indirect-controls.patch \
   0010-direct-sdl3-engine.patch \
   0009-game-controller-input.patch \
   0008-input-intent-router.patch \
@@ -348,6 +418,8 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
 EXPECTED_STRATAGUS_TREE_SHA=$(awk -F ' *= *' '

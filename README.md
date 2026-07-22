@@ -94,6 +94,7 @@ Entertainment and its licensors.</sub>
 | Repeated menu cycles | ✅ | Quit-to-menu regression exercised across device sessions |
 | Complete-match regression | ⏳ | A full start-to-victory match still needs to be recorded |
 | Hardware keyboard/mouse | 🧪 | Native SDL paths are retained; Magic Keyboard acceptance is pending |
+| Native visionOS tabletop | 🧪 | Separate SwiftUI/RealityKit spatial foundation; gameplay integration remains future work |
 | Multiplayer | 🧪 | Engine support exists; local and online play are unverified on iPad |
 | Replay playback | ⏸️ | Hidden in the private iPad profile until legacy playback is reliable |
 | In-app Files import | 🧭 | Planned; current developer builds stage data on the Mac |
@@ -271,6 +272,31 @@ metadata, bundle inspection, signing gates, and explicit non-goals are in
 </details>
 
 <details>
+  <summary><strong>Native visionOS tabletop foundation (SwiftUI + RealityKit)</strong></summary>
+
+A second, entirely separate native visionOS target renders a placeable,
+spatially-manipulable procedural battlefield board with upright transparent
+unit billboards -- a foundation layer, not gameplay. It has its own bundle id,
+executable, and `swiftc`-only build/verify path, and does not touch the SDL3
+smoke shell or the Designed-for-iPad app:
+
+```sh
+./scripts/test-visionos-tabletop-gestures.sh
+./scripts/build-visionos-tabletop.sh xrsimulator --launch \
+  --screenshot /tmp/peonpad-tabletop-evidence/tabletop.png
+./scripts/build-visionos-tabletop.sh xros
+```
+
+Right hand selects/commands units; left hand grabs, rotates, and repositions
+the board; two-hand chirality scales it. Billboards face the viewer around the
+board's vertical normal while preserving each unit's true world-space facing,
+quantized to the eight canonical Warcraft II sprite directions. Architecture,
+gesture model, the camera-relative directional-frame math, and the pure-logic
+unit tests are documented in
+[`docs/visionos-tabletop.md`](docs/visionos-tabletop.md).
+</details>
+
+<details>
   <summary><strong>Designed-for-iPad Vision Pro simulator probe</strong></summary>
 
 This compatibility path builds the existing iPad target with the
@@ -289,6 +315,18 @@ Set `PEONPAD_VISION_SIMULATOR_UDID` to select a specific installed Vision Pro
 simulator. Simulator launch proves build and compatibility-runtime startup
 only. Eye/hand targeting, indirect-pointer ergonomics, sustained performance,
 audio, lifecycle, and all gameplay controls still require Vision Pro hardware.
+
+visionOS never exposes continuous eye-gaze coordinates to applications. The
+compatibility build instead moves the game pointer to the system-revealed target
+when a pinch begins, so one gaze-and-pinch activates that point. It also reserves
+space for a gaze-targetable UIKit control dock with camera arrows, additive
+selection, a one-shot context-command mode, Back, and Menu.
+
+For a physical Vision Pro Xcode project with the same dock enabled:
+
+```sh
+PEONPAD_IOS_CONTROL_DOCK=ON ./scripts/generate-ios-xcode.sh
+```
 </details>
 
 <details>

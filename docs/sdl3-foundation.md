@@ -24,8 +24,8 @@ The Zlib-licensed release archives are committed under
 `scripts/verify-sdl3-sources.sh` checks their immutable hashes.
 
 The canonical staged Stratagus tree is reconstructed by ordered patches
-`0001` through `0010-direct-sdl3-engine.patch`. Its tracked-tree SHA-256 is
-`9c8710b17b62f9fa775c2c002b5bfb1787811b515c7e881a4ccc268d17a2548e`.
+`0001` through `0011-visionos-indirect-controls.patch`. Its tracked-tree SHA-256 is
+`dcbb82935e833c76d466dabb2a35d195ef9188fd9b53f54f4f9c23555e5f0c47`.
 The stage script, public preflight, and reverse/reapply guardrail all enforce
 that value.
 

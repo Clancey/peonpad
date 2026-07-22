@@ -1,5 +1,8 @@
 #include "PeonPadIOSViewport.h"
 
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+#include "PeonPadIOSControls.h"
+#endif
 #include "PeonPadViewportGeometry.h"
 #include "sdl_compat.h"
 
@@ -40,6 +43,9 @@ void PeonPadIOSApplySafeAreaViewport(SDL_Window *window,
 	if (!rootView) {
 		return;
 	}
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+	PeonPadIOSInstallControlDock(window);
+#endif
 
 	int windowWidth = 0;
 	int windowHeight = 0;
@@ -54,7 +60,10 @@ void PeonPadIOSApplySafeAreaViewport(SDL_Window *window,
 		return;
 	}
 
-	const UIEdgeInsets points = rootView.safeAreaInsets;
+	UIEdgeInsets points = rootView.safeAreaInsets;
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+	points.bottom += PeonPadIOSControlDockInsetPoints();
+#endif
 	const double scaleX = static_cast<double>(outputWidth) / windowWidth;
 	const double scaleY = static_cast<double>(outputHeight) / windowHeight;
 	const PeonPadPixelInsets pixels = {

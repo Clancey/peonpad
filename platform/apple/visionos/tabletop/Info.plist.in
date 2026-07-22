@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>PeonPad Tabletop</string>
+  <key>CFBundleExecutable</key>
+  <string>PeonPadTabletop</string>
+  <key>CFBundleIdentifier</key>
+  <string>@PEONPAD_TABLETOP_BUNDLE_IDENTIFIER@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <string>AppIcon</string>
+  </dict>
+  <key>CFBundleName</key>
+  <string>PeonPadTabletop</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleSupportedPlatforms</key>
+  <array>
+    <string>@PEONPAD_VISIONOS_SUPPORTED_PLATFORM@</string>
+  </array>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>MinimumOSVersion</key>
+  <string>2.0</string>
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <true/>
+  </dict>
+  <key>UIApplicationSupportsIndirectInputEvents</key>
+  <true/>
+  <key>UIDeviceFamily</key>
+  <array>
+    <integer>7</integer>
+  </array>
+  <key>UIRequiredDeviceCapabilities</key>
+  <array>
+    <string>arm64</string>
+  </array>
+  <key>NSHandsTrackingUsageDescription</key>
+  <string>Hand tracking lets you grab, rotate, scale, and command the tabletop board with natural gestures.</string>
+  <key>NSWorldSensingUsageDescription</key>
+  <string>World sensing lets the tabletop board sit naturally on real surfaces around you.</string>
+</dict>
+</plist>

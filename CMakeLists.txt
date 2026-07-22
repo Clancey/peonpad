@@ -71,6 +71,7 @@ if(BUILD_TESTING AND
   target_include_directories(peonpad_input_intent_test PRIVATE
     engine/stratagus/src/include
     engine/stratagus/third-party/SDL/include
+    platform/apple/ios
   )
   target_compile_features(peonpad_input_intent_test PRIVATE cxx_std_17)
   target_compile_options(peonpad_input_intent_test PRIVATE

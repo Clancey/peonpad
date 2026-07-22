@@ -10,6 +10,12 @@ delegate, while the Objective-C++ slice verifies the public UIKit/Metal window
 properties and requests freeform resizing. It is a non-game smoke shell; the
 guarded full SDL3 Stratagus engine remains disabled.
 
+The separate native visionOS tabletop app lives under `visionos/tabletop/`.
+Its SwiftUI entry point owns a mixed immersive space containing a procedural
+RealityKit board, upright unit billboards, public chirality-aware direct-pinch
+handling, and a board-attached status/recenter palette. It shares neither an
+entry point nor a scene delegate with the SDL3 shell.
+
 The iPad application Info.plist template lives in `ios/Info.plist.in`. Build
 the unsigned physical-device bundle with `scripts/build-ios-app.sh`; the
 generated bundle remains under `build/` and is never a reference input.

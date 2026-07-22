@@ -1,0 +1,141 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d33fdba..1fb8caf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -53,6 +53,7 @@ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bu
+ set(PEONPAD_IOS_LAUNCH_IMAGE "" CACHE FILEPATH "PeonPad launch image copied into the iOS bundle")
+ set(PEONPAD_IOS_ICON_DIR "" CACHE PATH "PeonPad iPad icon files copied into the iOS bundle")
+ set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
++option(PEONPAD_IOS_CONTROL_DOCK "Add PeonPad gaze-targetable touch controls" OFF)
+ option(BUILD_VENDORED_SDL OFF)
+ option(BUILD_VENDORED_MEDIA_LIBS OFF)
+ option(DOWNLOAD_FREEPATS OFF)
+@@ -860,6 +861,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+ 	list(APPEND stratagus_SRCS
+ 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadViewportGeometry.cpp"
+ 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
++	if(PEONPAD_IOS_CONTROL_DOCK)
++		if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
++			message(FATAL_ERROR "PEONPAD_IOS_CONTROL_DOCK requires PeonPadIOSControls.mm")
++		endif()
++		add_definitions(-DPEONPAD_IOS_CONTROL_DOCK=1)
++		list(APPEND stratagus_SRCS
++			"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
++	endif()
+ 	include_directories("${PEONPAD_APPLE_PLATFORM_DIR}/ios")
+ elseif(APPLE)
+ 	add_definitions(-DUSE_MAC)
+diff --git a/src/video/sdl.cpp b/src/video/sdl.cpp
+index 39dedbc..a82f465 100644
+--- a/src/video/sdl.cpp
++++ b/src/video/sdl.cpp
+@@ -64,6 +64,9 @@
+ 
+ #ifdef PEONPAD_IOS
+ #include "PeonPadIOSViewport.h"
++#ifdef PEONPAD_IOS_CONTROL_DOCK
++#include "PeonPadIOSControls.h"
++#endif
+ #endif
+ 
+ #ifdef USE_BEOS
+@@ -835,11 +838,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			}
+ #endif
+ 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
++			{
++				unsigned button = event.button.button;
++				int modifiers = KeyModifiers;
++#ifdef PEONPAD_IOS_CONTROL_DOCK
++				button = PeonPadIOSMapPointerButton(button, true);
++				if (PeonPadIOSUseAdditiveModifier(true)) {
++					modifiers |= InputModifierAdditiveSelection;
++				}
++#endif
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
+-			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button, 0,
++			               {event.button.x, event.button.y}, {}, modifiers,
++			               SDL_GetTicks(), button, 0,
+ 			               SdlPointerSource(event.button.which)});
++			}
+ 			break;
+ 
+ 		case SDL_MOUSEBUTTONUP:
+@@ -850,11 +863,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			}
+ #endif
+ 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
++			{
++				unsigned button = event.button.button;
++				int modifiers = KeyModifiers;
++#ifdef PEONPAD_IOS_CONTROL_DOCK
++				button = PeonPadIOSMapPointerButton(button, false);
++				if (PeonPadIOSUseAdditiveModifier(false)) {
++					modifiers |= InputModifierAdditiveSelection;
++				}
++#endif
+ 			RouteSdlInput(callbacks,
+ 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
+-			               {event.button.x, event.button.y}, {}, KeyModifiers,
+-			               SDL_GetTicks(), event.button.button, 0,
++			               {event.button.x, event.button.y}, {}, modifiers,
++			               SDL_GetTicks(), button, 0,
+ 			               SdlPointerSource(event.button.which)});
++			}
+ 			break;
+ 
+ 		case SDL_MOUSEMOTION:
+@@ -898,6 +921,9 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
+ 			PeonPadCancelTouches(callbacks, SDL_GetTicks());
+ 			CancelSdlPointerInput(callbacks, SDL_GetTicks());
+ 			CancelSdlControllerInput(callbacks, SDL_GetTicks());
++#ifdef PEONPAD_IOS_CONTROL_DOCK
++			PeonPadIOSResetTouchControls();
++#endif
+ 			break;
+ #endif
+ 
+diff --git a/third-party/SDL/src/video/uikit/SDL_uikitview.m b/third-party/SDL/src/video/uikit/SDL_uikitview.m
+index 75c01b8..74e27d4 100644
+--- a/third-party/SDL/src/video/uikit/SDL_uikitview.m
++++ b/third-party/SDL/src/video/uikit/SDL_uikitview.m
+@@ -179,6 +179,12 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
+         return [UIPointerStyle hiddenPointerStyle];
+     }
+ }
++
++- (void)indirectPointerMoving:(UITouch *)touch API_AVAILABLE(ios(13.4))
++{
++    CGPoint point = [self touchLocation:touch shouldNormalize:NO];
++    SDL_SendMouseMotion(sdlwindow, 0, 0, (int)point.x, (int)point.y);
++}
+ #endif /* !TARGET_OS_TV && __IPHONE_13_4 */
+ 
+ - (SDL_TouchDeviceType)touchTypeForTouch:(UITouch *)touch
+@@ -240,6 +246,7 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
+                 if (!SDL_HasGCMouse()) {
+                     int i;
+ 
++                    [self indirectPointerMoving:touch];
+                     for (i = 1; i <= MAX_MOUSE_BUTTONS; ++i) {
+                         if ((event.buttonMask & SDL_BUTTON(i)) != 0) {
+                             Uint8 button;
+@@ -295,6 +302,7 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
+                 if (!SDL_HasGCMouse()) {
+                     int i;
+ 
++                    [self indirectPointerMoving:touch];
+                     for (i = 1; i <= MAX_MOUSE_BUTTONS; ++i) {
+                         if ((event.buttonMask & SDL_BUTTON(i)) != 0) {
+                             Uint8 button;
+@@ -362,7 +370,7 @@ extern int SDL_AppleTVRemoteOpenedAsJoystick;
+ #if !TARGET_OS_TV && defined(__IPHONE_13_4)
+         if (@available(iOS 13.4, *)) {
+             if (touch.type == UITouchTypeIndirectPointer) {
+-                /* Already handled in pointerInteraction callback */
++                [self indirectPointerMoving:touch];
+                 handled = YES;
+             }
+         }

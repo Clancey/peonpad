@@ -106,12 +106,16 @@ SDK_PATH=$(xcrun --sdk "$TARGET" --show-sdk-path) || {
 }
 
 TABLETOP_SRC_DIR="$ROOT_DIR/platform/apple/visionos/tabletop"
+BRIDGE_SRC_DIR="$ROOT_DIR/platform/bridge"
 SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopGestureState.swift"
   "$TABLETOP_SRC_DIR/TabletopGameplayState.swift"
   "$TABLETOP_SRC_DIR/TabletopTransport.swift"
   "$TABLETOP_SRC_DIR/TabletopGameplaySource.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardReconciler.swift"
+  "$TABLETOP_SRC_DIR/TabletopDataPaths.swift"
+  "$TABLETOP_SRC_DIR/TabletopEngineLifecycle.swift"
+  "$TABLETOP_SRC_DIR/TabletopEngineTransport.swift"
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
   "$TABLETOP_SRC_DIR/TabletopPaletteView.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"
@@ -130,13 +134,29 @@ cmake -E make_directory "$BUILD_DIR"
 APP="$BUILD_DIR/$APP_NAME"
 cmake -E make_directory "$APP"
 
+# ── Compile the C bridge (no PEONPAD_TABLETOP: pure infrastructure, no engine globals) ──
+BRIDGE_OBJ="$BUILD_DIR/PeonPadTabletopBridge.o"
+xcrun -sdk "$TARGET" clang++ \
+  -target "$SWIFT_TARGET_TRIPLE" \
+  -sdk "$SDK_PATH" \
+  -std=c++17 \
+  -O \
+  -I "$BRIDGE_SRC_DIR" \
+  -c "$BRIDGE_SRC_DIR/PeonPadTabletopBridge.cpp" \
+  -o "$BRIDGE_OBJ"
+
+# ── Compile Swift sources and link with the C bridge object ──────────────────
 xcrun -sdk "$TARGET" swiftc \
   -target "$SWIFT_TARGET_TRIPLE" \
   -sdk "$SDK_PATH" \
+  -I "$BRIDGE_SRC_DIR" \
+  -Xcc -I"$BRIDGE_SRC_DIR" \
   -parse-as-library \
   -O \
   -emit-executable \
   "${SOURCES[@]}" \
+  "$BRIDGE_OBJ" \
+  -lc++ \
   -o "$APP/$EXECUTABLE_NAME"
 
 sed \

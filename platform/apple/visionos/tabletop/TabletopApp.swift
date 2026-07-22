@@ -1,27 +1,66 @@
 // TabletopApp.swift
 //
-// Entry point for the native visionOS tabletop foundation. This is a
-// self-contained SwiftUI + RealityKit application, entirely separate from
-// the SDL3 smoke shell in platform/apple/visionos and its
-// PeonPadVisionShell.app: nothing here touches SDL, UIKit scene delegates,
-// or the Designed-for-iPad Warcraft II app. There is no gameplay, no
-// Stratagus/Wargus dependency, and no proprietary game data -- this layer
-// only proves out the spatial board, billboard, and gesture foundation the
-// eventual battlefield will sit on.
+// Entry point for the native visionOS tabletop. This is a self-contained
+// SwiftUI + RealityKit application, entirely separate from the SDL3 smoke
+// shell: nothing here touches SDL, UIKit scene delegates, or the
+// Designed-for-iPad Warcraft II app.
+//
+// Engine wiring
+// ─────────────
+//   `TabletopAppCore` bundles the lifecycle, transport, and gameplay session
+//   so all three share the same object graph. The lifecycle is started on
+//   scene appear after validating the staged game-data path (PR #13); the
+//   transport poll loop begins immediately and will yield snapshots once the
+//   bridge publishes its first one.
+//
+//   If the game-data path is unavailable (data not injected via
+//   inject-visionos-wargus-data.sh), the lifecycle transitions to .error
+//   and the board shows the no-transport diagnostic overlay. There is no
+//   silent fallback to the procedural demo state in production.
 import SwiftUI
+
+// MARK: - App core (lifecycle + transport + session)
+
+/// Bundles the engine lifecycle, transport, and gameplay session so they share
+/// the same object graph for the app's lifetime. Stored in @State so it
+/// survives scene recomposition.
+private final class TabletopAppCore: @unchecked Sendable {
+    let lifecycle  = TabletopEngineLifecycle()
+    let transport  = TabletopEngineTransport()
+    let session:     LiveTabletopSession
+
+    init() {
+        session = LiveTabletopSession(transport: transport)
+    }
+
+    /// Resolves production data paths and starts the engine lifecycle.
+    /// Errors are logged and surfaced via the lifecycle's `.error` state;
+    /// the board view shows a diagnostic overlay rather than demo content.
+    func start() async {
+        do {
+            let paths = try TabletopDataPaths.resolve()
+            lifecycle.start(paths: paths)
+        } catch {
+            print("[TabletopApp] ❌ Data path resolution failed: \(error)")
+            // The lifecycle stays in .initializing and will never reach .ready,
+            // so LiveTabletopSession produces an empty stream and the board
+            // view surfaces the no-transport overlay without crashing.
+        }
+    }
+
+    func stop() {
+        lifecycle.stop()
+    }
+}
+
+// MARK: - App
 
 @main
 struct PeonPadTabletopApp: App {
     private static let immersiveSpaceID = "org.peonpad.visionos.tabletop.board-space"
-
-    // The launcher window uses an explicit scene id so the immersive space can
-    // dismiss it programmatically once it opens successfully.
     private static let launcherWindowID = "org.peonpad.visionos.tabletop.launcher"
 
-    // Production session: LiveTabletopSession with no transport bound yet.
-    // The board view surfaces a diagnostic overlay when the stream is empty.
-    // TODO: replace nil with the engine-side C-ABI transport once bound.
-    @State private var gameplaySession = LiveTabletopSession(transport: nil)
+    @State private var appCore = TabletopAppCore()
 
     var body: some SwiftUI.Scene {
         WindowGroup(id: Self.launcherWindowID) {
@@ -29,10 +68,12 @@ struct PeonPadTabletopApp: App {
                 immersiveSpaceID: Self.immersiveSpaceID,
                 launcherWindowID: Self.launcherWindowID
             )
+            .task { await appCore.start() }
         }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
-            TabletopBoardView(session: gameplaySession)
+            TabletopBoardView(session: appCore.session)
+                .onDisappear { appCore.stop() }
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }

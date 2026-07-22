@@ -186,6 +186,100 @@ returns the snapshot unchanged on any invalid command. `validatedSelectedUnit`
 also defensively returns `nil` when the previously-selected unit has since died,
 so rendering code never needs to guard for this case.
 
+## Engine transport layer (PR: tabletop-engine-transport)
+
+This PR (stacked on PR #12, branched from `clancey-clancey-tabletop-engine-bridge`)
+adds the production Swift↔C integration layer.
+
+### Architecture
+
+```
+SwiftUI / RealityKit board view
+        │ TabletopGameplaySnapshot (Swift value)
+        │ TabletopGameplayCommand  (Swift enum)
+        ▼
+TabletopGameplaySource / TabletopCommandSink
+  └── LiveTabletopSession
+        │
+        ▼
+TabletopEngineTransport          ← NEW: concrete TabletopTransport
+  │  poll peonpad_tabletop_latest_snapshot() @ 20 Hz
+  │  post peonpad_tabletop_post_command()
+        │
+  PeonPadTabletopBridge C ABI   ← PR #12 (linked via module.modulemap)
+        │
+  Stratagus game loop (PEONPAD_TABLETOP build)
+        │ peonpad_tabletop_publish_snapshot() per tick
+        │ peonpad_tabletop_drain_commands()  per tick
+```
+
+**`TabletopEngineTransport`** (`TabletopEngineTransport.swift`):
+- Polls `peonpad_tabletop_latest_snapshot()` at ~20 Hz on a background Task.
+  When `generation` advances, converts the C snapshot to a Swift
+  `TabletopGameplaySnapshot` and yields it on the `AsyncStream`.
+- `PeonPadSnapshot` is an opaque/incomplete C type; Swift imports
+  `PeonPadSnapshot *` as `OpaquePointer`. All field access is via the ABI
+  accessor functions.
+- ABI version validated on every snapshot; mismatches are logged and dropped.
+- Terrain count consistency (`terrain_count == map_width × map_height`)
+  validated; incoherent snapshots dropped.
+- Unit count clamped to `PEONPAD_TABLETOP_MAX_UNITS` with a warning.
+- Coordinate mapping: Swift `tileZ` ↔ C `tile_y` (map row).
+- Facing: Stratagus byte 0–255 → radians via `byte/256.0 × 2π`.
+- Terrain-kind mapping: approximate from common Wargus summer-tileset index
+  ranges (0x00–0x0F grass, 0x10–0x2F dirt, 0x30–0x5F water, 0x60–0x7F rock,
+  0x80–0x9F forest). Exact tileset-aware mapping owned by the next session.
+- All five command types mapped: `selectUnit`, `deselectAll`, `moveUnit`,
+  `stopUnit`, and (via `moveUnit` with id) `PEONPAD_CMD_MOVE` with unit_id≠0.
+- Non-numeric unit IDs (demo fixtures) logged and dropped gracefully.
+- `#if canImport(PeonPadTabletopBridge)` guard: a stub implementation compiles
+  when the C bridge is not linked (pure-Swift host test targets).
+
+**`TabletopEngineLifecycle`** (`TabletopEngineLifecycle.swift`):
+- State machine: `.initializing` → `.ready` | `.error(_)` → `.shutdown`.
+- `start(paths:)` launches a detached background Task that validates the
+  game-data path, then calls `peonpad_tabletop_init()`.
+- `stop()` cancels the init Task and calls `peonpad_tabletop_cleanup()` if
+  the bridge was successfully initialized. Idempotent.
+- Exposes an `AsyncStream<TabletopEngineState>` (`stateUpdates`) for lifecycle
+  gating: the board view shows a diagnostic overlay until `.ready`.
+
+**`TabletopDataPaths`** (`TabletopDataPaths.swift`):
+- `resolve()` throws `gameDataUnavailable` when `Documents/wargus-data/` is
+  absent (requires `inject-visionos-wargus-data.sh` from PR #13). **No silent
+  demo fallback.** `userDataPath()` creates `Library/Application Support/PeonPad/`
+  on first use.
+
+**`platform/bridge/module.modulemap`** — Clang module definition that lets
+Swift code `import PeonPadTabletopBridge`. Build uses `-I platform/bridge -Xcc
+-I platform/bridge` to find it; link adds `PeonPadTabletopBridge.o` and
+`-lc++` for the C++ runtime.
+
+**`TabletopApp.swift`** updated:
+- `TabletopAppCore` bundles lifecycle, transport, and session so they share
+  one object graph.
+- `start()` resolves data paths via `TabletopDataPaths.resolve()` and calls
+  `lifecycle.start(paths:)` in a `.task` modifier on the launcher window.
+- `stop()` called on immersive-space `.onDisappear` for clean shutdown.
+- If data paths are unavailable, the lifecycle remains `.initializing` (never
+  `.ready`), so `LiveTabletopSession` produces an empty stream and the board
+  shows its no-transport diagnostic overlay without crashing.
+
+### Build
+
+```sh
+# Host Mac transport + C bridge tests (no Simulator):
+./scripts/test-visionos-tabletop-transport.sh   # 76/76 checks
+
+# visionOS Simulator app bundle (now links C bridge):
+./scripts/build-visionos-tabletop.sh xrsimulator
+
+# All host-Mac pure-logic suites:
+./scripts/test-visionos-tabletop-gestures.sh   # 99/99
+./scripts/test-visionos-tabletop-gameplay.sh   # 171/171
+./scripts/test-visionos-tabletop-live-state.sh # 45/45
+```
+
 ## Build, test, and launch
 
 Pure-logic unit tests run on the host Mac, independent of any SDK or
@@ -194,6 +288,8 @@ simulator, and are part of `tests/script-guardrails.sh`:
 ```sh
 ./scripts/test-visionos-tabletop-gestures.sh   # gesture, billboard, two-hand suppression
 ./scripts/test-visionos-tabletop-gameplay.sh   # snapshot model, command reducer, dead-unit rejection
+./scripts/test-visionos-tabletop-live-state.sh # live-state seam: source/sink/reconciler
+./scripts/test-visionos-tabletop-transport.sh  # Swift↔C transport, lifecycle, data paths
 ```
 
 Build the app bundle (no launch):

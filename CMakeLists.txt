@@ -110,6 +110,14 @@ if(BUILD_TESTING AND
   )
   add_test(NAME peonpad_tabletop_bridge
     COMMAND peonpad_tabletop_bridge_test)
+
+  # Swift transport integration test: requires swiftc and host Mac (no Simulator).
+  # Compiles PeonPadTabletopBridge as a host-Mac C++ object, then links it with
+  # the Swift transport files and runs the test binary.
+  add_test(
+    NAME peonpad_tabletop_transport
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-visionos-tabletop-transport.sh"
+  )
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")

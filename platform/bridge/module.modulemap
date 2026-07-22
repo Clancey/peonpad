@@ -1,0 +1,15 @@
+// module.modulemap
+//
+// Clang module definition for PeonPadTabletopBridge.
+//
+// This lets Swift import the C bridge header via:
+//   import PeonPadTabletopBridge
+//
+// Consumers must pass -I <this directory> to swiftc (or equivalent) and link
+// PeonPadTabletopBridge.cpp compiled as a C++17 object. The header is pure C
+// at the module boundary (all C++ detail is in the .cpp file), so the Clang
+// importer sees only C types and function declarations.
+module PeonPadTabletopBridge {
+  header "PeonPadTabletopBridge.h"
+  export *
+}

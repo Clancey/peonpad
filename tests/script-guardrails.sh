@@ -492,12 +492,64 @@ fi
 rg -q 'PEONPAD_TABLETOP' "$BRIDGE_PATCH"
 rg -q 'peonpad_tabletop_publish_snapshot' "$BRIDGE_PATCH"
 rg -q 'peonpad_tabletop_drain_commands' "$BRIDGE_PATCH"
+# The Clang module map must be present alongside the header.
+MODULE_MAP="$ROOT_DIR/platform/bridge/module.modulemap"
+[[ -f "$MODULE_MAP" ]] || { print -u2 "bridge module.modulemap missing"; exit 1; }
+rg -q 'PeonPadTabletopBridge' "$MODULE_MAP"
 # Verify no proprietary assets were committed alongside the bridge.
 if find "$ROOT_DIR/platform/bridge" -name '*.wav' -o -name '*.mpq' \
     -o -name '*.pud' | grep -q .; then
   print -u2 "proprietary assets found in platform/bridge"
   exit 1
 fi
+
+# ── Tabletop transport/lifecycle/data-paths source files ──────────────────────
+
+TABLETOP_SRC="$ROOT_DIR/platform/apple/visionos/tabletop"
+for _f in \
+    TabletopDataPaths.swift \
+    TabletopEngineLifecycle.swift \
+    TabletopEngineTransport.swift; do
+  [[ -f "$TABLETOP_SRC/$_f" ]] || {
+    print -u2 "tabletop transport file missing: $_f"
+    exit 1
+  }
+done
+# DataPaths: must reference Documents/wargus-data and Application Support.
+rg -q 'wargus-data' "$TABLETOP_SRC/TabletopDataPaths.swift"
+rg -q 'applicationSupportDirectory' "$TABLETOP_SRC/TabletopDataPaths.swift"
+# Must fail visibly when game data is absent; must not silently use demo state.
+rg -q 'gameDataUnavailable' "$TABLETOP_SRC/TabletopDataPaths.swift"
+
+# Lifecycle: must call init/cleanup under #if canImport guard.
+rg -q 'canImport(PeonPadTabletopBridge)' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+rg -q 'peonpad_tabletop_init' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+rg -q 'peonpad_tabletop_cleanup' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+# Lifecycle must have explicit state machine states.
+rg -q 'initializing' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+rg -q 'ready' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+rg -q 'shutdown' "$TABLETOP_SRC/TabletopEngineLifecycle.swift"
+
+# Transport: must bridge all five command types.
+rg -q 'PEONPAD_CMD_SELECT' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+rg -q 'PEONPAD_CMD_DESELECT_ALL' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+rg -q 'PEONPAD_CMD_MOVE' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+rg -q 'PEONPAD_CMD_STOP' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+# Transport: must validate ABI version before converting.
+rg -q 'PEONPAD_TABLETOP_ABI_VERSION' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+# Transport: must use retain/release.
+rg -q 'peonpad_snapshot_retain' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+rg -q 'peonpad_snapshot_release' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+# Transport: must have tileZ ↔ tile_y coordinate-mapping comment.
+rg -q 'tileZ.*tile_y\|tile_y.*tileZ' "$TABLETOP_SRC/TabletopEngineTransport.swift"
+# Transport test script must exist and be executable.
+[[ -x "$ROOT_DIR/scripts/test-visionos-tabletop-transport.sh" ]] || {
+  print -u2 "test-visionos-tabletop-transport.sh missing or not executable"
+  exit 1
+}
+# Transport: stub for non-bridge builds must exist (no proprietary symbols leaked).
+rg -q 'else.*PeonPadTabletopBridge not available\|PeonPadTabletopBridge not available' \
+    "$TABLETOP_SRC/TabletopEngineTransport.swift"
 
 # ── visionOS Wargus data staging guardrails ────────────────────────────────────
 

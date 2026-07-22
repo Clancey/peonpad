@@ -76,6 +76,10 @@ public struct TabletopGameplayUnit: Codable, Equatable {
     public var facingRadians: Double
     public var tileX: Int
     public var tileZ: Int
+    /// Engine unit-type identifier (e.g. `"unit-footman"`), used by the render
+    /// layer to resolve real Wargus sprites via `TabletopAssetResolver`. Empty
+    /// for procedural/demo content that has no engine-defined type.
+    public var kind: String
 
     public init(
         id: String,
@@ -84,7 +88,8 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         maxHP: Int,
         facingRadians: Double,
         tileX: Int,
-        tileZ: Int
+        tileZ: Int,
+        kind: String = ""
     ) {
         self.id = id
         self.owner = owner
@@ -93,6 +98,7 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         self.facingRadians = facingRadians
         self.tileX = tileX
         self.tileZ = tileZ
+        self.kind = kind
     }
 
     /// A unit with `hp == 0` is dead. Commands (select, move, stop) that

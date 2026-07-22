@@ -7,6 +7,7 @@
 #include <atomic>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 #import <Foundation/Foundation.h>
 
@@ -14,6 +15,13 @@
 // stratagus.cpp). Declared here so this translation unit does not need the
 // engine's headers; it is resolved at link time against libstratagus_lib.a.
 extern int stratagusMain(int argc, char **argv);
+
+// SDL3 refuses to initialize any subsystem unless it knows the app has taken
+// over main(). Because our real entry point is the SwiftUI @main (not SDL's
+// SDL_main), we must tell SDL the main function is ready before the engine
+// calls SDL_Init; otherwise SDL_InitSubSystem fails with "Application didn't
+// initialize properly, did you include SDL_main.h…". Resolved from libSDL3.a.
+extern "C" void SDL_SetMainReady(void);
 
 @implementation PeonPadEngineHost {
     std::atomic<PeonPadEngineState> _state;
@@ -92,8 +100,22 @@ extern int stratagusMain(int argc, char **argv);
         }
         argv[argc] = nullptr;
 
+        // Run with the game-data directory (the value passed via -d) as the
+        // working directory. Stratagus resolves the CLI scenario and other
+        // relative resources against the process CWD, and the conventional
+        // runtime environment is CWD == data dir.
+        for (NSUInteger i = 0; i + 1 < argc; ++i) {
+            if (storage[i] == "-d") {
+                chdir(storage[i + 1].c_str());
+                break;
+            }
+        }
+
         // Set up the bridge before the game loop begins publishing.
         peonpad_tabletop_init();
+        // Signal SDL that main() is handled by the app before the engine's
+        // SDL_Init runs on this thread.
+        SDL_SetMainReady();
         weakGuard->_state.store(PeonPadEngineStateRunning);
 
         int rc = -1;

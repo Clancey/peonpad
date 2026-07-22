@@ -42,6 +42,9 @@ fi
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
+"$ROOT_DIR/scripts/build-visionos-tabletop.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-tabletop-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" --help >/dev/null
 rg -q 'PEONPAD_IOS_CONTROL_DOCK=ON' \
   "$ROOT_DIR/scripts/build-vision-compat-simulator.sh"
 rg -q 'PEONPAD_IOS_CONTROL_DOCK.*OFF' \
@@ -185,8 +188,10 @@ for forbidden_key in \
     exit 1
   fi
 done
+
 rg -q 'MACOSX_PACKAGE_LOCATION Resources' \
   "$ROOT_DIR/cmake/PeonPadSDL3.cmake"
+
 VISION_ASSET_ROOT="$TEST_RUNTIME/visionos-assets"
 VISION_ASSET_APP="$VISION_ASSET_ROOT/PeonPadVisionShell.app"
 cmake -E remove_directory "$VISION_ASSET_ROOT"
@@ -245,6 +250,59 @@ fi
 cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 
 "$ROOT_DIR/tests/visionos-acceptance.sh"
+
+# Native visionOS tabletop foundation: pure-logic gesture/board-manipulation/
+# directional-billboard-frame tests (fast, host-only, no Simulator needed),
+# plus static guardrails that the tabletop app stays fully separate from the
+# SDL3 smoke shell (distinct bundle id, distinct scene lifecycle, distinct
+# executable) and carries no proprietary Warcraft II data.
+"$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" >/dev/null
+
+TABLETOP_PLIST="$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in"
+plutil -lint "$TABLETOP_PLIST" >/dev/null
+[[ "$(plutil -extract UIDeviceFamily.0 raw "$TABLETOP_PLIST")" == "7" ]]
+[[ "$(plutil -extract CFBundleExecutable raw "$TABLETOP_PLIST")" == \
+    "PeonPadTabletop" ]]
+if plutil -extract \
+    UIApplicationSceneManifest.UISceneConfigurations.UIWindowSceneSessionRoleApplication.0.UISceneDelegateClassName \
+    raw "$TABLETOP_PLIST" >/dev/null 2>&1; then
+  print -u2 "tabletop app must not declare the SDL3 scene delegate"
+  exit 1
+fi
+for forbidden_key in \
+  'CFBundleIcons~ipad' \
+  UIRequiresFullScreen \
+  'UISupportedInterfaceOrientations~ipad'; do
+  if plutil -extract "$forbidden_key" raw "$TABLETOP_PLIST" \
+      >/dev/null 2>&1; then
+    print -u2 "iPad-only key entered visionOS tabletop metadata: $forbidden_key"
+    exit 1
+  fi
+done
+rg -q '@PEONPAD_TABLETOP_BUNDLE_IDENTIFIER@' "$TABLETOP_PLIST"
+rg -q 'org\.peonpad\.visionos\.tabletop' \
+  "$ROOT_DIR/scripts/build-visionos-tabletop.sh" \
+  "$ROOT_DIR/scripts/verify-tabletop-bundle.sh"
+rg -Fq 'bundle identifier collides with the smoke shell' \
+  "$ROOT_DIR/scripts/verify-tabletop-bundle.sh"
+if rg -q 'SDLUIKitSceneDelegate' \
+    "$ROOT_DIR/platform/apple/visionos/tabletop"/*.swift \
+    "$ROOT_DIR/platform/apple/visionos/tabletop/Info.plist.in" \
+    2>/dev/null; then
+  print -u2 "the SDL3 scene delegate leaked into the tabletop app"
+  exit 1
+fi
+if rg -Fq -- '-DCMAKE_TOOLCHAIN_FILE' \
+    "$ROOT_DIR/scripts/build-visionos-tabletop.sh"; then
+  print -u2 "the tabletop build script must stay independent of CMake"
+  exit 1
+fi
+if rg -Fq 'assert(' \
+    "$ROOT_DIR/tests/tabletop_gesture_state_test.swift"; then
+  print -u2 "tabletop pure-logic tests rely on Swift assert instead of" \
+    "always-on checks"
+  exit 1
+fi
 
 IOS_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in"
 plutil -lint "$IOS_PLIST" >/dev/null

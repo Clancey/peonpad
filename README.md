@@ -271,6 +271,31 @@ metadata, bundle inspection, signing gates, and explicit non-goals are in
 </details>
 
 <details>
+  <summary><strong>Native visionOS tabletop foundation (SwiftUI + RealityKit)</strong></summary>
+
+A second, entirely separate native visionOS target renders a placeable,
+spatially-manipulable procedural battlefield board with upright transparent
+unit billboards -- a foundation layer, not gameplay. It has its own bundle id,
+executable, and `swiftc`-only build/verify path, and does not touch the SDL3
+smoke shell or the Designed-for-iPad app:
+
+```sh
+./scripts/test-visionos-tabletop-gestures.sh
+./scripts/build-visionos-tabletop.sh xrsimulator --launch \
+  --screenshot /tmp/peonpad-tabletop-evidence/tabletop.png
+./scripts/build-visionos-tabletop.sh xros
+```
+
+Right hand selects/commands units; left hand grabs, rotates, and repositions
+the board; two-hand chirality scales it. Billboards face the viewer around the
+board's vertical normal while preserving each unit's true world-space facing,
+quantized to the eight canonical Warcraft II sprite directions. Architecture,
+gesture model, the camera-relative directional-frame math, and the pure-logic
+unit tests are documented in
+[`docs/visionos-tabletop.md`](docs/visionos-tabletop.md).
+</details>
+
+<details>
   <summary><strong>Designed-for-iPad Vision Pro simulator probe</strong></summary>
 
 This compatibility path builds the existing iPad target with the

@@ -172,7 +172,7 @@ eight translucent colored cylindrical unit billboards clearly rising off
 their tiles, and the board-attached "Tabletop / Recenter" palette near the
 board's front edge -- all inside the immersive space, none of it a flat
 window. `tests/script-guardrails.sh` (including the tabletop-specific static
-checks and the 69/69-passing pure-logic test run) passed in full.
+checks and the 93/93-passing pure-logic test run) passed in full.
 
 ## Scope boundary
 

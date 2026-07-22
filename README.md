@@ -94,6 +94,7 @@ Entertainment and its licensors.</sub>
 | Repeated menu cycles | ✅ | Quit-to-menu regression exercised across device sessions |
 | Complete-match regression | ⏳ | A full start-to-victory match still needs to be recorded |
 | Hardware keyboard/mouse | 🧪 | Native SDL paths are retained; Magic Keyboard acceptance is pending |
+| Native visionOS tabletop | 🧪 | Separate SwiftUI/RealityKit spatial foundation; gameplay integration remains future work |
 | Multiplayer | 🧪 | Engine support exists; local and online play are unverified on iPad |
 | Replay playback | ⏸️ | Hidden in the private iPad profile until legacy playback is reliable |
 | In-app Files import | 🧭 | Planned; current developer builds stage data on the Mac |

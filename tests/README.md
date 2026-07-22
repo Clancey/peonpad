@@ -49,6 +49,13 @@ Vision Pro under a visionOS runtime, install, launch PID residency, and optional
 local screenshot evidence. Guardrails also compile the layered visionOS icon
 catalog and exercise wrong-runtime simulator override rejection.
 
+`scripts/test-visionos-tabletop-gestures.sh` compiles the native tabletop app's
+pure Swift state and geometry logic on the host. It covers right-hand
+command/selection routing, left-hand board manipulation, one-hand/two-hand
+transition continuity, scale and rotation, cancellation, recentering,
+camera-relative directional-frame selection, billboard orientation, and
+selection-preserving appearance updates without requiring a simulator.
+
 `tests/visionos-acceptance.sh` drives the production
 `scripts/accept-visionos.sh` entry point through fake Xcode, CMake, simctl, and
 Mach-O tools. It rejects invalid Vision Pro overrides, wrong models/runtimes,

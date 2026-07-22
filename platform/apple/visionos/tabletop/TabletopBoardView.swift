@@ -71,6 +71,14 @@ struct TabletopBoardView: View {
     @State private var tileEntities: [String: ModelEntity] = [:]
     @State private var subscriptions: [EventSubscription] = []
 
+    /// The map→board fit derived from the first snapshot's map size. Scales an
+    /// arbitrary engine map onto the fixed physical board.
+    @State private var mapFit: TabletopMapFit?
+
+    /// Resolves real Wargus terrain/unit art when a catalog is present;
+    /// otherwise the board uses procedural coloring (no proprietary art).
+    private let assetResolver: TabletopAssetResolver = WargusTabletopAssetResolver()
+
     // MARK: - Body
 
     var body: some View {
@@ -170,10 +178,19 @@ struct TabletopBoardView: View {
 
         let diff = TabletopBoardReconciler.diff(from: previousSnapshot, to: next)
 
-        // -- Terrain surface (first snapshot builds the surface; subsequent
-        //    snapshots only update tiles that changed kind) --
+        // -- Terrain surface (first snapshot builds the surface fitted to the
+        //    real map size; subsequent snapshots only update changed tiles) --
+        let fit: TabletopMapFit
+        if let existing = mapFit, previousSnapshot != nil {
+            fit = existing
+        } else {
+            fit = TabletopBoardMetrics.fit(for: next)
+            mapFit = fit
+        }
+
         if previousSnapshot == nil {
-            tileEntities = TabletopBoardBuilder.addSurface(to: boardRoot, snapshot: next)
+            tileEntities = TabletopBoardBuilder.addSurface(
+                to: boardRoot, snapshot: next, fit: fit, resolver: assetResolver)
         } else {
             TabletopBoardBuilder.updateTerrainTiles(diff.changedTerrainTiles, in: tileEntities)
             TabletopBoardBuilder.updateFogTiles(diff.changedFogTiles, in: tileEntities)
@@ -181,7 +198,7 @@ struct TabletopBoardView: View {
 
         // -- Units added --
         for unit in diff.addedUnits {
-            let live = TabletopBoardBuilder.addUnit(unit, to: boardRoot, snapshot: next)
+            let live = TabletopBoardBuilder.addUnit(unit, to: boardRoot, snapshot: next, fit: fit)
             liveUnitsByID[unit.id] = live
         }
 
@@ -192,7 +209,7 @@ struct TabletopBoardView: View {
 
             if unitDiff.positionChanged {
                 live.root.position = TabletopBoardMetrics.tileCenter(
-                    tileX: unit.tileX, tileZ: unit.tileZ
+                    fit, tileX: unit.tileX, tileZ: unit.tileZ
                 )
             }
             if unitDiff.facingChanged {
@@ -293,7 +310,8 @@ struct TabletopBoardView: View {
         case let .tappedEmpty(boardPoint):
             guard let snapshot = gameplaySnapshot,
                   let selected = snapshot.validatedSelectedUnit,
-                  let boardRoot else {
+                  let boardRoot,
+                  let fit = mapFit else {
                 // Nothing selected and no valid board root: tapping empty space
                 // with no unit selected is a no-op (deselectAll with nothing to
                 // deselect would redundantly publish an identical snapshot).
@@ -301,9 +319,10 @@ struct TabletopBoardView: View {
             }
             let worldPos = SIMD3<Float>(Float(boardPoint.x), Float(boardPoint.y), Float(boardPoint.z))
             let localPos = boardRoot.convert(position: worldPos, from: nil)
-            let tileX = Int((Double(localPos.x) / Double(TabletopBoardMetrics.tileSize)).rounded())
-            let tileZ = Int((Double(localPos.z) / Double(TabletopBoardMetrics.tileSize)).rounded())
-            session.send(.moveUnit(id: selected.id, toTileX: tileX, toTileZ: tileZ))
+            let target = fit.tile(atX: localPos.x, z: localPos.z)
+            // Ignore taps outside the real map bounds.
+            guard fit.contains(tileX: target.tileX, tileZ: target.tileZ) else { return }
+            session.send(.moveUnit(id: selected.id, toTileX: target.tileX, toTileZ: target.tileZ))
         }
     }
 

@@ -33,22 +33,38 @@ struct TabletopUnitSpec {
     var tileZ: Int
     var facingRadians: Double
     var tint: UIColor
+    /// Engine unit-type ident (e.g. "unit-footman") for asset resolution.
+    var unitKind: String = ""
 }
 
 enum TabletopBoardMetrics {
-    /// Board is a square grid of tiles, in meters.
-    static let tileSize: Float = 0.12
-    static let tileCountPerSide = 7
-    static var boardExtent: Float { tileSize * Float(tileCountPerSide) }
-    static var halfExtent: Float { boardExtent / 2 }
+    /// Fixed physical footprint of the board (meters). An arbitrary engine map
+    /// is scaled to fit this square via `TabletopMapFit`, so the user always
+    /// manipulates the same-size board regardless of scenario dimensions.
+    static let physicalExtent: Float = 0.84
+    static var halfExtent: Float { physicalExtent / 2 }
+
+    /// Reference tile size (the original 7×7 demo board's tile). Unit body
+    /// dimensions scale relative to this so units stay proportional as the map
+    /// grows and tiles shrink.
+    static let referenceTileSize: Float = 0.12
 
     static let unitHeight: Float = 0.16
     static let unitRadius: Float = 0.03
 
-    /// World-space position (relative to the board root) of the center of
-    /// tile (tileX, tileZ), with (0, 0) at the board's own center.
-    static func tileCenter(tileX: Int, tileZ: Int) -> SIMD3<Float> {
-        SIMD3<Float>(Float(tileX) * tileSize, 0, Float(tileZ) * tileSize)
+    /// The fit that scales the given snapshot's map onto the physical board.
+    static func fit(for snapshot: TabletopGameplaySnapshot) -> TabletopMapFit {
+        TabletopMapFit(
+            width: snapshot.mapSize.width,
+            height: snapshot.mapSize.height,
+            boardExtent: physicalExtent)
+    }
+
+    /// Board-local position (relative to the board root) of the center of tile
+    /// (tileX, tileZ) under the given fit, with (0,0) at the board center.
+    static func tileCenter(_ fit: TabletopMapFit, tileX: Int, tileZ: Int) -> SIMD3<Float> {
+        let c = fit.tileCenter(tileX: tileX, tileZ: tileZ)
+        return SIMD3<Float>(c.x, 0, c.z)
     }
 }
 
@@ -100,42 +116,49 @@ final class TabletopLiveUnit {
     /// reports an ownership change; drives both body and quad materials.
     private var currentOwnerTint: UIColor
 
-    init(spec: TabletopUnitSpec) {
+    init(spec: TabletopUnitSpec, fit: TabletopMapFit) {
         self.spec = spec
         self.currentHue = spec.tint
         self.currentFacingRadians = spec.facingRadians
         self.currentOwnerTint = spec.tint
 
+        // Scale unit body/quad with the fitted tile size so units stay
+        // proportional as the map grows and tiles shrink, with a floor so tiny
+        // maps never produce invisible units.
+        let scale = max(fit.tileSize / TabletopBoardMetrics.referenceTileSize, 0.2)
+        let unitHeight = TabletopBoardMetrics.unitHeight * scale
+        let unitRadius = TabletopBoardMetrics.unitRadius * scale
+
         let root = Entity()
         root.name = "unit.\(spec.id)"
-        root.position = TabletopBoardMetrics.tileCenter(tileX: spec.tileX, tileZ: spec.tileZ)
+        root.position = TabletopBoardMetrics.tileCenter(fit, tileX: spec.tileX, tileZ: spec.tileZ)
         root.components.set(InputTargetComponent())
         root.components.set(
             CollisionComponent(shapes: [
                 .generateBox(size: SIMD3<Float>(
-                    TabletopBoardMetrics.unitRadius * 2.2,
-                    TabletopBoardMetrics.unitHeight,
-                    TabletopBoardMetrics.unitRadius * 2.2
+                    unitRadius * 2.2,
+                    unitHeight,
+                    unitRadius * 2.2
                 ))
-                .offsetBy(translation: [0, TabletopBoardMetrics.unitHeight / 2, 0])
+                .offsetBy(translation: [0, unitHeight / 2, 0])
             ])
         )
         root.components.set(HoverEffectComponent())
 
         let body = ModelEntity(
-            mesh: .generateCylinder(height: TabletopBoardMetrics.unitHeight, radius: TabletopBoardMetrics.unitRadius),
+            mesh: .generateCylinder(height: unitHeight, radius: unitRadius),
             materials: [translucentUnlitMaterial(spec.tint.withAlphaComponent(0.22))]
         )
         body.name = root.name + ".body"
-        body.position = [0, TabletopBoardMetrics.unitHeight / 2, 0]
+        body.position = [0, unitHeight / 2, 0]
         root.addChild(body)
 
         let quad = ModelEntity(
-            mesh: .generatePlane(width: TabletopBoardMetrics.unitRadius * 1.7, height: TabletopBoardMetrics.unitHeight * 0.85),
+            mesh: .generatePlane(width: unitRadius * 1.7, height: unitHeight * 0.85),
             materials: [translucentUnlitMaterial(spec.tint)]
         )
         quad.name = root.name + ".quad"
-        quad.position = [0, TabletopBoardMetrics.unitHeight / 2, 0]
+        quad.position = [0, unitHeight / 2, 0]
         root.addChild(quad)
 
         self.root = root
@@ -267,6 +290,7 @@ extension TabletopUnitSpec {
         self.tileZ = gameplayUnit.tileZ
         self.facingRadians = gameplayUnit.facingRadians
         self.tint = TabletopBoardBuilder.ownerTint(owner: gameplayUnit.owner)
+        self.unitKind = gameplayUnit.kind
     }
 }
 
@@ -309,50 +333,49 @@ enum TabletopBoardBuilder {
     @discardableResult
     static func addSurface(
         to boardRoot: Entity,
-        snapshot: TabletopGameplaySnapshot
+        snapshot: TabletopGameplaySnapshot,
+        fit: TabletopMapFit,
+        resolver: TabletopAssetResolver = NullTabletopAssetResolver()
     ) -> [String: ModelEntity] {
         var tileEntities: [String: ModelEntity] = [:]
-        let half = TabletopBoardMetrics.tileCountPerSide / 2
-        for tileZ in -half...half {
-            for tileX in -half...half {
-                // Terrain quad.
-                let color = snapshot.terrain(atTileX: tileX, tileZ: tileZ).tileColor
-                let tile = ModelEntity(
-                    mesh: .generatePlane(
-                        width: TabletopBoardMetrics.tileSize * 0.96,
-                        depth: TabletopBoardMetrics.tileSize * 0.96
-                    ),
-                    materials: [translucentUnlitMaterial(color)]
-                )
-                tile.name = "board.tile.\(tileX).\(tileZ)"
-                tile.position = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
-                boardRoot.addChild(tile)
-                tileEntities[tileEntityKey(tileX: tileX, tileZ: tileZ)] = tile
+        let quadSize = fit.tileQuadSize
+        // Iterate the snapshot's actual terrain so any map size (32×32, 64×64,
+        // 96×96, …) is laid out; the fit scales each tile onto the fixed board.
+        for terrainTile in snapshot.terrain {
+            let tileX = terrainTile.tileX
+            let tileZ = terrainTile.tileZ
 
-                // Per-tile fog overlay quad, slightly above the terrain.
-                // Enabled (dark) when unrevealed; disabled (invisible) when revealed.
-                let fogQuad = ModelEntity(
-                    mesh: .generatePlane(
-                        width: TabletopBoardMetrics.tileSize * 0.96,
-                        depth: TabletopBoardMetrics.tileSize * 0.96
-                    ),
-                    materials: [translucentUnlitMaterial(UIColor(white: 0.06, alpha: 0.88))]
-                )
-                fogQuad.name = "board.fog.\(tileX).\(tileZ)"
-                var fogPos = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
-                fogPos.y = 0.005  // just above the terrain quad
-                fogQuad.position = fogPos
-                fogQuad.isEnabled = !snapshot.fog(atTileX: tileX, tileZ: tileZ)
-                boardRoot.addChild(fogQuad)
-                tileEntities[fogEntityKey(tileX: tileX, tileZ: tileZ)] = fogQuad
-            }
+            // Terrain quad: real texture via the resolver when available,
+            // otherwise a color derived from the engine's terrain class.
+            let tile = ModelEntity(
+                mesh: .generatePlane(width: quadSize, depth: quadSize),
+                materials: [terrainMaterial(kind: terrainTile.kind, resolver: resolver)]
+            )
+            tile.name = "board.tile.\(tileX).\(tileZ)"
+            tile.position = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+            boardRoot.addChild(tile)
+            tileEntities[tileEntityKey(tileX: tileX, tileZ: tileZ)] = tile
+
+            // Per-tile fog overlay quad, slightly above the terrain. Enabled
+            // (dark) when unrevealed; disabled (invisible) when revealed.
+            let fogQuad = ModelEntity(
+                mesh: .generatePlane(width: quadSize, depth: quadSize),
+                materials: [translucentUnlitMaterial(UIColor(white: 0.06, alpha: 0.88))]
+            )
+            fogQuad.name = "board.fog.\(tileX).\(tileZ)"
+            var fogPos = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+            fogPos.y = 0.005  // just above the terrain quad
+            fogQuad.position = fogPos
+            fogQuad.isEnabled = !snapshot.fog(atTileX: tileX, tileZ: tileZ)
+            boardRoot.addChild(fogQuad)
+            tileEntities[fogEntityKey(tileX: tileX, tileZ: tileZ)] = fogQuad
         }
 
         // Subtle global haze plane for aesthetic continuity (very low alpha).
         let haze = ModelEntity(
             mesh: .generatePlane(
-                width: TabletopBoardMetrics.boardExtent * 1.02,
-                depth: TabletopBoardMetrics.boardExtent * 1.02
+                width: TabletopBoardMetrics.physicalExtent * 1.02,
+                depth: TabletopBoardMetrics.physicalExtent * 1.02
             ),
             materials: [translucentUnlitMaterial(UIColor(white: 0.85, alpha: 0.06))]
         )
@@ -362,15 +385,33 @@ enum TabletopBoardBuilder {
         return tileEntities
     }
 
+    /// Resolves a terrain tile's material: a real texture from the asset
+    /// resolver when the running app actually has it, otherwise the procedural
+    /// color derived from the engine terrain class. No proprietary art is
+    /// bundled, so this is the procedural fallback until a catalog is injected.
+    static func terrainMaterial(
+        kind: TabletopTerrainKind,
+        resolver: TabletopAssetResolver
+    ) -> UnlitMaterial {
+        if let name = resolver.terrainTexture(for: kind),
+           let texture = try? TextureResource.load(named: name) {
+            var material = UnlitMaterial()
+            material.color = .init(tint: .white, texture: .init(texture))
+            return material
+        }
+        return translucentUnlitMaterial(kind.tileColor)
+    }
+
     /// Builds a single live RealityKit unit from a gameplay snapshot unit and
     /// parents it to `boardRoot`. Returns the live unit for tracking.
     static func addUnit(
         _ gameplayUnit: TabletopGameplayUnit,
         to boardRoot: Entity,
-        snapshot: TabletopGameplaySnapshot
+        snapshot: TabletopGameplaySnapshot,
+        fit: TabletopMapFit
     ) -> TabletopLiveUnit {
         let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
-        let liveUnit = TabletopLiveUnit(spec: spec)
+        let liveUnit = TabletopLiveUnit(spec: spec, fit: fit)
         liveUnit.setAlive(gameplayUnit.isAlive)
         liveUnit.setSelected(snapshot.selection.selectedUnitID == gameplayUnit.id)
         boardRoot.addChild(liveUnit.root)

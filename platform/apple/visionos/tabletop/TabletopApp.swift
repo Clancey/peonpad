@@ -18,10 +18,13 @@ struct PeonPadTabletopApp: App {
     // dismiss it programmatically once it opens successfully.
     private static let launcherWindowID = "org.peonpad.visionos.tabletop.launcher"
 
-    // Production session: LiveTabletopSession with no transport bound yet.
-    // The board view surfaces a diagnostic overlay when the stream is empty.
-    // TODO: replace nil with the engine-side C-ABI transport once bound.
-    @State private var gameplaySession = LiveTabletopSession(transport: nil)
+    // Production session: a LiveTabletopSession backed by the real engine
+    // transport. The transport boots the Stratagus/Wargus engine against the
+    // staged data (Documents/wargus-data) and a separate writable user
+    // directory; a nil transport (paths not ready) is surfaced by the board's
+    // diagnostic overlay rather than a silent demo fallback.
+    @State private var gameplaySession =
+        LiveTabletopSession(transport: PeonPadTabletopLaunch.makeEngineTransport())
 
     var body: some SwiftUI.Scene {
         WindowGroup(id: Self.launcherWindowID) {

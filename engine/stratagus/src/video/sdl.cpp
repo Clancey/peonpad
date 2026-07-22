@@ -64,6 +64,9 @@
 
 #ifdef PEONPAD_IOS
 #include "PeonPadIOSViewport.h"
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+#include "PeonPadIOSControls.h"
+#endif
 #endif
 
 #ifdef USE_BEOS
@@ -835,11 +838,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			}
 #endif
 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+			{
+				unsigned button = event.button.button;
+				int modifiers = KeyModifiers;
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+				button = PeonPadIOSMapPointerButton(button, true);
+				if (PeonPadIOSUseAdditiveModifier(true)) {
+					modifiers |= InputModifierAdditiveSelection;
+				}
+#endif
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::Begin,
-			               {event.button.x, event.button.y}, {}, KeyModifiers,
-			               SDL_GetTicks(), event.button.button, 0,
+			               {event.button.x, event.button.y}, {}, modifiers,
+			               SDL_GetTicks(), button, 0,
 			               SdlPointerSource(event.button.which)});
+			}
 			break;
 
 		case SDL_MOUSEBUTTONUP:
@@ -850,11 +863,21 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			}
 #endif
 			event.button.y = static_cast<int>(std::floor(event.button.y / Video.VerticalPixelSize + 0.5));
+			{
+				unsigned button = event.button.button;
+				int modifiers = KeyModifiers;
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+				button = PeonPadIOSMapPointerButton(button, false);
+				if (PeonPadIOSUseAdditiveModifier(false)) {
+					modifiers |= InputModifierAdditiveSelection;
+				}
+#endif
 			RouteSdlInput(callbacks,
 			              {InputIntentKind::PointerButton, InputIntentPhase::End,
-			               {event.button.x, event.button.y}, {}, KeyModifiers,
-			               SDL_GetTicks(), event.button.button, 0,
+			               {event.button.x, event.button.y}, {}, modifiers,
+			               SDL_GetTicks(), button, 0,
 			               SdlPointerSource(event.button.which)});
+			}
 			break;
 
 		case SDL_MOUSEMOTION:
@@ -898,6 +921,9 @@ static void SdlDoEvent(const EventCallback &callbacks, SDL_Event &event)
 			PeonPadCancelTouches(callbacks, SDL_GetTicks());
 			CancelSdlPointerInput(callbacks, SDL_GetTicks());
 			CancelSdlControllerInput(callbacks, SDL_GetTicks());
+#ifdef PEONPAD_IOS_CONTROL_DOCK
+			PeonPadIOSResetTouchControls();
+#endif
 			break;
 #endif
 

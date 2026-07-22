@@ -5,6 +5,11 @@ visionOS 2.0 or newer. It launches only the public SDL3 foundation payload. It
 does **not** enable Stratagus, load a map, include game data, or provide playable
 gameplay.
 
+The separate SwiftUI/RealityKit tabletop foundation is documented in
+[`visionos-tabletop.md`](visionos-tabletop.md). It has its own executable,
+bundle identifier, scene lifecycle, and build path; none of those are part of
+this SDL3 smoke shell.
+
 ## Reproducible configurations
 
 The device and Simulator slices are deliberately separate:
@@ -229,4 +234,5 @@ inside its application container.
 
 RealityKit, SwiftUI ornaments, immersive spaces, ARKit or custom hand skeletons,
 true 3D rendering, controller-remapping UX, and the guarded full SDL3 gameplay
-engine are explicitly out of scope for this shell.
+engine are explicitly out of scope for this shell. RealityKit, SwiftUI, and
+immersive-space ownership are exercised only by the separate tabletop app.

@@ -26,7 +26,8 @@ SOURCE_DIR=${SOURCE_DIR:A}
 
 mkdir -p "$DEST_DIR" "$DISABLED_DIR"
 rsync -a --delete --delete-excluded \
-  --exclude install.mpq \
+  --exclude '*.[Mm][Pp][Qq]' \
+  --exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]' \
   --exclude .DS_Store \
   --exclude maps/ftm/ \
   --exclude maps/fl/ \

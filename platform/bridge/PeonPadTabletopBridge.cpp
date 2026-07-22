@@ -27,6 +27,7 @@
 #ifdef PEONPAD_TABLETOP
 #include "commands.h"
 #include "fow.h"
+#include "interface.h"
 #include "map.h"
 #include "player.h"
 #include "stratagus.h"
@@ -341,6 +342,15 @@ void peonpad_tabletop_drain_commands(void)
 {
     if (!g_bridge.initialized) return;
     if (!ThisPlayer) return;
+
+    // The visionOS tabletop drives the engine headlessly with no in-engine
+    // pause UI. Some scenarios start paused (briefing/objectives) waiting for a
+    // key the headless host never sends, which would freeze GameCycle at 0.
+    // Keep the simulation advancing so snapshots reflect live gameplay and
+    // command round-trips are visible; also clear any cycle-skip left by
+    // replay/fast-forward. This only affects the tabletop bridge build.
+    if (GamePaused) GamePaused = false;
+    if (SkipGameCycle >= 1) SkipGameCycle = 0;
 
     std::vector<PeonPadCommand> batch;
     {

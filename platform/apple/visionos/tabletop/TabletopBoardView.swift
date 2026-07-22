@@ -191,6 +191,9 @@ struct TabletopBoardView: View {
         if previousSnapshot == nil {
             tileEntities = TabletopBoardBuilder.addSurface(
                 to: boardRoot, snapshot: next, fit: fit, resolver: assetResolver)
+            tabletopEngineLog("[Tabletop] board built from first snapshot: "
+                + "map=\(next.mapSize.width)x\(next.mapSize.height) "
+                + "tiles=\(tileEntities.count) units=\(next.units.count)")
         } else {
             TabletopBoardBuilder.updateTerrainTiles(diff.changedTerrainTiles, in: tileEntities)
             TabletopBoardBuilder.updateFogTiles(diff.changedFogTiles, in: tileEntities)

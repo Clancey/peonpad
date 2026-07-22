@@ -15,6 +15,14 @@
 // Nothing here imports SwiftUI, RealityKit, or UIKit.
 import Foundation
 
+/// Writes a diagnostic line to stderr (unbuffered), so engine-boot diagnostics
+/// from the app interleave with the engine's own stderr output instead of being
+/// lost to stdout block-buffering when launched under a pipe.
+@inline(__always)
+func tabletopEngineLog(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
 // MARK: - C snapshot → EngineSnapshot shim
 
 extension EngineSnapshot {
@@ -128,6 +136,7 @@ public final class EngineTabletopTransport: TabletopTransport, @unchecked Sendab
         return AsyncStream { continuation in
             let task = Task.detached {
                 var lastGeneration: UInt64? = nil
+                var yielded = 0
                 while !Task.isCancelled {
                     if let cSnap = peonpad_tabletop_latest_snapshot() {
                         let engineSnapshot = EngineSnapshot(cSnapshot: cSnap)
@@ -137,11 +146,21 @@ public final class EngineTabletopTransport: TabletopTransport, @unchecked Sendab
                             do {
                                 let ui = try TabletopSnapshotConverter.convert(
                                     engineSnapshot, expectedABIVersion: expected)
+                                // Diagnostic evidence that live engine snapshots
+                                // reach the board (first one, then periodically).
+                                if yielded == 0 || yielded % 120 == 0 {
+                                    tabletopEngineLog("[EngineTabletop] snapshot gen=\(ui.version)/"
+                                        + "\(engineSnapshot.generation) "
+                                        + "map=\(ui.mapSize.width)x\(ui.mapSize.height) "
+                                        + "units=\(ui.units.count) "
+                                        + "types=\(engineSnapshot.unitTypes.count)")
+                                }
+                                yielded += 1
                                 continuation.yield(ui)
                             } catch {
                                 // Malformed/incompatible snapshot: log and skip
                                 // rather than rendering garbage.
-                                print("[EngineTabletop] ⚠️  dropped snapshot: \(error)")
+                                tabletopEngineLog("[EngineTabletop] ⚠️  dropped snapshot: \(error)")
                             }
                         }
                     }

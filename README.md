@@ -289,6 +289,18 @@ Set `PEONPAD_VISION_SIMULATOR_UDID` to select a specific installed Vision Pro
 simulator. Simulator launch proves build and compatibility-runtime startup
 only. Eye/hand targeting, indirect-pointer ergonomics, sustained performance,
 audio, lifecycle, and all gameplay controls still require Vision Pro hardware.
+
+visionOS never exposes continuous eye-gaze coordinates to applications. The
+compatibility build instead moves the game pointer to the system-revealed target
+when a pinch begins, so one gaze-and-pinch activates that point. It also reserves
+space for a gaze-targetable UIKit control dock with camera arrows, additive
+selection, a one-shot context-command mode, Back, and Menu.
+
+For a physical Vision Pro Xcode project with the same dock enabled:
+
+```sh
+PEONPAD_IOS_CONTROL_DOCK=ON ./scripts/generate-ios-xcode.sh
+```
 </details>
 
 <details>

@@ -1,5 +1,6 @@
 #include "controller_input.h"
 #include "input_intent.h"
+#include "PeonPadIOSControlState.h"
 #include "sdl_controller_adapter.h"
 #include "sdl_input_adapter.h"
 
@@ -366,6 +367,62 @@ void TestSourceSpecificTouchCancellationRetainsMouse()
 	assert(target.EffectiveIntents.size() == 2);
 	assert(target.EffectiveIntents.back().Phase == InputIntentPhase::Cancel);
 	assert(!target.Ownership.HasAnyOwner(InputPrimaryButton));
+}
+
+void TestVisionControlButtonPairing()
+{
+	PeonPadIOSControlState controls;
+	assert(controls.MapPointerButton(InputPrimaryButton, true)
+	       == InputPrimaryButton);
+	assert(controls.MapPointerButton(InputPrimaryButton, false)
+	       == InputPrimaryButton);
+
+	controls.ToggleContext();
+	assert(controls.IsContextArmed());
+	assert(controls.MapPointerButton(InputPrimaryButton, true)
+	       == InputContextButton);
+	assert(!controls.IsContextArmed());
+	assert(controls.MapPointerButton(InputPrimaryButton, false)
+	       == InputContextButton);
+
+	assert(controls.MapPointerButton(InputPrimaryButton, true)
+	       == InputPrimaryButton);
+	controls.ToggleContext();
+	assert(controls.MapPointerButton(InputPrimaryButton, false)
+	       == InputPrimaryButton);
+	assert(controls.IsContextArmed());
+	assert(controls.MapPointerButton(InputPrimaryButton, true)
+	       == InputContextButton);
+	controls.ResetGesture();
+	assert(!controls.IsContextArmed());
+	assert(controls.MapPointerButton(InputPrimaryButton, false)
+	       == InputPrimaryButton);
+}
+
+void TestVisionControlAdditiveSelection()
+{
+	PeonPadIOSControlState controls;
+	const int existingModifier = 1 << 4;
+	assert(controls.ApplyPointerModifiers(existingModifier, true)
+	       == existingModifier);
+	assert(controls.ApplyPointerModifiers(existingModifier, false)
+	       == existingModifier);
+
+	controls.ToggleAdditive();
+	assert(controls.IsAdditiveEnabled());
+	const int pressed = controls.ApplyPointerModifiers(existingModifier, true);
+	assert(pressed & existingModifier);
+	assert(pressed & InputModifierAdditiveSelection);
+	assert(controls.ApplyPointerModifiers(0, false)
+	       == InputModifierAdditiveSelection);
+	assert(controls.IsAdditiveEnabled());
+
+	controls.ApplyPointerModifiers(0, true);
+	controls.ResetGesture();
+	assert(controls.ApplyPointerModifiers(0, false) == 0);
+	assert(controls.IsAdditiveEnabled());
+	controls.ToggleAdditive();
+	assert(!controls.IsAdditiveEnabled());
 }
 
 void TestTwoFingerContextAction()
@@ -789,6 +846,8 @@ int main(int argc, char **)
 	TestReversePointerOwnershipAndContextButton();
 	TestFocusCancellationClearsAllButtonOwners();
 	TestSourceSpecificTouchCancellationRetainsMouse();
+	TestVisionControlButtonPairing();
+	TestVisionControlAdditiveSelection();
 	TestTwoFingerContextAction();
 	TestContextMovementTolerance();
 	TestPendingContextCancellation();

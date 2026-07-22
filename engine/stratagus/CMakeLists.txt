@@ -53,6 +53,7 @@ set(PEONPAD_IOS_DATA_DIR "" CACHE PATH "Game data copied into the PeonPad iOS bu
 set(PEONPAD_IOS_LAUNCH_IMAGE "" CACHE FILEPATH "PeonPad launch image copied into the iOS bundle")
 set(PEONPAD_IOS_ICON_DIR "" CACHE PATH "PeonPad iPad icon files copied into the iOS bundle")
 set(PEONPAD_APPLE_PLATFORM_DIR "" CACHE PATH "PeonPad Apple platform integration sources")
+option(PEONPAD_IOS_CONTROL_DOCK "Add PeonPad gaze-targetable touch controls" OFF)
 option(BUILD_VENDORED_SDL OFF)
 option(BUILD_VENDORED_MEDIA_LIBS OFF)
 option(DOWNLOAD_FREEPATS OFF)
@@ -860,6 +861,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 	list(APPEND stratagus_SRCS
 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadViewportGeometry.cpp"
 		"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSViewport.mm")
+	if(PEONPAD_IOS_CONTROL_DOCK)
+		if(NOT EXISTS "${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
+			message(FATAL_ERROR "PEONPAD_IOS_CONTROL_DOCK requires PeonPadIOSControls.mm")
+		endif()
+		add_definitions(-DPEONPAD_IOS_CONTROL_DOCK=1)
+		list(APPEND stratagus_SRCS
+			"${PEONPAD_APPLE_PLATFORM_DIR}/ios/PeonPadIOSControls.mm")
+	endif()
 	include_directories("${PEONPAD_APPLE_PLATFORM_DIR}/ios")
 elseif(APPLE)
 	add_definitions(-DUSE_MAC)

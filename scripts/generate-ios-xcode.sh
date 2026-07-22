@@ -9,7 +9,16 @@ BUILD_DIR=${BUILD_DIR:A}
 DATA_DIR=${PEONPAD_IOS_DATA_DIR:-$ROOT_DIR/build/ios-wc2-data}
 TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-arm64.cmake"
 HOST_TOLUA=${STRATAGUS_HOST_TOLUAPP:-$ROOT_DIR/build/macos/engine/lua/src/lua-build/toluapp}
+CONTROL_DOCK=${PEONPAD_IOS_CONTROL_DOCK:-OFF}
 MODE=public
+
+case "$CONTROL_DOCK" in
+  ON|OFF) ;;
+  *)
+    print -u2 "PEONPAD_IOS_CONTROL_DOCK must be ON or OFF"
+    exit 2
+    ;;
+esac
 
 if (( $# > 1 )) || { (( $# == 1 )) && [[ "$1" != "--maintainer" ]]; }; then
   print -u2 "Usage: ./scripts/generate-ios-xcode.sh [--maintainer]"
@@ -77,6 +86,7 @@ cmake --fresh -S "$ROOT_DIR/engine/stratagus" -B "$BUILD_DIR" \
   -DWITH_STACKTRACE=OFF \
   -DHAVE_STRCPYS=OFF \
   -DHAVE_STRNCPYS=OFF \
+  -DPEONPAD_IOS_CONTROL_DOCK="$CONTROL_DOCK" \
   -DSTRATAGUS_HOST_TOLUAPP="$HOST_TOLUA" \
   -DPEONPAD_IOS_INFO_PLIST="$ROOT_DIR/platform/apple/ios/Info.plist.in" \
   -DPEONPAD_IOS_DATA_DIR="$DATA_DIR" \
@@ -95,6 +105,7 @@ fi
 print "PeonPad native Xcode project generated:"
 print "  $BUILD_DIR/stratagus.xcodeproj"
 print "  data: $DATA_DIR"
+print "  control dock: $CONTROL_DOCK"
 print
 print "Open it in Xcode, select the stratagus target, choose your Personal Team"
 print "under Signing & Capabilities, select the connected iPad, then press Run."

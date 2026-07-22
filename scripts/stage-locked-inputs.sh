@@ -167,6 +167,7 @@ STRATAGUS_IOS_LAUNCH_PATCH="$ROOT_DIR/patches/stratagus/0006-ios-launch-image-re
 STRATAGUS_HOST_TOLUA_PATCH="$ROOT_DIR/patches/stratagus/0007-build-host-toluapp.patch"
 STRATAGUS_INPUT_INTENT_PATCH="$ROOT_DIR/patches/stratagus/0008-input-intent-router.patch"
 STRATAGUS_CONTROLLER_INPUT_PATCH="$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
+STRATAGUS_VISION_CONTROLS_PATCH="$ROOT_DIR/patches/stratagus/0010-visionos-indirect-controls.patch"
 WARGUS_PATCH="$ROOT_DIR/patches/wargus/0001-xcode-26-apple-vendored-deps.patch"
 WARGUS_IOS_PATCH="$ROOT_DIR/patches/wargus/0002-ios-data-layer-library.patch"
 ALEONA_KOTH_PATCH="$ROOT_DIR/patches/aleonas-tales/0001-fix-king-of-the-hill-map-syntax.patch"
@@ -252,6 +253,13 @@ print "PATCHED Stratagus with the PeonPad input-intent router"
 patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
   < "$STRATAGUS_CONTROLLER_INPUT_PATCH"
 print "PATCHED Stratagus with PeonPad game-controller input"
+[[ -f "$STRATAGUS_VISION_CONTROLS_PATCH" ]] || {
+  print -u2 "required Stratagus Vision controls patch is missing"
+  exit 1
+}
+patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
+  < "$STRATAGUS_VISION_CONTROLS_PATCH"
+print "PATCHED Stratagus with PeonPad Vision indirect controls"
 export_repository "Wargus" "sources.wargus" \
   "$WARGUS_SOURCE" "$ROOT_DIR/game/wargus"
 [[ -f "$WARGUS_PATCH" ]] || {

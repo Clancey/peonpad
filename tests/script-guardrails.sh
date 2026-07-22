@@ -42,6 +42,12 @@ fi
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
+rg -q 'PEONPAD_IOS_CONTROL_DOCK=ON' \
+  "$ROOT_DIR/scripts/build-vision-compat-simulator.sh"
+rg -q 'PEONPAD_IOS_CONTROL_DOCK.*OFF' \
+  "$ROOT_DIR/scripts/generate-ios-xcode.sh"
+rg -q 'indirectPointerMoving:touch' \
+  "$ROOT_DIR/engine/stratagus/third-party/SDL/src/video/uikit/SDL_uikitview.m"
 IOS_DATA_STAGE_SCRIPT="$ROOT_DIR/scripts/stage-ios-wc2-test-data.sh"
 rg -Fq -- "--exclude '*.[Mm][Pp][Qq]'" "$IOS_DATA_STAGE_SCRIPT"
 rg -Fq -- \
@@ -322,6 +328,7 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
+  0010-visionos-indirect-controls.patch \
   0009-game-controller-input.patch \
   0008-input-intent-router.patch \
   0007-build-host-toluapp.patch \
@@ -350,6 +357,8 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0008-input-intent-router.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0010-visionos-indirect-controls.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
 cmake -E remove_directory "$PATCH_CHAIN_ROOT"

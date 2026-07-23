@@ -1297,11 +1297,15 @@ static int CclGetUnitVariable(lua_State *l)
 
 	lua_pushvalue(l, 1);
 	CUnit *unit = CclGetUnit(l);
-	if (unit == nullptr) {
+	lua_pop(l, 1);
+	// A destroyed unit has had Orders.clear() called; accessing CurrentOrder()
+	// inside UpdateUnitVariables would be an out-of-bounds vector read (SIGSEGV).
+	// Return nil so the caller can detect the dead reference.
+	if (unit == nullptr || unit->Destroyed) {
+		lua_pushnil(l);
 		return 1;
 	}
 	UpdateUnitVariables(*unit);
-	lua_pop(l, 1);
 
 	const std::string_view value = LuaToString(l, 2);
 	if (value == "RegenerationRate") {

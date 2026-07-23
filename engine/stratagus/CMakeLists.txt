@@ -560,6 +560,7 @@ set(stratagus_tests_SRCS
 	tests/stratagus/test_luacallback.cpp
 	tests/stratagus/test_missile_fire.cpp
 	tests/stratagus/test_resource_cleanup.cpp
+	tests/stratagus/test_script_unit.cpp
 	tests/stratagus/test_trigger.cpp
 	tests/stratagus/test_unitptr.cpp
 	tests/stratagus/test_util.cpp
@@ -1241,6 +1242,11 @@ if(BUILD_TESTING)
 
 	add_executable(stratagus_tests ${stratagus_tests_SRCS})
 	target_link_libraries(stratagus_tests PUBLIC stratagus_lib doctest)
+	if(APPLE)
+		set_target_properties(stratagus_tests PROPERTIES
+			LINK_FLAGS "-ObjC -framework AppKit -framework Carbon -framework AudioToolbox -framework Cocoa -framework CoreAudio -framework CoreGraphics -framework CoreFoundation -framework CoreVideo -framework CoreHaptics -framework GameController -framework ForceFeedback -framework IOKit -framework Metal -liconv"
+		)
+	endif()
 	doctest_discover_tests(stratagus_tests)
 
 	if(PEONPAD_USE_SDL3 AND NOT CMAKE_CROSSCOMPILING)

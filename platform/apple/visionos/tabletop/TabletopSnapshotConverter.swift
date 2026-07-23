@@ -63,7 +63,7 @@ public enum TabletopSnapshotConverter {
                     tileX: x, tileZ: y, kind: terrainKind(cell.terrainClass),
                     graphicIndex: Int(cell.graphicIndex)))
                 fog.append(TabletopFogTile(
-                    tileX: x, tileZ: y, isRevealed: isRevealed(cell.fogState)))
+                    tileX: x, tileZ: y, visibility: fogVisibility(cell.fogState)))
             }
         }
 
@@ -149,11 +149,23 @@ public enum TabletopSnapshotConverter {
     }
 
     /// A tile is drawn as revealed when it is currently visible or was
-    /// previously explored; only never-seen tiles stay fogged.
+    /// previously explored; only never-seen tiles stay fogged. Retained as the
+    /// binary projection of `fogVisibility` for backward-compatible callers.
     public static func isRevealed(_ fogState: UInt8) -> Bool {
         switch EngineFogState(rawValue: fogState) {
         case .visible, .explored: return true
         case .unseen, .none:      return false
+        }
+    }
+
+    /// Maps the engine fog byte to the canonical three-state UI visibility. An
+    /// unknown/out-of-range byte is treated as `.unexplored` (safest: hides
+    /// rather than discloses).
+    public static func fogVisibility(_ fogState: UInt8) -> TabletopFogVisibility {
+        switch EngineFogState(rawValue: fogState) {
+        case .visible:       return .visible
+        case .explored:      return .explored
+        case .unseen, .none: return .unexplored
         }
     }
 

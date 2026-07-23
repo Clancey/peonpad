@@ -55,16 +55,45 @@ public struct TabletopTerrainTile: Codable, Equatable {
     }
 }
 
-/// The fog-of-war state for one board tile. `isRevealed` is true when a unit
-/// with the local player's team has explored that tile.
+/// The three canonical fog-of-war states for one board tile, mirroring the
+/// engine's `EngineFogState` / `PeonPadFogState` (ABI). Ordered by increasing
+/// knowledge so `>=` comparisons read naturally.
+public enum TabletopFogVisibility: UInt8, Codable, Equatable, CaseIterable {
+    /// Never explored — rendered as an opaque dark shroud.
+    case unexplored = 0
+    /// Explored previously but not currently in sight — rendered dim/translucent.
+    case explored = 1
+    /// Currently within line of sight — rendered clear (no veil).
+    case visible = 2
+}
+
+/// The fog-of-war state for one board tile. Carries the full three-state
+/// `visibility`; `isRevealed` remains as a binary convenience (explored OR
+/// visible) so existing binary callers and tests keep working.
 public struct TabletopFogTile: Codable, Equatable {
     public var tileX: Int
     public var tileZ: Int
-    public var isRevealed: Bool
-    public init(tileX: Int, tileZ: Int, isRevealed: Bool) {
+    /// Canonical three-state visibility from the local player's POV.
+    public var visibility: TabletopFogVisibility
+
+    /// Binary reveal state: `true` when the tile is explored or visible. Setting
+    /// it is lossy (maps to `.visible`/`.unexplored`); prefer `visibility`.
+    public var isRevealed: Bool {
+        get { visibility != .unexplored }
+        set { visibility = newValue ? .visible : .unexplored }
+    }
+
+    public init(tileX: Int, tileZ: Int, visibility: TabletopFogVisibility) {
         self.tileX = tileX
         self.tileZ = tileZ
-        self.isRevealed = isRevealed
+        self.visibility = visibility
+    }
+
+    /// Backward-compatible binary initializer: `isRevealed` maps to `.visible`,
+    /// otherwise `.unexplored`.
+    public init(tileX: Int, tileZ: Int, isRevealed: Bool) {
+        self.init(tileX: tileX, tileZ: tileZ,
+                  visibility: isRevealed ? .visible : .unexplored)
     }
 }
 
@@ -263,6 +292,12 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
     /// Fog state at the given tile. Off-map tiles are treated as unrevealed.
     public func fog(atTileX x: Int, tileZ z: Int) -> Bool {
         fogMask.first(where: { $0.tileX == x && $0.tileZ == z })?.isRevealed ?? false
+    }
+
+    /// Canonical three-state fog visibility at the given tile. Off-map tiles are
+    /// treated as `.unexplored`.
+    public func fogVisibility(atTileX x: Int, tileZ z: Int) -> TabletopFogVisibility {
+        fogMask.first(where: { $0.tileX == x && $0.tileZ == z })?.visibility ?? .unexplored
     }
 
     /// The currently selected unit, but only if it is alive (HP > 0). Dead

@@ -147,6 +147,37 @@ func testFogMapping() {
                 "explored -> revealed")
     expectEqual(TabletopSnapshotConverter.isRevealed(EngineFogState.visible.rawValue), true,
                 "visible -> revealed")
+
+    // Canonical three-state mapping preserves the explored (dim) state.
+    expectEqual(TabletopSnapshotConverter.fogVisibility(EngineFogState.unseen.rawValue), .unexplored,
+                "unseen -> unexplored")
+    expectEqual(TabletopSnapshotConverter.fogVisibility(EngineFogState.explored.rawValue), .explored,
+                "explored -> explored (not collapsed to visible)")
+    expectEqual(TabletopSnapshotConverter.fogVisibility(EngineFogState.visible.rawValue), .visible,
+                "visible -> visible")
+    // An unknown fog byte must hide (safest), never disclose.
+    expectEqual(TabletopSnapshotConverter.fogVisibility(200), .unexplored,
+                "unknown fog byte -> unexplored (no disclosure)")
+}
+
+func testFogThreeStateConversionPreservesExplored() {
+    let terrain = [
+        EngineTerrainCell(tileIndex: 1, fogState: EngineFogState.visible.rawValue,
+                          terrainClass: EngineTerrainClass.grass.rawValue),
+        EngineTerrainCell(tileIndex: 2, fogState: EngineFogState.explored.rawValue,
+                          terrainClass: EngineTerrainClass.grass.rawValue),
+        EngineTerrainCell(tileIndex: 3, fogState: EngineFogState.unseen.rawValue,
+                          terrainClass: EngineTerrainClass.grass.rawValue),
+    ]
+    let snap = EngineSnapshot(abiVersion: kPeonPadTabletopABIVersion, generation: 1,
+                              mapWidth: 3, mapHeight: 1, terrain: terrain,
+                              units: [], unitTypes: [])
+    guard let result = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "conversion must succeed"); return
+    }
+    expectEqual(result.fogVisibility(atTileX: 0, tileZ: 0), .visible, "cell 0 visible")
+    expectEqual(result.fogVisibility(atTileX: 1, tileZ: 0), .explored, "cell 1 explored (dim)")
+    expectEqual(result.fogVisibility(atTileX: 2, tileZ: 0), .unexplored, "cell 2 unexplored")
 }
 
 func testFullConversionUnitsAndSelection() {
@@ -420,6 +451,7 @@ struct TransportConversionTests {
         testFacingConversion()
         testTerrainClassMapping()
         testFogMapping()
+        testFogThreeStateConversionPreservesExplored()
         testFullConversionUnitsAndSelection()
         testConversionMapsUnknownTypeToEmptyKind()
         testConversionBuildsAssetCatalog()

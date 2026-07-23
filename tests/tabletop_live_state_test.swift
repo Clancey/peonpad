@@ -368,6 +368,29 @@ func testReconcilerDetectsFogChange() {
     expect(!changed!.isRevealed, "changed fog tile carries isRevealed = false")
 }
 
+// MARK: - TabletopBoardReconciler: three-state fog transition detected
+
+func testReconcilerDetectsExploredToVisibleTransition() {
+    // A visible→explored transition (both count as "revealed") must still be
+    // detected, because the diff compares the full three-state visibility. This
+    // is the movement-triggered transition: a tile a unit walked away from goes
+    // from clear to dim without ever passing through unexplored.
+    let before = TabletopGameplaySnapshot.demo()
+    var after = before
+    guard let idx = after.fogMask.firstIndex(where: { $0.visibility == .visible }) else {
+        expect(false, "demo snapshot should have a visible tile"); return
+    }
+    after.fogMask[idx].visibility = .explored
+
+    let diff = TabletopBoardReconciler.diff(from: before, to: after)
+    let changed = diff.changedFogTiles.first(where: {
+        $0.tileX == after.fogMask[idx].tileX && $0.tileZ == after.fogMask[idx].tileZ
+    })
+    expect(changed != nil, "visible→explored transition is detected even though both are 'revealed'")
+    expectEqual(changed?.visibility, .explored, "changed tile carries the explored (dim) state")
+    expect(changed?.isRevealed == true, "explored tile is still revealed")
+}
+
 // MARK: - TabletopBoardReconciler: facing change detected
 
 func testReconcilerDetectsFacingChange() {
@@ -473,6 +496,7 @@ struct TabletopLiveStateTestRunner {
         testReconcilerDetectsUnitAddition()
         testReconcilerDetectsTerrainChange()
         testReconcilerDetectsFogChange()
+        testReconcilerDetectsExploredToVisibleTransition()
         testReconcilerDetectsFacingChange()
 
         // Lifecycle

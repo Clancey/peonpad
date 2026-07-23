@@ -47,7 +47,7 @@ public struct TabletopSnapshotDiff: Equatable {
     public let removedUnitIDs: [String]
     /// Terrain tiles whose `kind` changed — tile material to refresh.
     public let changedTerrainTiles: [TabletopTerrainTile]
-    /// Fog tiles whose `isRevealed` changed — fog overlay to refresh.
+    /// Fog tiles whose `visibility` changed — fog overlay to refresh.
     public let changedFogTiles: [TabletopFogTile]
 
     /// True when the diff carries no changes at all.
@@ -135,12 +135,13 @@ public enum TabletopBoardReconciler {
             return old.kind != tile.kind || old.graphicIndex != tile.graphicIndex
         }
 
-        // -- Fog --
+        // -- Fog -- (compare full three-state visibility so explored↔visible
+        // transitions, not just unexplored↔revealed, refresh the overlay).
         let previousFog = Dictionary(
-            uniqueKeysWithValues: previous.fogMask.map { (tileKey($0.tileX, $0.tileZ), $0.isRevealed) }
+            uniqueKeysWithValues: previous.fogMask.map { (tileKey($0.tileX, $0.tileZ), $0.visibility) }
         )
         let changedFog = next.fogMask.filter { tile in
-            previousFog[tileKey(tile.tileX, tile.tileZ)] != tile.isRevealed
+            previousFog[tileKey(tile.tileX, tile.tileZ)] != tile.visibility
         }
 
         return TabletopSnapshotDiff(

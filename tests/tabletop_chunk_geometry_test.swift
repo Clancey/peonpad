@@ -380,6 +380,59 @@ func testFogMapCGImage() {
     }
 }
 
+// MARK: - Three-state fog
+
+func testFogVisibilityThreeStates() {
+    var fog = TabletopFogMap(mapWidth: 3, mapHeight: 1)
+    fog.setVisibility(.unexplored, tileX: 0, tileZ: 0)
+    fog.setVisibility(.explored,   tileX: 1, tileZ: 0)
+    fog.setVisibility(.visible,    tileX: 2, tileZ: 0)
+
+    expectEq(fog.unexploredCount, 1, "one unexplored tile")
+    expectEq(fog.exploredCount,   1, "one explored tile")
+    expectEq(fog.visibleCount,    1, "one visible tile")
+    // revealed == explored or visible
+    expectEq(fog.revealedCount,   2, "explored + visible count as revealed")
+    expect(!fog.isRevealed(tileX: 0, tileZ: 0), "unexplored is not revealed")
+    expect(fog.isRevealed(tileX: 1, tileZ: 0),  "explored is revealed")
+    expect(fog.isRevealed(tileX: 2, tileZ: 0),  "visible is revealed")
+    expectEq(fog.visibility(tileX: 1, tileZ: 0), .explored, "explored preserved")
+}
+
+func testFogAlphaOrdering() {
+    // Opaque shroud > dim explored veil > clear visible; visible is fully clear.
+    let u = TabletopFogMap.alpha(for: .unexplored)
+    let e = TabletopFogMap.alpha(for: .explored)
+    let v = TabletopFogMap.alpha(for: .visible)
+    expect(u > e, "unexplored is more opaque than explored (\(u) > \(e))")
+    expect(e > v, "explored is dimmer-but-present vs clear visible (\(e) > \(v))")
+    expectEq(v, 0, "visible tiles carry no veil")
+    expect(e > 0, "explored tiles keep a dim veil (not fully clear)")
+}
+
+func testFogSetRevealedIsBinaryProjection() {
+    // The retained binary API maps to the extreme states only.
+    var fog = TabletopFogMap(mapWidth: 2, mapHeight: 1)
+    fog.setRevealed(true, tileX: 0, tileZ: 0)
+    fog.setRevealed(false, tileX: 1, tileZ: 0)
+    expectEq(fog.visibility(tileX: 0, tileZ: 0), .visible, "setRevealed(true) → visible")
+    expectEq(fog.visibility(tileX: 1, tileZ: 0), .unexplored, "setRevealed(false) → unexplored")
+}
+
+func testFogTileVisibilityAndRevealedCompat() {
+    // Three-state init round-trips; isRevealed stays a binary projection with a
+    // (lossy) setter that keeps existing binary callers working.
+    var tile = TabletopFogTile(tileX: 3, tileZ: 4, visibility: .explored)
+    expect(tile.isRevealed, "explored tile reads as revealed")
+    tile.isRevealed = false
+    expectEq(tile.visibility, .unexplored, "isRevealed=false → unexplored")
+    tile.isRevealed = true
+    expectEq(tile.visibility, .visible, "isRevealed=true → visible")
+    // Binary initializer still works.
+    let binary = TabletopFogTile(tileX: 0, tileZ: 0, isRevealed: true)
+    expectEq(binary.visibility, .visible, "binary init true → visible")
+}
+
 // MARK: - Acceptance hold overflow guard
 
 func testAcceptanceHoldSleepDurationIsFinite() {
@@ -523,6 +576,10 @@ struct TabletopChunkGeometryTests {
         testFogMapOutOfBounds()
         testFogMapRevealAll()
         testFogMapCGImage()
+        testFogVisibilityThreeStates()
+        testFogAlphaOrdering()
+        testFogSetRevealedIsBinaryProjection()
+        testFogTileVisibilityAndRevealedCompat()
 
         testEntityCountReduction()
         testAcceptanceHoldSleepDurationIsFinite()

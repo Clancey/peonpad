@@ -313,13 +313,26 @@ public final class TabletopChunkBoard {
 
     /// Updates the fog overlay for changed tiles.  Rebuilds the fog texture for
     /// the affected region; the entire texture is replaced (128 × 128 = tiny).
+    /// Applies the full three-state visibility (so explored↔visible transitions
+    /// show) and logs per-state counts + the transition batch for diagnostics.
     public func updateFogTiles(_ changedTiles: [TabletopFogTile]) {
         guard !changedTiles.isEmpty, var fog = fogMap else { return }
+        var toVisible = 0, toExplored = 0, toUnexplored = 0
         for tile in changedTiles {
-            fog.setRevealed(tile.isRevealed, tileX: tile.tileX, tileZ: tile.tileZ)
+            switch tile.visibility {
+            case .visible:    toVisible += 1
+            case .explored:   toExplored += 1
+            case .unexplored: toUnexplored += 1
+            }
+            fog.setVisibility(tile.visibility, tileX: tile.tileX, tileZ: tile.tileZ)
         }
         fogMap = fog
         applyFogTexture(fog)
+        tabletopEngineLog(
+            "[Tabletop] fog update: \(changedTiles.count) transitions "
+            + "(→visible \(toVisible), →explored \(toExplored), →unexplored \(toUnexplored)); "
+            + "now visible=\(fog.visibleCount) explored=\(fog.exploredCount) "
+            + "unexplored=\(fog.unexploredCount)")
     }
 
     // MARK: - Private: chunk entity construction
@@ -623,9 +636,13 @@ public final class TabletopChunkBoard {
 
         var fog = TabletopFogMap(mapWidth: mapW, mapHeight: mapH)
         for tile in snapshot.fogMask {
-            fog.setRevealed(tile.isRevealed, tileX: tile.tileX, tileZ: tile.tileZ)
+            fog.setVisibility(tile.visibility, tileX: tile.tileX, tileZ: tile.tileZ)
         }
         fogMap = fog
+        tabletopEngineLog(
+            "[Tabletop] fog init: visible=\(fog.visibleCount) "
+            + "explored=\(fog.exploredCount) unexplored=\(fog.unexploredCount) "
+            + "of \(mapW * mapH) tiles")
 
         // The fog is a per-tile mesh that follows the terrain relief: each tile
         // quad floats a fixed gap above that tile's own terrain height, so the

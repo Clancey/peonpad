@@ -33,6 +33,8 @@ mkdir -p "${TEST_BINARY:h}"
 
 swiftc \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopMapFit.swift" \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopGestureState.swift" \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopGameplayState.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopChunkGeometry.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopFogMap.swift" \
   "$ROOT_DIR/tests/tabletop_chunk_geometry_test.swift" \

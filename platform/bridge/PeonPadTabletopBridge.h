@@ -76,7 +76,20 @@ extern "C" {
 /// the UI resolves real art from the staged read-only data directory at runtime
 /// and never embeds proprietary assets.  A v2 consumer must discard a v3
 /// snapshot (the version differs), so struct growth is safe.
-#define PEONPAD_TABLETOP_ABI_VERSION 3u
+///
+/// ABI v4 (render-category + footprint extension of v3):
+///   • PeonPadUnitType: appends `render_category` (PeonPadRenderCategory:
+///     mobile / building / resource, sourced from CUnitType::Building and
+///     GivesResource) and the unit type's tile footprint `tile_width` /
+///     `tile_height` (from CUnitType::TileWidth/TileHeight), plus a reserved
+///     pad.  v3 offsets (through team_color_count) are unchanged; the struct
+///     grows from 172 to 176 bytes.  This lets the UI render buildings and
+///     resources at their true map footprint/scale and keep them map-oriented
+///     (they are non-directional, so they never re-orient toward the camera),
+///     while mobile units keep their camera-relative directional sprites.
+/// A v3 consumer must discard a v4 snapshot (the version differs), so the
+/// PeonPadUnitType growth is safe.
+#define PEONPAD_TABLETOP_ABI_VERSION 4u
 
 // ── Hard limits ─────────────────────────────────────────────────────────────
 
@@ -173,6 +186,17 @@ typedef struct PeonPadUnitRecord {
 
 // ── Unit-type registry entry (ABI v2) ─────────────────────────────────────
 
+/// How the UI should present a unit type's art (ABI v4).  Derived from the
+/// engine's CUnitType: a type that gives a resource is a RESOURCE (gold mine,
+/// oil patch), an otherwise-Building type is a BUILDING, everything else is a
+/// MOBILE unit.  Buildings and resources render at their tile footprint and
+/// stay map-oriented; mobile units get camera-relative directional sprites.
+typedef enum PeonPadRenderCategory {
+    PEONPAD_RENDER_MOBILE   = 0, ///< A mobile unit (footman, grunt, peon, ...).
+    PEONPAD_RENDER_BUILDING = 1, ///< A building (town hall, farm, barracks, ...).
+    PEONPAD_RENDER_RESOURCE = 2, ///< A resource source (gold mine, oil patch).
+} PeonPadRenderCategory;
+
 /// Maps a unit record's `type_id` to a stable engine ident string (e.g.
 /// "unit-footman", "unit-grunt").  Each snapshot carries the set of types
 /// referenced by its units so the UI can resolve real art via
@@ -196,6 +220,11 @@ typedef struct PeonPadUnitType {
                              ///< the other three (Warcraft II convention).
     uint8_t  team_color_start; ///< First palette index remapped for team color.
     uint8_t  team_color_count; ///< Number of palette entries remapped (0 if none).
+    // ── ABI v4 render-category + footprint (engine-owned, from CUnitType) ──
+    uint8_t  render_category;  ///< PeonPadRenderCategory (mobile/building/resource).
+    uint8_t  tile_width;       ///< Footprint width in map tiles (0 ⇒ treat as 1).
+    uint8_t  tile_height;      ///< Footprint height in map tiles (0 ⇒ treat as 1).
+    uint8_t  _pad4;            ///< Must be zero; reserved for future payload (ABI v4).
 } PeonPadUnitType;
 
 // ── Tileset descriptor (ABI v3) ───────────────────────────────────────────

@@ -35,6 +35,13 @@ struct TabletopUnitSpec {
     var tint: UIColor
     /// Engine unit-type ident (e.g. "unit-footman") for asset resolution.
     var unitKind: String = ""
+    /// Render category (ABI v4). Buildings/resources render at their footprint
+    /// and stay map-oriented; mobile units keep camera-relative directional art.
+    var renderCategory: TabletopRenderCategory = .mobile
+    /// Tile footprint (ABI v4); at least 1×1. Buildings/resources scale their
+    /// billboard to span this many tiles.
+    var footprintWidth: Int = 1
+    var footprintHeight: Int = 1
 }
 
 enum TabletopBoardMetrics {
@@ -147,10 +154,30 @@ final class TabletopLiveUnit {
 
         // Scale unit body/quad with the fitted tile size so units stay
         // proportional as the map grows and tiles shrink, with a floor so units
-        // stay readable (not tiny) even on large maps.
+        // stay readable (not tiny) even on large maps. Buildings/resources are
+        // sized to span their tile footprint instead, so a 4×4 town hall reads
+        // as much larger than a 1×1 footman and covers the tiles it occupies.
         let scale = max(fit.tileSize / TabletopBoardMetrics.referenceTileSize, 0.34)
-        let unitHeight = TabletopBoardMetrics.unitHeight * scale
-        let unitRadius = TabletopBoardMetrics.unitRadius * scale
+        let isStructure = spec.renderCategory != .mobile
+        let footTiles = Float(max(spec.footprintWidth, spec.footprintHeight))
+        let unitHeight: Float
+        let unitRadius: Float
+        let quadWidth:  Float
+        let quadHeight: Float
+        if isStructure {
+            // Footprint span in board units; the billboard fills its footprint
+            // and stands roughly as tall as its larger tile dimension.
+            let span = fit.tileSize * footTiles
+            unitRadius = span * 0.5
+            unitHeight = span * 1.05
+            quadWidth  = fit.tileSize * Float(max(1, spec.footprintWidth)) * 0.98
+            quadHeight = unitHeight
+        } else {
+            unitHeight = TabletopBoardMetrics.unitHeight * scale
+            unitRadius = TabletopBoardMetrics.unitRadius * scale
+            quadWidth  = unitRadius * 1.7
+            quadHeight = unitHeight * 0.85
+        }
 
         let root = Entity()
         root.name = "unit.\(spec.id)"
@@ -177,7 +204,7 @@ final class TabletopLiveUnit {
         root.addChild(body)
 
         let quad = ModelEntity(
-            mesh: .generatePlane(width: unitRadius * 1.7, height: unitHeight * 0.85),
+            mesh: .generatePlane(width: quadWidth, height: quadHeight),
             materials: [translucentUnlitMaterial(spec.tint)]
         )
         quad.name = root.name + ".quad"
@@ -540,7 +567,15 @@ enum TabletopBoardBuilder {
         fit: TabletopMapFit,
         materialProvider: WargusTabletopMaterialProvider? = nil
     ) -> TabletopLiveUnit {
-        let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
+        var spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
+        // Carry the engine-owned render category + tile footprint (ABI v4) from
+        // the sprite descriptor so buildings/resources are sized to their
+        // footprint and stay map-oriented.
+        if let sprite = snapshot.assets?.sprite(forUnitKind: gameplayUnit.kind) {
+            spec.renderCategory = sprite.renderCategory
+            spec.footprintWidth = sprite.footprintWidth
+            spec.footprintHeight = sprite.footprintHeight
+        }
         let liveUnit = TabletopLiveUnit(spec: spec, fit: fit)
         liveUnit.setAlive(gameplayUnit.isAlive)
         liveUnit.setSelected(snapshot.selection.selectedUnitID == gameplayUnit.id)

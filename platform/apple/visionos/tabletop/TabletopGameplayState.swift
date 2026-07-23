@@ -193,6 +193,15 @@ public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
 }
 
 /// One unit type's sprite-sheet descriptor, carried on the snapshot so the
+/// How the render layer presents a unit type (mirrors `EngineRenderCategory`,
+/// ABI v4). Buildings/resources render at their tile footprint and stay
+/// map-oriented; mobile units get camera-relative directional sprites.
+public enum TabletopRenderCategory: String, Codable, Equatable {
+    case mobile
+    case building
+    case resource
+}
+
 /// render layer can locate and tint real sprites keyed by engine ident.
 public struct TabletopUnitSpriteInfo: Codable, Equatable {
     /// Sprite-sheet path relative to the game-data root.
@@ -206,10 +215,17 @@ public struct TabletopUnitSpriteInfo: Codable, Equatable {
     /// Palette span remapped for team color (`teamColorCount == 0` = none).
     public var teamColorStart: Int
     public var teamColorCount: Int
+    /// Render category (ABI v4): mobile / building / resource.
+    public var renderCategory: TabletopRenderCategory
+    /// Tile footprint in map tiles (ABI v4); at least 1×1.
+    public var footprintWidth: Int
+    public var footprintHeight: Int
     public init(
         spritePath: String, frameWidth: Int, frameHeight: Int,
         numDirections: Int, flip: Bool,
-        teamColorStart: Int = 0, teamColorCount: Int = 0
+        teamColorStart: Int = 0, teamColorCount: Int = 0,
+        renderCategory: TabletopRenderCategory = .mobile,
+        footprintWidth: Int = 1, footprintHeight: Int = 1
     ) {
         self.spritePath = spritePath
         self.frameWidth = frameWidth
@@ -218,6 +234,9 @@ public struct TabletopUnitSpriteInfo: Codable, Equatable {
         self.flip = flip
         self.teamColorStart = teamColorStart
         self.teamColorCount = teamColorCount
+        self.renderCategory = renderCategory
+        self.footprintWidth = max(1, footprintWidth)
+        self.footprintHeight = max(1, footprintHeight)
     }
 }
 

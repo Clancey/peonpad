@@ -83,7 +83,10 @@ public enum TabletopSnapshotConverter {
                     numDirections: Int(t.numDirections),
                     flip: t.flip != 0,
                     teamColorStart: Int(t.teamColorStart),
-                    teamColorCount: Int(t.teamColorCount))
+                    teamColorCount: Int(t.teamColorCount),
+                    renderCategory: renderCategory(t.renderCategory),
+                    footprintWidth: Int(t.tileWidth),
+                    footprintHeight: Int(t.tileHeight))
             }
         }
 
@@ -166,6 +169,16 @@ public enum TabletopSnapshotConverter {
         case .visible:       return .visible
         case .explored:      return .explored
         case .unseen, .none: return .unexplored
+        }
+    }
+
+    /// Maps the engine render-category byte (ABI v4) to the UI category. An
+    /// unknown byte is treated as `.mobile`.
+    public static func renderCategory(_ raw: UInt8) -> TabletopRenderCategory {
+        switch EngineRenderCategory(rawValue: raw) {
+        case .building:    return .building
+        case .resource:    return .resource
+        case .mobile, .none: return .mobile
         }
     }
 

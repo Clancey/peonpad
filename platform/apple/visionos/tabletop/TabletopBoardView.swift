@@ -292,7 +292,10 @@ struct TabletopBoardView: View {
             let live = TabletopBoardBuilder.addUnit(
                 unit, to: boardRoot, snapshot: next, fit: fit,
                 materialProvider: materialProvider)
-            live.root.position = unitPosition(fit: fit, tileX: unit.tileX, tileZ: unit.tileZ)
+            let fp = footprint(for: unit, in: next)
+            live.root.position = unitPosition(
+                fit: fit, tileX: unit.tileX, tileZ: unit.tileZ,
+                footprintWidth: fp.w, footprintHeight: fp.h)
             liveUnitsByID[unit.id] = live
         }
 
@@ -302,7 +305,10 @@ struct TabletopBoardView: View {
                   let unit = next.units.first(where: { $0.id == unitDiff.id }) else { continue }
 
             if unitDiff.positionChanged {
-                live.root.position = unitPosition(fit: fit, tileX: unit.tileX, tileZ: unit.tileZ)
+                let fp = footprint(for: unit, in: next)
+                live.root.position = unitPosition(
+                    fit: fit, tileX: unit.tileX, tileZ: unit.tileZ,
+                    footprintWidth: fp.w, footprintHeight: fp.h)
             }
             if unitDiff.facingChanged {
                 live.currentFacingRadians = unit.facingRadians
@@ -515,14 +521,32 @@ struct TabletopBoardView: View {
         applyTransform(newTransform, to: boardRoot)
     }
 
-    /// Board-local position of a unit standing on tile (tileX, tileZ), with its
-    /// feet at that tile's terrain relief height so units sit *on* the terrain
-    /// surface rather than sinking into valleys or floating over highlands.
-    private func unitPosition(fit: TabletopMapFit, tileX: Int, tileZ: Int) -> SIMD3<Float> {
-        var p = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
-        p.y = chunkBoard?.terrainHeight(tileX: tileX, tileZ: tileZ)
+    /// Board-local position of a unit occupying a `footprintWidth`×
+    /// `footprintHeight` footprint whose NW corner is tile (tileX, tileZ). The
+    /// position is the footprint centre (so multi-tile buildings sit centred on
+    /// the tiles they cover, not on their corner), with its feet at the centre
+    /// tile's terrain relief height so it sits *on* the surface.
+    private func unitPosition(
+        fit: TabletopMapFit, tileX: Int, tileZ: Int,
+        footprintWidth: Int = 1, footprintHeight: Int = 1
+    ) -> SIMD3<Float> {
+        let w = max(1, footprintWidth), h = max(1, footprintHeight)
+        let nw = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+        let se = TabletopBoardMetrics.tileCenter(fit, tileX: tileX + w - 1, tileZ: tileZ + h - 1)
+        var p = SIMD3<Float>((nw.x + se.x) / 2, 0, (nw.z + se.z) / 2)
+        let (dx, dz) = TabletopFootprint.centerOffsetTiles(width: w, height: h)
+        let cx = tileX + Int(dx.rounded()), cz = tileZ + Int(dz.rounded())
+        p.y = chunkBoard?.terrainHeight(tileX: cx, tileZ: cz)
             ?? TabletopBoardElevation.terrainSurfaceY
         return p
+    }
+
+    /// The tile footprint of a unit, from its type's ABI v4 descriptor (1×1 when
+    /// unknown / a mobile unit).
+    private func footprint(for unit: TabletopGameplayUnit,
+                           in snapshot: TabletopGameplaySnapshot) -> (w: Int, h: Int) {
+        guard let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return (1, 1) }
+        return (sprite.footprintWidth, sprite.footprintHeight)
     }
 
     private func applyTransform(_ transform: TabletopBoardTransform, to entity: Entity) {

@@ -52,7 +52,7 @@ static void Run(const char *name, bool (*test_fn)())
 
 static bool test_abi_version_constant()
 {
-    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 3u);
+    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 4u);
     return true;
 }
 
@@ -69,11 +69,12 @@ static bool test_struct_sizes()
     //   + sprite_mirror(1) + _pad3(3) = 36 bytes
     EXPECT(sizeof(PeonPadUnitRecord) == 36u);
 
-    // PeonPadUnitType (ABI v3): type_id(2) + _pad(2) + ident(32)
+    // PeonPadUnitType (ABI v4): type_id(2) + _pad(2) + ident(32)
     //   + sprite_path(128) + frame_width(2) + frame_height(2)
     //   + num_directions(1) + flip(1) + team_color_start(1)
-    //   + team_color_count(1) = 172 bytes
-    EXPECT(sizeof(PeonPadUnitType) == 172u);
+    //   + team_color_count(1) + render_category(1) + tile_width(1)
+    //   + tile_height(1) + _pad4(1) = 176 bytes
+    EXPECT(sizeof(PeonPadUnitType) == 176u);
 
     // PeonPadTilesetDescriptor (ABI v3): image_path(128)
     //   + pixel_tile_width(2) + pixel_tile_height(2)
@@ -120,6 +121,9 @@ static bool test_struct_field_offsets()
     EXPECT(offsetof(PeonPadUnitType, flip)             == 169u);
     EXPECT(offsetof(PeonPadUnitType, team_color_start) == 170u);
     EXPECT(offsetof(PeonPadUnitType, team_color_count) == 171u);
+    EXPECT(offsetof(PeonPadUnitType, render_category)  == 172u);
+    EXPECT(offsetof(PeonPadUnitType, tile_width)       == 173u);
+    EXPECT(offsetof(PeonPadUnitType, tile_height)      == 174u);
 
     EXPECT(offsetof(PeonPadTilesetDescriptor, image_path)        == 0u);
     EXPECT(offsetof(PeonPadTilesetDescriptor, pixel_tile_width)  == 128u);
@@ -387,6 +391,10 @@ static bool test_synthetic_v3_asset_descriptors()
     types[0].flip             = 1u;
     types[0].team_color_start = 208u;
     types[0].team_color_count = 4u;
+    // ABI v4: a 4×4 building footprint, resource category.
+    types[0].render_category  = PEONPAD_RENDER_RESOURCE;
+    types[0].tile_width       = 3u;
+    types[0].tile_height      = 3u;
 
     PeonPadTilesetDescriptor tileset{};
     std::snprintf(tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
@@ -423,6 +431,10 @@ static bool test_synthetic_v3_asset_descriptors()
     EXPECT(ut[0].flip == 1u);
     EXPECT(ut[0].team_color_start == 208u);
     EXPECT(ut[0].team_color_count == 4u);
+    // ABI v4 render category + footprint round-trip.
+    EXPECT(ut[0].render_category == PEONPAD_RENDER_RESOURCE);
+    EXPECT(ut[0].tile_width == 3u);
+    EXPECT(ut[0].tile_height == 3u);
 
     // Tileset descriptor round-trips.
     const PeonPadTilesetDescriptor *td = peonpad_snapshot_tileset(s);

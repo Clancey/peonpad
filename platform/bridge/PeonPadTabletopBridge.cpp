@@ -714,6 +714,20 @@ void peonpad_tabletop_publish_snapshot(void)
                 t.flip            = u->Type->Flip ? 1u : 0u;
                 t.team_color_start = static_cast<uint8_t>(PlayerColorIndexStart);
                 t.team_color_count = static_cast<uint8_t>(PlayerColorIndexCount);
+                // ABI v4 render category + tile footprint (engine-owned).
+                // A resource-giving type (gold mine, oil patch) is a RESOURCE;
+                // an otherwise-Building type is a BUILDING; else a MOBILE unit.
+                if (u->Type->GivesResource != 0) {
+                    t.render_category = PEONPAD_RENDER_RESOURCE;
+                } else if (u->Type->Building) {
+                    t.render_category = PEONPAD_RENDER_BUILDING;
+                } else {
+                    t.render_category = PEONPAD_RENDER_MOBILE;
+                }
+                t.tile_width  = static_cast<uint8_t>(
+                    u->Type->TileWidth  > 0 ? u->Type->TileWidth  : 1);
+                t.tile_height = static_cast<uint8_t>(
+                    u->Type->TileHeight > 0 ? u->Type->TileHeight : 1);
                 snap->unit_types.push_back(t);
             }
         }

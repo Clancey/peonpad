@@ -429,6 +429,64 @@ func testConversionBuildsAssetCatalog() {
            "resolved unit team tint for owner 1")
 }
 
+// MARK: - ABI v4 render category + footprint
+
+func testRenderCategoryMapping() {
+    expectEqual(TabletopSnapshotConverter.renderCategory(EngineRenderCategory.mobile.rawValue), .mobile,
+                "mobile maps to mobile")
+    expectEqual(TabletopSnapshotConverter.renderCategory(EngineRenderCategory.building.rawValue), .building,
+                "building maps to building")
+    expectEqual(TabletopSnapshotConverter.renderCategory(EngineRenderCategory.resource.rawValue), .resource,
+                "resource maps to resource")
+    expectEqual(TabletopSnapshotConverter.renderCategory(200), .mobile,
+                "unknown category byte falls back to mobile")
+}
+
+func testConversionCarriesCategoryAndFootprint() {
+    let types = [
+        // A 4×4 human town hall (building), a 3×3 gold mine (resource), and a
+        // 1×1 footman (mobile).
+        EngineUnitType(typeID: 1, ident: "unit-town-hall",
+                       spritePath: "human/buildings/town_hall.png",
+                       frameWidth: 128, frameHeight: 128, numDirections: 1, flip: 0,
+                       renderCategory: EngineRenderCategory.building.rawValue,
+                       tileWidth: 4, tileHeight: 4),
+        EngineUnitType(typeID: 2, ident: "unit-gold-mine",
+                       spritePath: "neutral/buildings/gold_mine.png",
+                       frameWidth: 96, frameHeight: 96, numDirections: 1, flip: 0,
+                       renderCategory: EngineRenderCategory.resource.rawValue,
+                       tileWidth: 3, tileHeight: 3),
+        EngineUnitType(typeID: 3, ident: "unit-footman",
+                       spritePath: "human/units/footman.png",
+                       frameWidth: 72, frameHeight: 72, numDirections: 5, flip: 1,
+                       renderCategory: EngineRenderCategory.mobile.rawValue,
+                       tileWidth: 1, tileHeight: 1),
+    ]
+    let snap = EngineSnapshot(
+        abiVersion: kPeonPadTabletopABIVersion, generation: 1,
+        mapWidth: 1, mapHeight: 1,
+        terrain: [EngineTerrainCell(tileIndex: 0, fogState: 2, terrainClass: 1)],
+        units: [], unitTypes: types)
+    guard let ui = try? TabletopSnapshotConverter.convert(snap),
+          let assets = ui.assets else {
+        expect(false, "v4 snapshot converts with a catalog"); return
+    }
+    let hall = assets.sprite(forUnitKind: "unit-town-hall")
+    expectEqual(hall?.renderCategory, .building, "town hall is a building")
+    expectEqual(hall?.footprintWidth, 4, "town hall footprint width 4")
+    expectEqual(hall?.footprintHeight, 4, "town hall footprint height 4")
+
+    let mine = assets.sprite(forUnitKind: "unit-gold-mine")
+    expectEqual(mine?.renderCategory, .resource, "gold mine is a resource")
+    expectEqual(mine?.footprintWidth, 3, "gold mine footprint 3×3")
+
+    let footman = assets.sprite(forUnitKind: "unit-footman")
+    expectEqual(footman?.renderCategory, .mobile, "footman is mobile")
+    expectEqual(footman?.footprintWidth, 1, "footman footprint 1×1")
+    // Mobile unit keeps its directional sheet.
+    expectEqual(footman?.numDirections, 5, "footman still has 5 directions")
+}
+
 func testConversionOmitsCatalogForProceduralSnapshot() {
     // A snapshot with no tileset and empty sprite paths yields no catalog.
     let snap = makeEngineSnapshot()
@@ -455,6 +513,8 @@ struct TransportConversionTests {
         testFullConversionUnitsAndSelection()
         testConversionMapsUnknownTypeToEmptyKind()
         testConversionBuildsAssetCatalog()
+        testRenderCategoryMapping()
+        testConversionCarriesCategoryAndFootprint()
         testConversionOmitsCatalogForProceduralSnapshot()
         testCommandEncoding()
         testCommandEncodingRejectsBadInput()

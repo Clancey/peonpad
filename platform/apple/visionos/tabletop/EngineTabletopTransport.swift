@@ -82,7 +82,9 @@ extension EngineSnapshot {
                     frameWidth: entry.frame_width, frameHeight: entry.frame_height,
                     numDirections: entry.num_directions, flip: entry.flip,
                     teamColorStart: entry.team_color_start,
-                    teamColorCount: entry.team_color_count))
+                    teamColorCount: entry.team_color_count,
+                    renderCategory: entry.render_category,
+                    tileWidth: entry.tile_width, tileHeight: entry.tile_height))
             }
         }
 

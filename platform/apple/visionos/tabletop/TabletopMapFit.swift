@@ -63,3 +63,16 @@ public struct TabletopMapFit: Equatable {
     /// tiles show a thin seam (matches the demo board's 0.96 inset).
     public var tileQuadSize: Float { tileSize * 0.96 }
 }
+
+/// Pure geometry for a unit type's tile footprint (ABI v4). Framework-free so
+/// the centring math is host-testable. A building's engine `tilePos` is its
+/// north-west corner; this yields the offset to the footprint's geometric
+/// centre so a multi-tile building renders centred on the tiles it covers.
+public enum TabletopFootprint {
+    /// The tile-space offset from a footprint's NW-corner tile to its geometric
+    /// centre. A 1×1 unit has a zero offset; a 3×3 building's centre sits 1 tile
+    /// in on each axis; a 2×2 building's centre sits half a tile in.
+    public static func centerOffsetTiles(width: Int, height: Int) -> (dx: Double, dz: Double) {
+        (Double(max(1, width) - 1) / 2.0, Double(max(1, height) - 1) / 2.0)
+    }
+}

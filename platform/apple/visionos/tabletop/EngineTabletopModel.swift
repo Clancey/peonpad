@@ -15,7 +15,7 @@ import Foundation
 /// `PEONPAD_TABLETOP_ABI_VERSION` in PeonPadTabletopBridge.h. The transport
 /// rejects any engine snapshot whose embedded version differs, rather than
 /// misreading struct fields at a stale layout.
-public let kPeonPadTabletopABIVersion: UInt32 = 3
+public let kPeonPadTabletopABIVersion: UInt32 = 4
 
 /// Fog-of-war state of a single tile (mirrors `PeonPadFogState`).
 public enum EngineFogState: UInt8, Equatable {
@@ -96,8 +96,17 @@ public struct EngineUnitRecord: Equatable {
     }
 }
 
+/// How the UI presents a unit type's art (mirrors `PeonPadRenderCategory`,
+/// ABI v4). Buildings/resources render at their tile footprint and stay
+/// map-oriented; mobile units get camera-relative directional sprites.
+public enum EngineRenderCategory: UInt8, Equatable {
+    case mobile = 0
+    case building = 1
+    case resource = 2
+}
+
 /// One unit-type registry entry (mirrors `PeonPadUnitType`, ABI v2 + v3 sprite
-/// metadata).
+/// metadata + v4 render-category/footprint).
 public struct EngineUnitType: Equatable {
     public var typeID: UInt16
     public var ident: String
@@ -110,11 +119,18 @@ public struct EngineUnitType: Equatable {
     public var flip: UInt8
     public var teamColorStart: UInt8
     public var teamColorCount: UInt8
+    /// Render category (ABI v4): mobile / building / resource.
+    public var renderCategory: UInt8
+    /// Tile footprint width in map tiles (ABI v4); 0 is treated as 1.
+    public var tileWidth: UInt8
+    /// Tile footprint height in map tiles (ABI v4); 0 is treated as 1.
+    public var tileHeight: UInt8
     public init(
         typeID: UInt16, ident: String,
         spritePath: String = "", frameWidth: UInt16 = 0, frameHeight: UInt16 = 0,
         numDirections: UInt8 = 0, flip: UInt8 = 0,
-        teamColorStart: UInt8 = 0, teamColorCount: UInt8 = 0
+        teamColorStart: UInt8 = 0, teamColorCount: UInt8 = 0,
+        renderCategory: UInt8 = 0, tileWidth: UInt8 = 0, tileHeight: UInt8 = 0
     ) {
         self.typeID = typeID
         self.ident = ident
@@ -125,6 +141,9 @@ public struct EngineUnitType: Equatable {
         self.flip = flip
         self.teamColorStart = teamColorStart
         self.teamColorCount = teamColorCount
+        self.renderCategory = renderCategory
+        self.tileWidth = tileWidth
+        self.tileHeight = tileHeight
     }
 }
 

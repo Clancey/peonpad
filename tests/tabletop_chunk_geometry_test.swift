@@ -433,6 +433,19 @@ func testFogTileVisibilityAndRevealedCompat() {
     expectEq(binary.visibility, .visible, "binary init true → visible")
 }
 
+// MARK: - Building footprint centring
+
+func testFootprintCenterOffset() {
+    let a = TabletopFootprint.centerOffsetTiles(width: 1, height: 1)
+    expect(a.dx == 0 && a.dz == 0, "1×1 footprint has zero centre offset")
+    let b = TabletopFootprint.centerOffsetTiles(width: 2, height: 2)
+    expect(b.dx == 0.5 && b.dz == 0.5, "2×2 footprint centres half a tile in")
+    let c = TabletopFootprint.centerOffsetTiles(width: 4, height: 3)
+    expect(c.dx == 1.5 && c.dz == 1.0, "4×3 footprint centre offset (1.5, 1.0)")
+    let d = TabletopFootprint.centerOffsetTiles(width: 0, height: -3)
+    expect(d.dx == 0 && d.dz == 0, "degenerate footprint clamps to 1×1")
+}
+
 // MARK: - Acceptance hold overflow guard
 
 func testAcceptanceHoldSleepDurationIsFinite() {
@@ -580,6 +593,7 @@ struct TabletopChunkGeometryTests {
         testFogAlphaOrdering()
         testFogSetRevealedIsBinaryProjection()
         testFogTileVisibilityAndRevealedCompat()
+        testFootprintCenterOffset()
 
         testEntityCountReduction()
         testAcceptanceHoldSleepDurationIsFinite()

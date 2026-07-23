@@ -441,16 +441,15 @@ struct TabletopBoardView: View {
     // MARK: - Per-frame billboard orientation
 
     private func refreshBillboards() {
-        guard let boardRoot, let headAnchor else { return }
+        guard let boardRoot, let headAnchor, !liveUnitsByID.isEmpty else { return }
         let headBoardPosition = headAnchor.position(relativeTo: boardRoot)
         let viewerBoardPosition = TabletopPoint3D(
             x: Double(headBoardPosition.x),
             y: 0,
             z: Double(headBoardPosition.z)
         )
-        // Trees are viewer-facing billboards too (managed by the chunk board).
-        chunkBoard?.refreshTreeBillboards(viewerBoardPosition: viewerBoardPosition)
-        guard !liveUnitsByID.isEmpty else { return }
+        // Trees face the camera via RealityKit's BillboardComponent (no manual
+        // refresh needed here).
         for unit in liveUnitsByID.values {
             unit.applyDirectionalFrame(viewerBoardPosition: viewerBoardPosition, boardRoot: boardRoot)
         }

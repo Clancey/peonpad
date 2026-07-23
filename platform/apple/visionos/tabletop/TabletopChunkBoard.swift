@@ -489,7 +489,7 @@ public final class TabletopChunkBoard {
         // couple of tiles tall so it reads as a standing tree, not a decal.
         let cardH = max(fit.tileSize * 3.0, 0.014)
         let cardW = max(fit.tileSize * 2.0, 0.010)
-        let mesh  = MeshResource.generatePlane(width: cardW, height: cardH)
+        let mesh  = Self.makeTreeCardMesh(width: cardW, height: cardH)
         // Procedural forest-green until the real forest tile texture decodes.
         let procMat = translucentUnlitMaterial(
             UIColor(hue: 0.34, saturation: 0.55, brightness: 0.32, alpha: 1))
@@ -505,6 +505,10 @@ public final class TabletopChunkBoard {
             e.name = "board.tree.\(tile.tileX).\(tile.tileZ)"
             // Feet on the terrain; the card's centre sits half its height up.
             e.position = SIMD3<Float>(c.x, y + cardH / 2, c.z)
+            // System-driven billboard: RealityKit re-orients the card to face
+            // the real camera every frame (robust in the Simulator, where the
+            // head anchor does not track a moving viewpoint reliably).
+            e.components.set(BillboardComponent())
             boardRoot.addChild(e)
             treeEntities.append((entity: e, x: c.x, z: c.z))
             placed += 1
@@ -525,17 +529,37 @@ public final class TabletopChunkBoard {
             "[Tabletop] trees: forest=\(forest.count) stride=\(stride) billboards=\(placed)")
     }
 
-    /// Re-orients every tree billboard to face the viewer, rotating strictly
-    /// about the board vertical (trees stay upright). Called each frame from the
-    /// board view alongside the unit billboards.
-    public func refreshTreeBillboards(viewerBoardPosition: TabletopPoint3D) {
-        guard !treeEntities.isEmpty else { return }
-        for t in treeEntities {
-            let yaw = TabletopBillboardOrientation.yawFacingViewer(
-                unitBoardPosition: TabletopPoint3D(x: Double(t.x), y: 0, z: Double(t.z)),
-                viewerBoardPosition: viewerBoardPosition)
-            t.entity.orientation = simd_quatf(angle: Float(yaw), axis: [0, 1, 0])
-        }
+    /// A double-sided vertical quad for a tree billboard, centred on the origin,
+    /// with UVs oriented so the (top-down) forest tile texture stands upright
+    /// (v=0 at the top edge, matching the terrain mesh convention) rather than
+    /// upside down. Double-sided so it is never back-face culled regardless of
+    /// which way the billboard turns.
+    private static func makeTreeCardMesh(width: Float, height: Float) -> MeshResource {
+        let hw = width / 2, hh = height / 2
+        let tl = SIMD3<Float>(-hw,  hh, 0)
+        let bl = SIMD3<Float>(-hw, -hh, 0)
+        let br = SIMD3<Float>( hw, -hh, 0)
+        let tr = SIMD3<Float>( hw,  hh, 0)
+        let uvTL = SIMD2<Float>(0, 0), uvBL = SIMD2<Float>(0, 1)
+        let uvBR = SIMD2<Float>(1, 1), uvTR = SIMD2<Float>(1, 0)
+
+        // Front (+Z) then back (−Z), each with its own vertices/normal so the
+        // texture reads upright from both sides.
+        let positions = [tl, bl, br, tr,  tl, bl, br, tr]
+        let normals   = [SIMD3<Float>(0,0,1), .init(0,0,1), .init(0,0,1), .init(0,0,1),
+                         SIMD3<Float>(0,0,-1), .init(0,0,-1), .init(0,0,-1), .init(0,0,-1)]
+        let uvs       = [uvTL, uvBL, uvBR, uvTR,  uvTL, uvBL, uvBR, uvTR]
+        let indices: [UInt32] = [
+            0, 1, 2,  0, 2, 3,        // front, CCW from +Z
+            4, 6, 5,  4, 7, 6,        // back, CCW from −Z
+        ]
+        var desc = MeshDescriptor(name: "treeCard")
+        desc.positions          = MeshBuffer(positions)
+        desc.normals            = MeshBuffer(normals)
+        desc.textureCoordinates = MeshBuffer(uvs)
+        desc.primitives         = .triangles(indices)
+        return (try? MeshResource.generate(from: [desc]))
+            ?? .generatePlane(width: width, height: height)
     }
 
     // MARK: - Private: substrate slab

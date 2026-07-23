@@ -97,6 +97,28 @@ func testTerrainReliefHasVisibleSpread() {
     expectEq(TabletopTerrainRelief.maxHeight, TabletopTerrainRelief.height(.rock), "max = rock")
 }
 
+func testMixedTransitionTilesPreserveMapPlane() {
+    let transitionSlots = [
+        (TabletopTerrainKind.coast, 0x200),
+        (.rock, 0x400),
+        (.forest, 0x700),
+    ]
+    for (kind, tileIndex) in transitionSlots {
+        expectEq(TabletopTerrainRelief.height(kind, tileIndex: tileIndex), 0,
+                 "\(kind) mixed slot \(tileIndex) stays on canonical map plane")
+        expect(TabletopTerrainRelief.isMixedTransition(tileIndex: tileIndex),
+               "\(tileIndex) is recognized as mixed transition art")
+    }
+    expect(TabletopTerrainRelief.height(.water, tileIndex: 0x010) < 0,
+           "solid water retains recessed relief")
+    expect(TabletopTerrainRelief.height(.water, tileIndex: 0x100) < 0,
+           "water-to-water mixed frames retain the recessed water surface")
+    expect(TabletopTerrainRelief.height(.forest, tileIndex: 0x070) > 0,
+           "solid forest retains raised relief")
+    expect(TabletopTerrainRelief.height(.rock, tileIndex: 0x080) > 0,
+           "solid rock retains raised relief")
+}
+
 func testForestStandsUp() {
     // Forest tiles get an upright tree billboard; other classes do not.
     expect(TabletopTerrainRelief.standupHeight(.forest) > 0.02,
@@ -296,6 +318,7 @@ struct TabletopLayersTests {
 
         testTerrainReliefOrdering()
         testTerrainReliefHasVisibleSpread()
+        testMixedTransitionTilesPreserveMapPlane()
         testForestStandsUp()
         testTreeStrideOneWhenUnderCap()
         testTreeStrideBoundsCount()
@@ -315,7 +338,6 @@ struct TabletopLayersTests {
         testReadinessFraction()
 
         testAtlasCompletionGate()
-
         testInitialPlacementIsBelowEyeLevel()
         testInitialPlacementIsObliqueNotFaceOn()
 

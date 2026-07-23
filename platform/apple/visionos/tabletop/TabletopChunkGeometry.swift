@@ -106,12 +106,14 @@ public struct TabletopAtlasSlotMap: Sendable {
                     entries.append((idx, next))
                     next += 1
                 }
+
             } else if nilIdx == nil {
                 nilIdx = next
                 entries.append((nil, next))
                 next += 1
             }
         }
+
         self.indexSlots = idxMap
         self.nilSlot    = nilIdx
         self.slotEntries = entries
@@ -125,6 +127,44 @@ public struct TabletopAtlasSlotMap: Sendable {
             return indexSlots[graphicIndex] ?? nilSlot ?? 0
         }
         return nilSlot ?? 0
+    }
+}
+
+/// Pixel and normalized-UV layout for the horizontal terrain atlas. Each tile
+/// frame is surrounded by replicated horizontal edge pixels so linear filtering
+/// and mip generation cannot sample an unrelated neighbouring frame.
+public struct TabletopTerrainAtlasLayout: Equatable, Sendable {
+    public static let defaultGutterPixels = 4
+
+    public let slotCount: Int
+    public let cellWidth: Int
+    public let gutterPixels: Int
+
+    public init(
+        slotCount: Int,
+        cellWidth: Int,
+        gutterPixels: Int = defaultGutterPixels
+    ) {
+        self.slotCount = max(1, slotCount)
+        self.cellWidth = max(1, cellWidth)
+        self.gutterPixels = max(0, gutterPixels)
+    }
+
+    public var slotStride: Int { cellWidth + 2 * gutterPixels }
+    public var atlasWidth: Int { slotCount * slotStride }
+
+    public func slotOriginX(_ slot: Int) -> Int {
+        min(max(0, slot), slotCount - 1) * slotStride
+    }
+
+    public func contentOriginX(_ slot: Int) -> Int {
+        slotOriginX(slot) + gutterPixels
+    }
+
+    public func contentUVBounds(_ slot: Int) -> (u0: Float, u1: Float) {
+        let width = Float(atlasWidth)
+        let x = Float(contentOriginX(slot))
+        return (x / width, (x + Float(cellWidth)) / width)
     }
 }
 
@@ -151,12 +191,9 @@ public enum TabletopTerrainChunkMeshBuilder {
     /// Builds a flat terrain-chunk mesh in board-local space.
     ///
     /// Each tile contributes 4 vertices (a quad) and 6 indices (2 triangles).
-    /// The UV X axis is divided into `slotMap.slotCount` equal columns — one
-    /// per atlas slot — so the same UV layout works for both the tiny
-    /// procedural-colour texture and the real decoded-tile atlas:
-    ///
-    ///   u ∈ [ slot/N,  (slot+1)/N ]   (horizontal atlas column)
-    ///   v ∈ [ 0,       1          ]   (full tile height)
+    /// The UV X axis addresses the content region inside each padded atlas slot;
+    /// gutters are never sampled directly. The same layout drives both the
+    /// procedural placeholder and the real decoded-tile atlas.
     ///
     /// - Parameters:
     ///   - tiles:   (tileX, tileZ, graphicIndex?) for each tile in the chunk.
@@ -165,7 +202,8 @@ public enum TabletopTerrainChunkMeshBuilder {
     public static func build(
         tiles:   [(tileX: Int, tileZ: Int, graphicIndex: Int?)],
         fit:     TabletopMapFit,
-        slotMap: TabletopAtlasSlotMap
+        slotMap: TabletopAtlasSlotMap,
+        atlasLayout: TabletopTerrainAtlasLayout? = nil
     ) -> TabletopTerrainChunkGeometry {
         let count = tiles.count
         var positions = [SIMD3<Float>](); positions.reserveCapacity(count * 4)
@@ -173,26 +211,25 @@ public enum TabletopTerrainChunkMeshBuilder {
         var uvs       = [SIMD2<Float>](); uvs.reserveCapacity(count * 4)
         var indices   = [UInt32]();       indices.reserveCapacity(count * 6)
 
-        let halfTile = fit.tileSize / 2
-        let N        = Float(slotMap.slotCount)
+        let layout   = atlasLayout ?? TabletopTerrainAtlasLayout(
+            slotCount: slotMap.slotCount, cellWidth: 1, gutterPixels: 0)
         let up       = SIMD3<Float>(0, 1, 0)
 
         for (i, tile) in tiles.enumerated() {
             let base   = UInt32(i * 4)
-            let center = fit.tileCenter(tileX: tile.tileX, tileZ: tile.tileZ)
-            let cx = center.x, cz = center.z
+            let bounds = fit.tileBounds(tileX: tile.tileX, tileZ: tile.tileZ)
 
             // 4 corners: NW(0), NE(1), SE(2), SW(3)
             // N = −Z edge, E = +X edge, S = +Z edge, W = −X edge
-            positions.append(SIMD3<Float>(cx - halfTile, 0, cz - halfTile))  // NW
-            positions.append(SIMD3<Float>(cx + halfTile, 0, cz - halfTile))  // NE
-            positions.append(SIMD3<Float>(cx + halfTile, 0, cz + halfTile))  // SE
-            positions.append(SIMD3<Float>(cx - halfTile, 0, cz + halfTile))  // SW
+            positions.append(SIMD3<Float>(bounds.minX, 0, bounds.minZ))  // NW
+            positions.append(SIMD3<Float>(bounds.maxX, 0, bounds.minZ))  // NE
+            positions.append(SIMD3<Float>(bounds.maxX, 0, bounds.maxZ))  // SE
+            positions.append(SIMD3<Float>(bounds.minX, 0, bounds.maxZ))  // SW
             normals.append(contentsOf: [up, up, up, up])
 
             // Atlas column UV for this tile's slot
-            let s  = Float(slotMap.slot(for: tile.graphicIndex))
-            let u0 = s / N, u1 = (s + 1) / N
+            let slot = slotMap.slot(for: tile.graphicIndex)
+            let (u0, u1) = layout.contentUVBounds(slot)
 
             // NW(u0,0), NE(u1,0), SE(u1,1), SW(u0,1)
             // v=0 → UV top → Metal v=0 → image row 0 → top of tile art
@@ -232,6 +269,7 @@ public enum TabletopTerrainChunkMeshBuilder {
         tiles:      [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)],
         fit:        TabletopMapFit,
         slotMap:    TabletopAtlasSlotMap,
+        atlasLayout: TabletopTerrainAtlasLayout? = nil,
         heightAt:   (Int, Int) -> Float?,
         edgeFloorY: Float
     ) -> TabletopTerrainChunkGeometry {
@@ -240,8 +278,8 @@ public enum TabletopTerrainChunkMeshBuilder {
         var uvs:       [SIMD2<Float>] = []
         var indices:   [UInt32]       = []
 
-        let halfTile = fit.tileSize / 2
-        let N        = Float(slotMap.slotCount)
+        let layout   = atlasLayout ?? TabletopTerrainAtlasLayout(
+            slotCount: slotMap.slotCount, cellWidth: 1, gutterPixels: 0)
         let up       = SIMD3<Float>(0, 1, 0)
         let eps: Float = 1e-5
 
@@ -269,17 +307,16 @@ public enum TabletopTerrainChunkMeshBuilder {
         }
 
         for tile in tiles {
-            let center = fit.tileCenter(tileX: tile.tileX, tileZ: tile.tileZ)
-            let cx = center.x, cz = center.z
+            let bounds = fit.tileBounds(tileX: tile.tileX, tileZ: tile.tileZ)
             let h  = tile.height
-            let s  = Float(slotMap.slot(for: tile.graphicIndex))
-            let u0 = s / N, u1 = (s + 1) / N
+            let slot = slotMap.slot(for: tile.graphicIndex)
+            let (u0, u1) = layout.contentUVBounds(slot)
 
             // Top quad (raised/recessed to the tile height).
-            let nw = SIMD3<Float>(cx - halfTile, h, cz - halfTile)
-            let ne = SIMD3<Float>(cx + halfTile, h, cz - halfTile)
-            let se = SIMD3<Float>(cx + halfTile, h, cz + halfTile)
-            let sw = SIMD3<Float>(cx - halfTile, h, cz + halfTile)
+            let nw = SIMD3<Float>(bounds.minX, h, bounds.minZ)
+            let ne = SIMD3<Float>(bounds.maxX, h, bounds.minZ)
+            let se = SIMD3<Float>(bounds.maxX, h, bounds.maxZ)
+            let sw = SIMD3<Float>(bounds.minX, h, bounds.maxZ)
             addQuad(nw, ne, se, sw, normal: up,
                     SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0),
                     SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
@@ -294,9 +331,9 @@ public enum TabletopTerrainChunkMeshBuilder {
                 guard nh < h - eps else { return }
                 let botA = SIMD3<Float>(topA.x, nh, topA.z)
                 let botB = SIMD3<Float>(topB.x, nh, topB.z)
+                let sideUV = SIMD2<Float>((u0 + u1) / 2, 0.5)
                 addQuad(topA, topB, botB, botA, normal: outward,
-                        SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0),
-                        SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
+                        sideUV, sideUV, sideUV, sideUV)
             }
             skirt(neighborX: tile.tileX, neighborZ: tile.tileZ - 1,
                   topA: nw, topB: ne, outward: SIMD3<Float>(0, 0, -1)) // North

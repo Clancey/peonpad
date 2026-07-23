@@ -75,6 +75,15 @@ struct TabletopBridgeState {
     PeonPadSnapshot            *latest      = nullptr;  // guarded by snap_mutex
 
     std::vector<PeonPadCommand> pending;                // guarded by cmd_mutex
+
+    // Simulation-thread cache of the last visible logical terrain metadata.
+    // Stratagus stores only the last-seen graphic frame, so the bridge retains
+    // tile slot/class alongside it to keep explored relief coherent.
+    std::mutex                  terrain_mutex;
+    uint32_t                    seen_map_width  = 0;
+    uint32_t                    seen_map_height = 0;
+    std::vector<uint16_t>       seen_tile_indices;
+    std::vector<uint8_t>        seen_terrain_classes;
 };
 
 TabletopBridgeState g_bridge;
@@ -220,6 +229,13 @@ void peonpad_tabletop_cleanup(void)
         std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
         old_cmds.swap(g_bridge.pending);
         g_bridge.initialized = false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.terrain_mutex);
+        g_bridge.seen_map_width = 0;
+        g_bridge.seen_map_height = 0;
+        g_bridge.seen_tile_indices.clear();
+        g_bridge.seen_terrain_classes.clear();
     }
     // Drop the latest snapshot.
     PeonPadSnapshot *old = nullptr;
@@ -637,7 +653,13 @@ void peonpad_tabletop_drain_commands(void)
 // Called from the simulation thread after GameLogicLoop().
 void peonpad_tabletop_publish_snapshot(void)
 {
-    if (!g_bridge.initialized) return;
+    // Serialize the full capture/publication lifecycle against cleanup so an
+    // in-flight snapshot cannot repopulate caches or publish after shutdown.
+    std::lock_guard<std::mutex> terrain_lk(g_bridge.terrain_mutex);
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        if (!g_bridge.initialized) return;
+    }
     if (!UnitManager) return;
     if (Map.Info.MapWidth <= 0 || Map.Info.MapHeight <= 0) return;
 
@@ -655,28 +677,54 @@ void peonpad_tabletop_publish_snapshot(void)
     // ── Terrain + fog ───────────────────────────────────────────────────
     const uint32_t cell_count = mw * mh;
     snap->terrain.resize(cell_count);
+    if (g_bridge.seen_map_width != mw || g_bridge.seen_map_height != mh
+        || g_bridge.seen_tile_indices.size() != cell_count) {
+        g_bridge.seen_map_width = mw;
+        g_bridge.seen_map_height = mh;
+        g_bridge.seen_tile_indices.assign(cell_count, 0x100u);
+        g_bridge.seen_terrain_classes.assign(
+            cell_count, static_cast<uint8_t>(PEONPAD_TERRAIN_UNKNOWN));
+    }
 
     for (uint32_t y = 0; y < mh; ++y) {
         for (uint32_t x = 0; x < mw; ++x) {
+            const size_t cell_index = static_cast<size_t>(y) * mw + x;
             const CMapField *field = Map.Field(static_cast<int>(x),
                                                static_cast<int>(y));
-            PeonPadTerrainCell &out = snap->terrain[y * mw + x];
+            PeonPadTerrainCell &out = snap->terrain[cell_index];
             out.tile_index    = static_cast<uint16_t>(field->getTileIndex());
             out.terrain_class = ClassifyTerrain(field->getFlags());
-            // Pixel-grid frame index into the tileset image (ABI v3), so the UI
-            // can crop the real tile art from the tileset PNG.
-            out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
 
             if (Map.NoFogOfWar || !ThisPlayer) {
                 out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
+                out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
+                g_bridge.seen_tile_indices[cell_index] = out.tile_index;
+                g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
             } else {
                 const CMapFieldPlayerInfo &info = field->playerInfo;
                 if (info.IsTeamVisible(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
+                    out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
+                    g_bridge.seen_tile_indices[cell_index] = out.tile_index;
+                    g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
                 } else if (info.IsExplored(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_EXPLORED);
+                    // Match the canonical map renderer: explored tiles retain
+                    // the last frame the local player saw, rather than leaking
+                    // a current terrain change through the dim fog veil.
+                    out.graphic_index = static_cast<uint16_t>(info.SeenTile);
+                    // The engine stores no last-seen logical tile or flags.
+                    // Use the bridge's matching last-visible metadata so hidden
+                    // current state cannot alter relief beneath retained art.
+                    out.tile_index = g_bridge.seen_tile_indices[cell_index];
+                    out.terrain_class =
+                        g_bridge.seen_terrain_classes[cell_index];
                 } else {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_UNSEEN);
+                    out.graphic_index = static_cast<uint16_t>(info.SeenTile);
+                    out.tile_index = g_bridge.seen_tile_indices[cell_index];
+                    out.terrain_class =
+                        g_bridge.seen_terrain_classes[cell_index];
                 }
             }
         }

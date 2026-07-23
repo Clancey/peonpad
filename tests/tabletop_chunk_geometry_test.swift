@@ -115,6 +115,12 @@ func testTilesIn() {
         }
     }
     expectEq(total, 128 * 128, "all chunks together cover all 16384 tiles")
+
+    let asymmetric = TabletopChunkLayout.tilesIn(
+        chunkX: 0, chunkZ: 0, mapWidth: 3, mapHeight: 2, chunkTiles: 32)
+    expectEq(asymmetric.map { "\($0.tileX),\($0.tileZ)" },
+             ["0,0", "1,0", "2,0", "0,1", "1,1", "2,1"],
+             "asymmetric map stays row-major without transpose or row reversal")
 }
 
 func testTileKey() {
@@ -164,6 +170,21 @@ func testAtlasSlotMapEntries() {
     expectEq(m.slotEntries[0].slotIndex, 0,    "entry[0].slotIndex=0")
     expectEq(m.slotEntries[1].graphicIndex, 2,  "entry[1].graphicIndex=2")
     expectEq(m.slotEntries[2].graphicIndex, nil,"entry[2].graphicIndex=nil")
+}
+
+func testPaddedAtlasLayout() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 3, cellWidth: 32, gutterPixels: 2)
+    expectEq(layout.slotStride, 36, "32px frame plus two 2px gutters")
+    expectEq(layout.atlasWidth, 108, "three padded slots have bounded width")
+    expectEq(layout.contentOriginX(1), 38, "slot 1 content follows its left gutter")
+    let uv = layout.contentUVBounds(1)
+    expect(abs(uv.u0 - Float(38.0 / 108.0)) < 1e-6,
+           "slot 1 starts at its content edge, not neighbouring padding")
+    expect(abs(uv.u1 - Float(70.0 / 108.0)) < 1e-6,
+           "slot 1 ends before its replicated right gutter")
+    expect(uv.u0 > Float(1) / 3 && uv.u1 < Float(2) / 3,
+           "content UVs are inset from adjacent atlas slots")
 }
 
 // MARK: - TabletopTerrainChunkMeshBuilder tests
@@ -518,6 +539,28 @@ func testReliefSkirtWhenNeighborLower() {
     // The skirt drops from 0.02 to 0.0 and faces +X (east).
     expect(geo.normals.contains { $0.x > 0.9 }, "east skirt faces +X")
     expect(geo.positions.contains { abs($0.y - 0.0) < 1e-6 }, "skirt reaches the lower neighbour height")
+    let topUVs = Array(geo.textureCoordinates[0..<4])
+    let sideUVs = Array(geo.textureCoordinates[4..<8])
+    expect(Set(topUVs.map { "\($0.x),\($0.y)" }).count == 4,
+           "top quad preserves all four frame corners")
+    expect(Set(sideUVs.map { "\($0.x),\($0.y)" }).count == 1,
+           "side skirt samples one neutral frame point instead of stretching tile art")
+    expect(topUVs != sideUVs, "top and side vertices keep independent UV domains")
+}
+
+func testChunkEdgeContinuity() {
+    let fit = TabletopMapFit(width: 64, height: 1, boardExtent: 0.64)
+    let slotMap = TabletopAtlasSlotMap(graphicIndices: [10, 20] as [Int?])
+    let left = TabletopTerrainChunkMeshBuilder.build(
+        tiles: [(31, 0, 10)], fit: fit, slotMap: slotMap)
+    let right = TabletopTerrainChunkMeshBuilder.build(
+        tiles: [(32, 0, 20)], fit: fit, slotMap: slotMap)
+    let leftEast = left.positions.filter { $0.x == left.positions.map(\.x).max()! }
+    let rightWest = right.positions.filter { $0.x == right.positions.map(\.x).min()! }
+    expectEq(Set(leftEast.map(\.x)), Set(rightWest.map(\.x)),
+             "adjacent chunk tile edges share the exact X boundary")
+    expectEq(Set(leftEast.map(\.z)), Set(rightWest.map(\.z)),
+             "adjacent chunk tile edges share both Z endpoints")
 }
 
 func testReliefSkirtsAllFrontFacing() {
@@ -721,6 +764,19 @@ func testReadinessTrackerMarkPendingIsIdempotentForUnknownKey() {
     expectEq(tracker.atlasReadyCount, 0, "marking an unknown key pending is a harmless no-op")
 }
 
+func testReadinessTrackerResetStartsNewBoardRound() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 1)
+    let old = TabletopChunkKey(chunkX: 0, chunkZ: 0)
+    _ = tracker.markReady(old)
+    expect(tracker.isStable, "precondition: first board reaches stable")
+
+    tracker.reset(totalChunks: 4)
+    expectEq(tracker.totalChunks, 4, "reset adopts the new board chunk count")
+    expectEq(tracker.atlasReadyCount, 0, "reset discards prior-board readiness")
+    expect(!tracker.isStable, "new board starts pending")
+    expect(!tracker.didLogStable, "new board may log its own stable transition")
+}
+
 // MARK: - Run all tests
 
 @main
@@ -734,6 +790,7 @@ struct TabletopChunkGeometryTests {
 
         testAtlasSlotMap()
         testAtlasSlotMapEntries()
+        testPaddedAtlasLayout()
 
         testChunkMeshBuilderBasic()
         testChunkMeshBuilderUVs()
@@ -758,6 +815,7 @@ struct TabletopChunkGeometryTests {
 
         testReliefTopAtTileHeight()
         testReliefSkirtWhenNeighborLower()
+        testChunkEdgeContinuity()
         testReliefSkirtsAllFrontFacing()
         testReliefBoundedForFlatGround()
         testReliefChunkEdgeContinuity()
@@ -769,6 +827,7 @@ struct TabletopChunkGeometryTests {
         testReadinessTrackerMarkReadyOnlyReportsStableOnce()
         testReadinessTrackerWholesaleRefreshResetsToZeroThenProgresses()
         testReadinessTrackerMarkPendingIsIdempotentForUnknownKey()
+        testReadinessTrackerResetStartsNewBoardRound()
 
         // MARK: - Summary
 

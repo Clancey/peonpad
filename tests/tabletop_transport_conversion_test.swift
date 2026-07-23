@@ -129,15 +129,42 @@ func testFacingConversion() {
 func testTerrainClassMapping() {
     let cases: [(EngineTerrainClass, TabletopTerrainKind)] = [
         (.grass, .grass), (.dirt, .dirt), (.water, .water), (.rock, .rock),
-        (.forest, .forest), (.coast, .water), (.wall, .rock), (.unknown, .grass),
+        (.forest, .forest), (.coast, .coast), (.wall, .rock), (.unknown, .grass),
     ]
     for (raw, expected) in cases {
         expectEqual(TabletopSnapshotConverter.terrainKind(raw.rawValue), expected,
                     "terrain class \(raw) -> \(expected)")
     }
+
     // An out-of-range class value falls back to grass rather than crashing.
     expectEqual(TabletopSnapshotConverter.terrainKind(200), .grass,
                 "unknown terrain class byte -> grass")
+}
+
+func testTerrainRowColumnAndTileIdentityPreserved() {
+    let cells: [EngineTerrainCell] = [
+        .init(tileIndex: 0x010, fogState: 2, terrainClass: 1, graphicIndex: 10),
+        .init(tileIndex: 0x020, fogState: 2, terrainClass: 2, graphicIndex: 20),
+        .init(tileIndex: 0x030, fogState: 2, terrainClass: 3, graphicIndex: 30),
+        .init(tileIndex: 0x100, fogState: 2, terrainClass: 6, graphicIndex: 100),
+        .init(tileIndex: 0x400, fogState: 2, terrainClass: 4, graphicIndex: 150),
+        .init(tileIndex: 0x700, fogState: 2, terrainClass: 5, graphicIndex: 129),
+    ]
+    let snap = makeEngineSnapshot(width: 3, height: 2, terrain: cells)
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "asymmetric orientation fixture converts")
+        return
+    }
+    let expected: [(x: Int, z: Int, tile: Int, graphic: Int)] = [
+        (0, 0, 0x010, 10), (1, 0, 0x020, 20), (2, 0, 0x030, 30),
+        (0, 1, 0x100, 100), (1, 1, 0x400, 150), (2, 1, 0x700, 129),
+    ]
+    for (index, value) in expected.enumerated() {
+        expectEqual(ui.terrain[index].tileX, value.x, "tile \(index) x coordinate")
+        expectEqual(ui.terrain[index].tileZ, value.z, "tile \(index) row coordinate")
+        expectEqual(ui.terrain[index].tileIndex, value.tile, "tile \(index) engine slot")
+        expectEqual(ui.terrain[index].graphicIndex, value.graphic, "tile \(index) frame")
+    }
 }
 
 func testFogMapping() {
@@ -566,6 +593,7 @@ struct TransportConversionTests {
         testConversionRejectsTerrainCountMismatch()
         testFacingConversion()
         testTerrainClassMapping()
+        testTerrainRowColumnAndTileIdentityPreserved()
         testFogMapping()
         testFogThreeStateConversionPreservesExplored()
         testFullConversionUnitsAndSelection()

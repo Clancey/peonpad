@@ -139,8 +139,8 @@ public enum TabletopBoardReconciler {
             }
         }
 
-        // -- Terrain -- (changed when either the terrain kind or the tileset
-        // graphic index differs, so real tile art refreshes too).
+        // -- Terrain -- (tileIndex also controls whether relief treats the
+        // engine frame as solid or mixed transition art).
         let previousTerrain = Dictionary(
             uniqueKeysWithValues: previous.terrain.map {
                 (tileKey($0.tileX, $0.tileZ), $0)
@@ -148,7 +148,9 @@ public enum TabletopBoardReconciler {
         )
         let changedTerrain = next.terrain.filter { tile in
             guard let old = previousTerrain[tileKey(tile.tileX, tile.tileZ)] else { return true }
-            return old.kind != tile.kind || old.graphicIndex != tile.graphicIndex
+            return old.kind != tile.kind
+                || old.tileIndex != tile.tileIndex
+                || old.graphicIndex != tile.graphicIndex
         }
 
         // -- Fog -- (compare full three-state visibility so explored↔visible

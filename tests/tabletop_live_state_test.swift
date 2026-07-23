@@ -279,6 +279,17 @@ func testReconcilerDetectsTerrainGraphicIndexChange() {
     }), "terrain graphic-index change is detected even when kind is unchanged")
 }
 
+func testReconcilerDetectsTerrainTileIndexChange() {
+    let before = TabletopGameplaySnapshot.demo()
+    var after = before
+    after.terrain[0].tileIndex = 0x100
+
+    let diff = TabletopBoardReconciler.diff(from: before, to: after)
+    expect(diff.changedTerrainTiles.contains(where: {
+        $0.tileX == after.terrain[0].tileX && $0.tileZ == after.terrain[0].tileZ
+    }), "terrain tile-index change refreshes solid-vs-transition relief")
+}
+
 // MARK: - TabletopBoardReconciler: selection change detected
 
 func testReconcilerDetectsSelectionChange() {
@@ -559,6 +570,7 @@ struct TabletopLiveStateTestRunner {
         testReconcilerDetectsOwnerChange()
         testReconcilerDetectsAnimationFrameChange()
         testReconcilerDetectsTerrainGraphicIndexChange()
+        testReconcilerDetectsTerrainTileIndexChange()
         testReconcilerDetectsSelectionChange()
         testReconcilerDetectsDeselection()
         testReconcilerDetectsUnitRemoval()

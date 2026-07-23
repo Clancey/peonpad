@@ -28,6 +28,7 @@
 #include "commands.h"
 #include "fow.h"
 #include "interface.h"
+#include "iolib.h"
 #include "map.h"
 #include "player.h"
 #include "stratagus.h"
@@ -379,6 +380,40 @@ static uint8_t ClassifyTerrain(tile_flags flags) noexcept
     return static_cast<uint8_t>(PEONPAD_TERRAIN_DIRT);
 }
 
+// Resolve a raw Lua asset path (e.g. "tilesets/summer/terrain/summer.png" or
+// "orc/units/grunt.png") to a path that is relative to the staged game-data
+// root, as the Swift material provider expects.
+//
+// Stratagus Lua scripts store unresolved paths without the "graphics/" prefix
+// that the engine's LibraryFileName() adds when locating files under the
+// staged data directory.  CTileset::ImageFile and CUnitType::File both carry
+// these unresolved Lua values.  Calling LibraryFileName() here mirrors the
+// same resolution the engine performs when loading the graphic, so the Swift
+// layer receives the exact relative path it can open from the data root.
+//
+// If LibraryFileName returns an absolute path whose prefix is StratagusLibPath,
+// the prefix is stripped to produce a root-relative path.  If resolution fails
+// (file not found), the original `raw` value is used as a fallback.
+static std::string ResolveAssetPath(const std::string &raw) noexcept
+{
+    if (raw.empty()) return raw;
+    try {
+        const std::string resolved = LibraryFileName(raw);
+        if (resolved.empty()) return raw;
+        // Strip the StratagusLibPath prefix when it is present so the result
+        // is relative to the staged data root.
+        const std::string &base = StratagusLibPath;
+        if (!base.empty() && resolved.rfind(base, 0) == 0) {
+            std::string rel = resolved.substr(base.size());
+            while (!rel.empty() && rel[0] == '/') rel = rel.substr(1);
+            return rel.empty() ? raw : rel;
+        }
+        return resolved;
+    } catch (...) {
+        return raw;
+    }
+}
+
 // Replicate the engine's DrawUnitType() frame resolution (see
 // engine/stratagus/src/unit/unittype.cpp) so the UI receives the exact
 // sprite-sheet frame index and horizontal-mirror flag the engine itself would
@@ -575,8 +610,14 @@ void peonpad_tabletop_publish_snapshot(void)
     {
         const CTileset &ts = Map.Tileset;
         snap->has_tileset = true;
+        // CTileset::ImageFile stores the unresolved Lua path (e.g.
+        // "tilesets/summer/terrain/summer.png") without the "graphics/"
+        // prefix that the engine adds when loading.  Resolve via
+        // LibraryFileName so the UI receives the staged-data-root-relative
+        // path it can actually open (e.g. "graphics/tilesets/summer/…").
+        const std::string resolved_tileset = ResolveAssetPath(ts.ImageFile);
         std::snprintf(snap->tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
-                      "%s", ts.ImageFile.c_str());
+                      "%s", resolved_tileset.c_str());
         std::snprintf(snap->tileset.name, PEONPAD_TABLETOP_MAX_IDENT,
                       "%s", ts.Name.c_str());
         const PixelSize &pts = ts.getPixelTileSize();
@@ -648,8 +689,12 @@ void peonpad_tabletop_publish_snapshot(void)
                               u->Type->Ident.c_str());
                 // ABI v3 sprite metadata sourced from CUnitType so the UI can
                 // locate and tint the real sprite sheet from staged data.
+                // CUnitType::File stores the unresolved Lua path (e.g.
+                // "orc/units/grunt.png") without the "graphics/" prefix;
+                // resolve via LibraryFileName for the staged-data-relative path.
+                const std::string resolved_sprite = ResolveAssetPath(u->Type->File);
                 std::snprintf(t.sprite_path, PEONPAD_TABLETOP_MAX_PATH, "%s",
-                              u->Type->File.c_str());
+                              resolved_sprite.c_str());
                 t.frame_width     = static_cast<uint16_t>(u->Type->Width);
                 t.frame_height    = static_cast<uint16_t>(u->Type->Height);
                 t.num_directions  = static_cast<uint8_t>(u->Type->NumDirections);

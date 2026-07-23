@@ -105,6 +105,12 @@ final class TabletopLiveUnit {
     /// update instead of independently overwriting each other's alpha.
     private(set) var isSelected = false
     private var currentHue: UIColor
+    /// When a real Wargus sprite material has been resolved for this unit, it
+    /// is stored here and drawn on the quad instead of the procedural canonical
+    /// hue. The engine already baked facing + animation + mirror into the
+    /// texture, so the per-frame directional re-tint/mirror is skipped; only the
+    /// viewer-facing yaw and selection alpha are still applied.
+    private var spriteMaterial: UnlitMaterial?
 
     /// The unit's current board-space facing (radians, 0 = board north,
     /// increasing clockwise). Starts from `spec.facingRadians` and may be
@@ -197,11 +203,30 @@ final class TabletopLiveUnit {
         applyBodyMaterial()
     }
 
+    /// Applies a real Wargus sprite material to the quad (from the material
+    /// provider). Composes with the current selection alpha. Passing a new
+    /// material for a changed engine frame swaps the texture without recreating
+    /// the entity; passing repeatedly with the same frame is cheap (the
+    /// provider caches the decoded texture).
+    func setSpriteMaterial(_ material: UnlitMaterial) {
+        spriteMaterial = material
+        // A real sprite bakes its own mirror into the texture, so clear any
+        // procedural horizontal flip left on the quad.
+        quad.scale.x = abs(quad.scale.x)
+        applyQuadMaterial()
+    }
+
     /// Applies the current directional hue and the current selection alpha
     /// to the quad in one material assignment, so neither `setSelected` nor
     /// `applyDirectionalFrame` ever clobbers the other's contribution.
     private func applyQuadMaterial() {
         let alpha = TabletopUnitAppearance.quadAlpha(selected: isSelected)
+        if let spriteMaterial {
+            var material = spriteMaterial
+            material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+            quad.model?.materials = [material]
+            return
+        }
         quad.model?.materials = [translucentUnlitMaterial(currentHue.withAlphaComponent(CGFloat(alpha)))]
     }
 
@@ -242,6 +267,13 @@ final class TabletopLiveUnit {
             viewerBoardPosition: viewerBoardPosition
         )
         quad.orientation = simd_quatf(angle: Float(yaw), axis: [0, 1, 0])
+
+        // With a real Wargus sprite, the engine already resolved the facing +
+        // animation frame and mirror into the texture, so the quad only needs
+        // to yaw toward the viewer — skip the procedural canonical re-tint and
+        // horizontal flip (and don't reassign the material every frame, which
+        // would churn the texture).
+        if spriteMaterial != nil { return }
 
         // Mirroring is represented procedurally (no sprite art is embedded):
         // a horizontally-flipped scale plus a dimmer tint stands in for
@@ -335,10 +367,12 @@ enum TabletopBoardBuilder {
         to boardRoot: Entity,
         snapshot: TabletopGameplaySnapshot,
         fit: TabletopMapFit,
-        resolver: TabletopAssetResolver = NullTabletopAssetResolver()
+        resolver: TabletopAssetResolver = NullTabletopAssetResolver(),
+        materialProvider: WargusTabletopMaterialProvider? = nil
     ) -> [String: ModelEntity] {
         var tileEntities: [String: ModelEntity] = [:]
         let quadSize = fit.tileQuadSize
+        let tileset = snapshot.assets?.tileset
         // Iterate the snapshot's actual terrain so any map size (32×32, 64×64,
         // 96×96, …) is laid out; the fit scales each tile onto the fixed board.
         for terrainTile in snapshot.terrain {
@@ -355,6 +389,18 @@ enum TabletopBoardBuilder {
             tile.position = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
             boardRoot.addChild(tile)
             tileEntities[tileEntityKey(tileX: tileX, tileZ: tileZ)] = tile
+
+            // Real Wargus tile art from the staged data dir, when available.
+            // The procedural color shows until (and only if) the decode
+            // succeeds — a per-tile progressive enhancement, not a silent
+            // whole-app fallback.
+            if let materialProvider {
+                materialProvider.terrainMaterial(
+                    graphicIndex: terrainTile.graphicIndex, tileset: tileset
+                ) { [weak tile] material in
+                    tile?.model?.materials = [material]
+                }
+            }
 
             // Per-tile fog overlay quad, slightly above the terrain. Enabled
             // (dark) when unrevealed; disabled (invisible) when revealed.
@@ -403,19 +449,41 @@ enum TabletopBoardBuilder {
     }
 
     /// Builds a single live RealityKit unit from a gameplay snapshot unit and
-    /// parents it to `boardRoot`. Returns the live unit for tracking.
+    /// parents it to `boardRoot`. Returns the live unit for tracking. When a
+    /// material provider and sprite descriptor are available, the unit's real
+    /// Wargus sprite is requested and applied progressively.
     static func addUnit(
         _ gameplayUnit: TabletopGameplayUnit,
         to boardRoot: Entity,
         snapshot: TabletopGameplaySnapshot,
-        fit: TabletopMapFit
+        fit: TabletopMapFit,
+        materialProvider: WargusTabletopMaterialProvider? = nil
     ) -> TabletopLiveUnit {
         let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
         let liveUnit = TabletopLiveUnit(spec: spec, fit: fit)
         liveUnit.setAlive(gameplayUnit.isAlive)
         liveUnit.setSelected(snapshot.selection.selectedUnitID == gameplayUnit.id)
         boardRoot.addChild(liveUnit.root)
+        refreshUnitSprite(liveUnit, unit: gameplayUnit, snapshot: snapshot,
+                          materialProvider: materialProvider)
         return liveUnit
+    }
+
+    /// Requests the real Wargus sprite material for a unit's current engine
+    /// frame and applies it when it decodes. Safe to call repeatedly (e.g. on
+    /// each animation-frame change); the provider caches decoded textures so an
+    /// unchanged frame does not re-read the disk.
+    static func refreshUnitSprite(
+        _ liveUnit: TabletopLiveUnit,
+        unit: TabletopGameplayUnit,
+        snapshot: TabletopGameplaySnapshot,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        guard let materialProvider,
+              let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return }
+        materialProvider.unitMaterial(unit: unit, sprite: sprite) { [weak liveUnit] material in
+            liveUnit?.setSpriteMaterial(material)
+        }
     }
 
     /// Updates terrain tile materials in `tileEntities` for tiles listed in

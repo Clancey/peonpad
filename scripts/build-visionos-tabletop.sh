@@ -123,6 +123,8 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/EngineCommandEncoder.swift"
   "$TABLETOP_SRC_DIR/TabletopMapFit.swift"
   "$TABLETOP_SRC_DIR/WargusTabletopAssetResolver.swift"
+  "$TABLETOP_SRC_DIR/TabletopAssetResolution.swift"
+  "$TABLETOP_SRC_DIR/WargusTabletopMaterialProvider.swift"
   "$TABLETOP_SRC_DIR/EngineStartupPlan.swift"
   "$TABLETOP_SRC_DIR/EngineTabletopTransport.swift"
 )

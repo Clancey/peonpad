@@ -250,6 +250,35 @@ func testReconcilerDetectsOwnerChange() {
            "owner change is detected in the diff")
 }
 
+// MARK: - TabletopBoardReconciler: animation frame + terrain graphic-index
+
+func testReconcilerDetectsAnimationFrameChange() {
+    let before = TabletopGameplaySnapshot.demo()
+    var after = before
+    // Advance the sprite frame / mirror in place (no facing/position change).
+    after.units[0].spriteFrame = (before.units[0].spriteFrame ?? 0) + 4
+    after.units[0].spriteMirror = !(before.units[0].spriteMirror ?? false)
+
+    let diff = TabletopBoardReconciler.diff(from: before, to: after)
+    expect(diff.updatedUnits.contains(where: { $0.id == after.units[0].id && $0.frameChanged }),
+           "sprite frame/mirror change is detected in the diff")
+    expect(!diff.updatedUnits.contains(where: { $0.id == after.units[0].id && $0.positionChanged }),
+           "position is NOT flagged when only the sprite frame changed")
+}
+
+func testReconcilerDetectsTerrainGraphicIndexChange() {
+    let before = TabletopGameplaySnapshot.demo()
+    var after = before
+    // Same terrain kind, different tileset graphic index → still a change.
+    let g = after.terrain[0].graphicIndex ?? 0
+    after.terrain[0].graphicIndex = g + 1
+
+    let diff = TabletopBoardReconciler.diff(from: before, to: after)
+    expect(diff.changedTerrainTiles.contains(where: {
+        $0.tileX == after.terrain[0].tileX && $0.tileZ == after.terrain[0].tileZ
+    }), "terrain graphic-index change is detected even when kind is unchanged")
+}
+
 // MARK: - TabletopBoardReconciler: selection change detected
 
 func testReconcilerDetectsSelectionChange() {
@@ -436,6 +465,8 @@ struct TabletopLiveStateTestRunner {
         testReconcilerDetectsPositionChange()
         testReconcilerDetectsHPChange()
         testReconcilerDetectsOwnerChange()
+        testReconcilerDetectsAnimationFrameChange()
+        testReconcilerDetectsTerrainGraphicIndexChange()
         testReconcilerDetectsSelectionChange()
         testReconcilerDetectsDeselection()
         testReconcilerDetectsUnitRemoval()

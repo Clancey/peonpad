@@ -24,6 +24,10 @@ public struct TabletopUnitDiff: Equatable {
     public let hpChanged: Bool
     /// `owner` changed — the unit's team-color tint needs updating.
     public let ownerChanged: Bool
+    /// `spriteFrame` or `spriteMirror` changed — the unit's sprite frame needs
+    /// re-cropping even when its logical facing/position did not change (e.g. a
+    /// walk/attack animation advancing in place).
+    public let frameChanged: Bool
     /// The unit's presence in the selection changed — the highlight needs
     /// to be toggled.
     public let selectionChanged: Bool
@@ -99,28 +103,36 @@ public enum TabletopBoardReconciler {
             let facingChanged = old.facingRadians != unit.facingRadians
             let hpChanged = old.hp != unit.hp || old.maxHP != unit.maxHP
             let ownerChanged = old.owner != unit.owner
+            let frameChanged = old.spriteFrame != unit.spriteFrame
+                || old.spriteMirror != unit.spriteMirror
             let wasSelected = previous.selection.selectedUnitID == unit.id
             let isSelected  = next.selection.selectedUnitID == unit.id
             let selChanged  = wasSelected != isSelected
 
-            if posChanged || facingChanged || hpChanged || ownerChanged || selChanged {
+            if posChanged || facingChanged || hpChanged || ownerChanged
+                || frameChanged || selChanged {
                 updated.append(TabletopUnitDiff(
                     id: unit.id,
                     positionChanged: posChanged,
                     facingChanged: facingChanged,
                     hpChanged: hpChanged,
                     ownerChanged: ownerChanged,
+                    frameChanged: frameChanged,
                     selectionChanged: selChanged
                 ))
             }
         }
 
-        // -- Terrain --
+        // -- Terrain -- (changed when either the terrain kind or the tileset
+        // graphic index differs, so real tile art refreshes too).
         let previousTerrain = Dictionary(
-            uniqueKeysWithValues: previous.terrain.map { (tileKey($0.tileX, $0.tileZ), $0.kind) }
+            uniqueKeysWithValues: previous.terrain.map {
+                (tileKey($0.tileX, $0.tileZ), $0)
+            }
         )
         let changedTerrain = next.terrain.filter { tile in
-            previousTerrain[tileKey(tile.tileX, tile.tileZ)] != tile.kind
+            guard let old = previousTerrain[tileKey(tile.tileX, tile.tileZ)] else { return true }
+            return old.kind != tile.kind || old.graphicIndex != tile.graphicIndex
         }
 
         // -- Fog --

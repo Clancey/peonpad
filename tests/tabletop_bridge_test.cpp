@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <thread>
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -49,6 +50,18 @@ static void Run(const char *name, bool (*test_fn)())
 }
 
 // ── 1. ABI layout contract ─────────────────────────────────────────────────
+
+// Pure path/name helpers defined (with normal C++ linkage, outside the
+// `extern "C"` block) in PeonPadTabletopBridge.cpp. They back the
+// engine-only expanded-tileset-PNG export (ExportExpandedTilesetPNG) that
+// fixes the "wrong floor tiles" bug: Wargus tilesets append procedurally
+// generated transition/cliff frames to the in-memory tile graphic
+// (GenerateExtendedTileset -> CGraphic::AppendFrames), which have no
+// matching pixels in the on-disk tileset PNG. Declared here (rather than in
+// the public ABI header) since they are an internal implementation detail,
+// not part of the stable C ABI.
+std::string TabletopSanitizeTilesetCacheName(const std::string &tilesetName) noexcept;
+std::string TabletopExpandedTilesetRelativePath(const std::string &tilesetName) noexcept;
 
 static bool test_abi_version_constant()
 {
@@ -359,6 +372,37 @@ static bool test_synthetic_v2_rejects_unterminated_ident()
 
     peonpad_snapshot_release(s);
     peonpad_tabletop_cleanup();
+    return true;
+}
+
+// Expanded-tileset export path/name helpers (pure, no engine dependency).
+static bool test_expanded_tileset_cache_path()
+{
+    // Normal alphabetic tileset names pass through, lowercased.
+    EXPECT(TabletopSanitizeTilesetCacheName("Forest") == "forest");
+    EXPECT(TabletopSanitizeTilesetCacheName("Wasteland") == "wasteland");
+    EXPECT(TabletopExpandedTilesetRelativePath("Forest")
+           == "tabletop-generated/forest-expanded.png");
+
+    // Dashes/underscores are preserved; other punctuation and whitespace are
+    // stripped so the result is always a single safe path segment.
+    EXPECT(TabletopSanitizeTilesetCacheName("Ice Cliffs-2") == "icecliffs-2");
+    EXPECT(TabletopSanitizeTilesetCacheName("../etc/passwd") == "etcpasswd");
+    EXPECT(TabletopExpandedTilesetRelativePath("../etc/passwd")
+           == "tabletop-generated/etcpasswd-expanded.png");
+
+    // Degenerate input (empty, or sanitizes to nothing) falls back to a
+    // stable, non-empty name rather than producing a malformed path.
+    EXPECT(TabletopSanitizeTilesetCacheName("") == "tileset");
+    EXPECT(TabletopSanitizeTilesetCacheName("   ") == "tileset");
+    EXPECT(TabletopSanitizeTilesetCacheName("!!!") == "tileset");
+    EXPECT(TabletopExpandedTilesetRelativePath("")
+           == "tabletop-generated/tileset-expanded.png");
+
+    // Distinct tileset names never collide on the same cache path.
+    EXPECT(TabletopExpandedTilesetRelativePath("Forest")
+           != TabletopExpandedTilesetRelativePath("Winter"));
+
     return true;
 }
 
@@ -812,6 +856,7 @@ int main()
     Run("synthetic_v2_bad_ident",   test_synthetic_v2_rejects_unterminated_ident);
     Run("synthetic_v3_descriptors", test_synthetic_v3_asset_descriptors);
     Run("synthetic_v3_bad_paths",   test_synthetic_v3_rejects_unterminated_paths);
+    Run("expanded_tileset_cache_path", test_expanded_tileset_cache_path);
     Run("retain_release",           test_retain_release);
     Run("null_safety",              test_null_safety);
     Run("data_is_immutable_copy",   test_snapshot_data_is_immutable_copy);

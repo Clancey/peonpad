@@ -38,6 +38,9 @@
 #include "unit_manager.h"
 #include "unittype.h"
 #include "vec2i.h"
+#include "video.h"
+#include <SDL_image.h>
+#include <cctype>
 #endif
 
 // ── Internal snapshot struct ──────────────────────────────────────────────
@@ -119,6 +122,58 @@ bool CommandIsValid(const PeonPadCommand *cmd) noexcept
 }
 
 } // namespace
+
+// ── Expanded-tileset export (pure path/name logic; always compiled) ──────
+//
+// Stratagus tilesets (see game/wargus/scripts/tilesets/wargus/extended.lua)
+// call GenerateExtendedTileset() at load time, which procedurally generates
+// additional transition/cliff/coastline tile frames and appends them — only
+// in the *in-memory* CGraphic surface, via CGraphic::AppendFrames() (see
+// engine/stratagus/src/video/graphic.cpp) — after the frames already loaded
+// from the on-disk tileset PNG. A terrain cell's `graphic_index` can
+// therefore reference a frame that has no matching pixels in the authored
+// PNG on disk. Left unhandled, the Swift material provider's source-rect
+// bounds check (correctly) rejects those out-of-range frames and the tile
+// falls back to a flat procedural color — the "wrong floor tiles" bug.
+//
+// The fix (see ExportExpandedTilesetPNG, engine-only, further below) is to
+// export the engine's actual fully-expanded tile graphic (base + generated
+// frames) to a PNG once per tileset load, so every `graphic_index` the
+// engine can produce has a matching source rectangle.
+// `TabletopSanitizeTilesetCacheName` and `TabletopExpandedTilesetRelativePath`
+// contain the pure path-naming logic and have no engine/SDL dependency (and
+// deliberately sit outside the `extern "C"` block below so they keep normal
+// C++ linkage), so they compile and are unit-tested in the standalone host
+// build (tests/tabletop_bridge_test.cpp) even though the export itself only
+// runs in the real engine.
+
+// Keeps a tileset's display name safe for use as a single path segment: only
+// lowercase alphanumerics, '-', and '_' survive; everything else is dropped.
+// Falls back to "tileset" for a name that sanitizes to nothing (e.g. empty,
+// or entirely punctuation/whitespace).
+std::string TabletopSanitizeTilesetCacheName(const std::string &tilesetName) noexcept
+{
+    std::string safe;
+    safe.reserve(tilesetName.size());
+    for (unsigned char c : tilesetName) {
+        if (std::isalnum(c)) {
+            safe += static_cast<char>(std::tolower(c));
+        } else if (c == '-' || c == '_') {
+            safe += static_cast<char>(c);
+        }
+    }
+    if (safe.empty()) safe = "tileset";
+    return safe;
+}
+
+// The staged-data-root-relative path where the expanded tileset PNG for
+// `tilesetName` is (or will be) cached. Always under a single fixed
+// subdirectory so it never collides with authored asset paths and is trivial
+// to exclude from asset re-staging.
+std::string TabletopExpandedTilesetRelativePath(const std::string &tilesetName) noexcept
+{
+    return "tabletop-generated/" + TabletopSanitizeTilesetCacheName(tilesetName) + "-expanded.png";
+}
 
 // ── Public C API: snapshot accessors ─────────────────────────────────────
 
@@ -427,6 +482,80 @@ static std::string ResolveAssetPath(const std::string &raw) noexcept
     }
 }
 
+// Exports the engine's actual, fully-expanded tile graphic (the on-disk
+// tileset frames plus any procedurally-generated extended frames appended by
+// GenerateExtendedTileset — see the file-level comment above
+// TabletopSanitizeTilesetCacheName) to a PNG within the staged data root,
+// once per tileset load. Returns the staged-data-root-relative path on
+// success ("" on any failure), in which case the caller falls back to the
+// raw authored asset (correct only for a tileset with no extended/generated
+// frames referenced by the current map).
+//
+// Cheap on repeat calls: publish runs every simulation tick, but the export
+// only happens the first time it sees a given tileset load (identified by
+// both the CGraphic instance and the tileset name — see the cache-key
+// comment below), so subsequent calls for the same loaded map are just two
+// comparisons.
+static std::string ExportExpandedTilesetPNG(const CTileset &ts,
+                                             uint16_t &out_width,
+                                             uint16_t &out_height) noexcept
+{
+    static const CGraphic *s_exportedGraphic = nullptr;
+    static std::string     s_exportedName;
+    static std::string     s_exportedRelativePath;
+    static uint16_t        s_exportedWidth  = 0;
+    static uint16_t        s_exportedHeight = 0;
+
+    if (!Map.TileGraphic) return {};
+    CGraphic *graphic = Map.TileGraphic.get();
+
+    // Compare both the CGraphic pointer *and* the tileset name: Map.TileGraphic
+    // is a std::shared_ptr<CGraphic> that is reset and reallocated on every
+    // map/tileset (re)load (CMap::Clean() -> CclDefineTileset() ->
+    // CGraphic::New()), so a later allocation can legitimately reuse a freed
+    // CGraphic's address. A pointer-only comparison could then spuriously
+    // match a *different* tileset and hand back the previous tileset's cached
+    // path/dimensions — silently reintroducing the exact "wrong floor tiles"
+    // class of bug this export exists to fix.
+    if (graphic == s_exportedGraphic && ts.Name == s_exportedName
+        && !s_exportedRelativePath.empty()) {
+        out_width  = s_exportedWidth;
+        out_height = s_exportedHeight;
+        return s_exportedRelativePath;
+    }
+
+    SDL_Surface *surface = graphic->getSurface();
+    if (!surface || surface->w <= 0 || surface->h <= 0) return {};
+    if (surface->w > UINT16_MAX || surface->h > UINT16_MAX) return {};
+
+    try {
+        const fs::path cacheDir = fs::path(StratagusLibPath) / "tabletop-generated";
+        std::error_code ec;
+        fs::create_directories(cacheDir, ec);
+        if (ec) return {};
+
+        const std::string relativePath = TabletopExpandedTilesetRelativePath(ts.Name);
+        const fs::path fullPath = fs::path(StratagusLibPath) / relativePath;
+
+        // IMG_SavePNG is SDL3_image's (this bridge only ever compiles with
+        // PEONPAD_TABLETOP under PEONPAD_ENABLE_SDL3 — see CMakeLists.txt),
+        // which returns `bool` (true = success), unlike SDL2_image's `int`
+        // (0 = success). Do not "fix" this to `!= 0`.
+        if (!IMG_SavePNG(surface, fullPath.string().c_str())) return {};
+
+        s_exportedGraphic      = graphic;
+        s_exportedName         = ts.Name;
+        s_exportedRelativePath = relativePath;
+        s_exportedWidth        = static_cast<uint16_t>(surface->w);
+        s_exportedHeight       = static_cast<uint16_t>(surface->h);
+        out_width  = s_exportedWidth;
+        out_height = s_exportedHeight;
+        return s_exportedRelativePath;
+    } catch (...) {
+        return {};
+    }
+}
+
 // Replicate the engine's DrawUnitType() frame resolution (see
 // engine/stratagus/src/unit/unittype.cpp) so the UI receives the exact
 // sprite-sheet frame index and horizontal-mirror flag the engine itself would
@@ -623,23 +752,42 @@ void peonpad_tabletop_publish_snapshot(void)
     {
         const CTileset &ts = Map.Tileset;
         snap->has_tileset = true;
-        // CTileset::ImageFile stores the unresolved Lua path (e.g.
-        // "tilesets/summer/terrain/summer.png") without the "graphics/"
-        // prefix that the engine adds when loading.  Resolve via
-        // LibraryFileName so the UI receives the staged-data-root-relative
-        // path it can actually open (e.g. "graphics/tilesets/summer/…").
-        const std::string resolved_tileset = ResolveAssetPath(ts.ImageFile);
+        // Prefer the fully-expanded tile graphic (base tileset PNG frames +
+        // any procedurally-generated extended frames — see
+        // ExportExpandedTilesetPNG above): every `graphic_index` the engine
+        // can produce has a matching source rectangle in it, unlike the raw
+        // authored PNG on disk. Fall back to the raw asset only if the
+        // export failed (e.g. a write error), which is correct as long as
+        // the current map references no extended/generated tile frames.
+        uint16_t exported_width = 0, exported_height = 0;
+        const std::string exported_tileset =
+            ExportExpandedTilesetPNG(ts, exported_width, exported_height);
+        std::string image_path;
+        uint16_t image_width = 0, image_height = 0;
+        if (!exported_tileset.empty()) {
+            image_path   = exported_tileset;
+            image_width  = exported_width;
+            image_height = exported_height;
+        } else {
+            // CTileset::ImageFile stores the unresolved Lua path (e.g.
+            // "tilesets/summer/terrain/summer.png") without the "graphics/"
+            // prefix that the engine adds when loading.  Resolve via
+            // LibraryFileName so the UI receives the staged-data-root-relative
+            // path it can actually open (e.g. "graphics/tilesets/summer/…").
+            image_path = ResolveAssetPath(ts.ImageFile);
+        }
         std::snprintf(snap->tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
-                      "%s", resolved_tileset.c_str());
+                      "%s", image_path.c_str());
         std::snprintf(snap->tileset.name, PEONPAD_TABLETOP_MAX_IDENT,
                       "%s", ts.Name.c_str());
         const PixelSize &pts = ts.getPixelTileSize();
         snap->tileset.pixel_tile_width  = static_cast<uint16_t>(pts.x);
         snap->tileset.pixel_tile_height = static_cast<uint16_t>(pts.y);
-        // Image dimensions are not exposed by CTileset; leave 0 (unknown) and
-        // let the UI derive the column count from the decoded PNG.
-        snap->tileset.image_width  = 0u;
-        snap->tileset.image_height = 0u;
+        // Known exactly when we exported the expanded graphic; otherwise left
+        // 0 (unknown) and the UI derives the column count from the decoded
+        // PNG's own dimensions (unchanged fallback behavior).
+        snap->tileset.image_width  = image_width;
+        snap->tileset.image_height = image_height;
     }
 
     // ── Units ────────────────────────────────────────────────────────────

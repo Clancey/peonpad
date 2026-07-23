@@ -563,6 +563,81 @@ func testReliefBoundedForFlatGround() {
     expect(geo.positions.count < 9 * 20, "far fewer than every-tile-4-skirts (bounded)")
 }
 
+// Two adjacent tiles are meshed independently (as they would be from two
+// different, independently-built chunks straddling a chunk boundary — e.g.
+// tile 31 in chunk 0 and tile 32 in chunk 1 of a 32-tile chunk). Both must
+// still land on identical world-space positions along their shared edge, so
+// the chunked architecture never introduces a visible seam/gap/overlap at
+// chunk boundaries regardless of which chunk a tile happens to belong to.
+func testReliefChunkEdgeContinuity() {
+    let fit = TabletopMapFit(width: 64, height: 64, boardExtent: 0.8)
+    let slot = TabletopAtlasSlotMap(graphicIndices: [1] as [Int?])
+
+    // Tile (31, 10) — the east-most tile of "chunk 0" on a 32-wide chunking.
+    let westGeo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: [(tileX: 31, tileZ: 10, graphicIndex: 1, height: Float(0.01))],
+        fit: fit, slotMap: slot, heightAt: { _, _ in 0.01 }, edgeFloorY: 0.01)
+    // Tile (32, 10) — the west-most tile of "chunk 1", built as a wholly
+    // separate mesh (as the real chunk board does for each chunk entity).
+    let eastGeo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: [(tileX: 32, tileZ: 10, graphicIndex: 1, height: Float(0.01))],
+        fit: fit, slotMap: slot, heightAt: { _, _ in 0.01 }, edgeFloorY: 0.01)
+
+    // Both tiles are equal height with equal-height neighbours, so each mesh
+    // is exactly its single top quad (4 verts) with no skirts. The quad
+    // builder's winding-correction may reorder the 4 corners internally, so
+    // identify the shared edge by *position* (max-x pair of the west tile /
+    // min-x pair of the east tile) rather than assuming a fixed index order.
+    expectEq(westGeo.positions.count, 4, "equal-height tile ⇒ top quad only (west)")
+    expectEq(eastGeo.positions.count, 4, "equal-height tile ⇒ top quad only (east)")
+
+    let westMaxX = westGeo.positions.map { $0.x }.max()!
+    let eastMinX = eastGeo.positions.map { $0.x }.min()!
+    let westEdge = westGeo.positions.filter { abs($0.x - westMaxX) < 1e-5 }
+        .sorted { $0.z < $1.z }
+    let eastEdge = eastGeo.positions.filter { abs($0.x - eastMinX) < 1e-5 }
+        .sorted { $0.z < $1.z }
+    expectEq(westEdge.count, 2, "west tile's east edge has exactly 2 vertices")
+    expectEq(eastEdge.count, 2, "east tile's west edge has exactly 2 vertices")
+
+    for (w, e) in zip(westEdge, eastEdge) {
+        expect(abs(w.x - e.x) < 1e-5, "shared edge x matches, got \(w.x) vs \(e.x)")
+        expect(abs(w.z - e.z) < 1e-5, "shared edge z matches, got \(w.z) vs \(e.z)")
+        expect(abs(w.y - e.y) < 1e-5, "shared edge y (height) matches, got \(w.y) vs \(e.y)")
+    }
+}
+
+// Every quad `addQuad` emits (top face or a relief skirt) contributes exactly
+// 4 new vertices and 6 indices that reference only *those* 4 vertices — never
+// vertices from a different quad. This guards against a whole class of bug
+// where a top-face quad's indices could be miswired to reference a skirt's
+// vertices (or vice versa), which would corrupt UVs/normals by blending an
+// unrelated face into the wrong triangle.
+func testReliefQuadIndexLocality() {
+    // A lone raised tile with all neighbours lower: top quad + 4 skirts, so
+    // there are 5 independent quads (20 verts, 30 indices) to check.
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.02))]
+    let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { _, _ in 0.0 }, edgeFloorY: 0.0)
+    expectEq(geo.positions.count, 20, "top quad + 4 skirts = 5 quads × 4 verts")
+    expectEq(geo.triangleIndices.count, 30, "5 quads × 6 indices")
+
+    let idx = geo.triangleIndices
+    var quad = 0
+    while quad * 6 < idx.count {
+        let quadBase = UInt32(quad * 4)
+        for i in 0..<6 {
+            let vertexIndex = idx[quad * 6 + i]
+            expect(vertexIndex >= quadBase && vertexIndex < quadBase + 4,
+                   "quad \(quad) index \(vertexIndex) stays within its own 4 vertices "
+                   + "[\(quadBase), \(quadBase + 4))")
+        }
+        quad += 1
+    }
+}
+
 // MARK: - Run all tests
 
 @main
@@ -602,6 +677,8 @@ struct TabletopChunkGeometryTests {
         testReliefSkirtWhenNeighborLower()
         testReliefSkirtsAllFrontFacing()
         testReliefBoundedForFlatGround()
+        testReliefChunkEdgeContinuity()
+        testReliefQuadIndexLocality()
 
         // MARK: - Summary
 

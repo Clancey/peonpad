@@ -76,7 +76,73 @@ func testAtlasGeometry() {
         "image smaller than a cell => nil")
 }
 
-// MARK: - Team color
+// MARK: - Extended (procedurally-generated) tileset frames
+//
+// Regression coverage for the "wrong floor tiles" bug: Wargus tilesets call
+// GenerateExtendedTileset() (game/wargus/scripts/tilesets/wargus/extended.lua)
+// at load time, which appends procedurally-generated transition/cliff/coast
+// frames to the engine's *in-memory* tile graphic via CGraphic::AppendFrames
+// (engine/stratagus/src/video/graphic.cpp) — growing the surface *taller*
+// than the authored PNG on disk, using the *same column count* (image width
+// unchanged; only new rows are appended below the existing ones — see
+// CGraphic::ExpandFor). A `graphic_index` referencing one of these appended
+// frames has no matching pixels in the raw on-disk file.
+//
+// The engine-side fix (PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG)
+// exports the engine's actual fully-expanded surface — base + generated rows
+// — to a PNG once per tileset load, so the decoded image height the Swift
+// layer sees always covers every frame the engine can produce. This test
+// documents that contract on the Swift side: once `imageHeight` reflects the
+// true expanded surface, a frame in an appended row resolves correctly
+// (whereas it would return nil against the original, truncated file height).
+func testExtendedTilesetFrameResolution() {
+    // A 4-column, 32×32 base tileset with 2 authored rows (8 base frames,
+    // indices 0...7), extended with 3 more generated rows (12 more frames,
+    // indices 8...19) appended below — mirroring CGraphic::ExpandFor, which
+    // never changes the column count, only the surface height.
+    let frameSize = 32
+    let columns = 4
+    let baseRows = 2
+    let extendedRows = 3
+    let baseImageHeight = baseRows * frameSize        // 64 — the raw on-disk PNG
+    let expandedImageHeight = (baseRows + extendedRows) * frameSize  // 160
+
+    // Frame 11 sits in the 3rd row (row index 2 = the 3rd of 5 rows), i.e. an
+    // extended/generated frame, not present in the on-disk tileset PNG.
+    let extendedFrame = 11
+
+    // Against the raw on-disk file's height, the extended frame is out of
+    // bounds — this is the state *before* the fix (or for a fallback path
+    // where the export failed), correctly rejected rather than cropping
+    // garbage pixels.
+    expect(TabletopAtlasGeometry.sourceRect(
+        frame: extendedFrame, frameWidth: frameSize, frameHeight: frameSize,
+        imageWidth: columns * frameSize, imageHeight: baseImageHeight) == nil,
+        "extended frame is out of bounds against the raw on-disk tileset height")
+
+    // Against the exported, fully-expanded surface height, the same frame
+    // resolves to its real rectangle — this is the state after the fix.
+    let resolved = TabletopAtlasGeometry.sourceRect(
+        frame: extendedFrame, frameWidth: frameSize, frameHeight: frameSize,
+        imageWidth: columns * frameSize, imageHeight: expandedImageHeight)
+    expect(resolved != nil, "extended frame resolves once imageHeight covers the expanded surface")
+    // frame 11 => row 2 (11/4), col 3 (11%4) => x=96, y=64
+    expectEqual(resolved, TabletopSourceRect(x: 96, y: 64, width: frameSize, height: frameSize),
+                "extended frame lands in its own generated row, not reinterpreted as a base frame")
+
+    // A base-tileset frame (row 0) resolves identically regardless of
+    // whether the image is the raw file or the expanded export — the fix
+    // must never perturb frames that already existed on disk.
+    let baseFrame = 2
+    let baseResolved = TabletopAtlasGeometry.sourceRect(
+        frame: baseFrame, frameWidth: frameSize, frameHeight: frameSize,
+        imageWidth: columns * frameSize, imageHeight: baseImageHeight)
+    let baseResolvedExpanded = TabletopAtlasGeometry.sourceRect(
+        frame: baseFrame, frameWidth: frameSize, frameHeight: frameSize,
+        imageWidth: columns * frameSize, imageHeight: expandedImageHeight)
+    expectEqual(baseResolved, baseResolvedExpanded,
+                "base (non-extended) frames are unaffected by the expanded surface height")
+}
 
 func testTeamPalette() {
     let red = TabletopTeamPalette.tint(owner: 0)
@@ -213,6 +279,7 @@ struct AssetResolutionTests {
     static func main() {
         testPathConfinement()
         testAtlasGeometry()
+        testExtendedTilesetFrameResolution()
         testTeamPalette()
         testTerrainPlacement()
         testUnitPlacement()

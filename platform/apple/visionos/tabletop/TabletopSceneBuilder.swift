@@ -352,6 +352,13 @@ final class TabletopLiveUnit {
     /// the immutable `spec.facingRadians` so engine-driven facing updates
     /// take effect on the next frame without recreating the entity.
     func applyDirectionalFrame(viewerBoardPosition: TabletopPoint3D, boardRoot: Entity) {
+        // Buildings and resources are map-oriented: they keep the fixed
+        // board-space orientation set at build time (their quad's neutral
+        // +Z/viewer-facing normal) and are never re-yawed toward the viewer, so
+        // they do not spin as the board is orbited. Only mobile units billboard
+        // toward the camera and reselect their directional sprite.
+        guard spec.renderCategory.billboardsTowardViewer else { return }
+
         let unitBoardPosition = TabletopPoint3D(
             x: Double(root.position(relativeTo: boardRoot).x),
             y: 0,

@@ -485,6 +485,15 @@ func testConversionCarriesCategoryAndFootprint() {
     expectEqual(footman?.footprintWidth, 1, "footman footprint 1×1")
     // Mobile unit keeps its directional sheet.
     expectEqual(footman?.numDirections, 5, "footman still has 5 directions")
+
+    // Only mobile units billboard toward the viewer; buildings/resources stay
+    // map-oriented and never re-yaw as the board is orbited.
+    expect(TabletopRenderCategory.mobile.billboardsTowardViewer,
+           "mobile units billboard toward the viewer")
+    expect(!TabletopRenderCategory.building.billboardsTowardViewer,
+           "buildings stay map-oriented (no camera yaw)")
+    expect(!TabletopRenderCategory.resource.billboardsTowardViewer,
+           "resources stay map-oriented (no camera yaw)")
 }
 
 func testConversionOmitsCatalogForProceduralSnapshot() {

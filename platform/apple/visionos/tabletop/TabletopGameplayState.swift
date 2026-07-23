@@ -200,6 +200,12 @@ public enum TabletopRenderCategory: String, Codable, Equatable {
     case mobile
     case building
     case resource
+
+    /// Whether a unit of this category billboards toward the viewer and gets
+    /// camera-relative directional sprites. Only mobile units do; buildings and
+    /// resources stay map-oriented (fixed board orientation) so they do not spin
+    /// as the board is orbited.
+    public var billboardsTowardViewer: Bool { self == .mobile }
 }
 
 /// render layer can locate and tint real sprites keyed by engine ident.

@@ -120,6 +120,17 @@ public enum TabletopAtlasGeometry {
 /// embedded NULs, or Windows-style separators). Returns the normalized
 /// forward-slash relative path, or `nil` when the path is unsafe/empty.
 public enum TabletopAssetPath {
+    /// The engine writes its expanded/generated tileset PNG cache under this
+    /// fixed subdirectory (see PeonPadTabletopBridge.cpp's
+    /// ExportExpandedTilesetPNG / TabletopTilesetExportRelativePath), always
+    /// under the writable user/cache root — never the read-only staged data
+    /// root. A relative path with this prefix is resolved against the
+    /// material provider's `cacheRoot` instead of its `dataRoot` (see
+    /// WargusTabletopMaterialProvider); everything else is an authored asset
+    /// resolved against `dataRoot` as before. Confinement (below) applies to
+    /// both cases identically — only the root differs.
+    public static let generatedCachePrefix = "tabletop-generated/"
+
     public static func confine(_ raw: String) -> String? {
         guard !raw.isEmpty else { return nil }
         guard !raw.contains("\0") else { return nil }
@@ -157,7 +168,9 @@ public enum TabletopAssetPath {
 /// whole image when `sourceRect == nil`) out of the staged image at
 /// `relativePath`, optionally mirror it horizontally, and tint its team region.
 public struct TabletopAssetPlacement: Equatable, Sendable {
-    /// Confined path relative to the staged game-data root.
+    /// Confined path relative to the staged game-data root (or, when
+    /// `isGeneratedCache` is true, relative to the writable user/cache root
+    /// instead — see `TabletopAssetPath.generatedCachePrefix`).
     public var relativePath: String
     /// The frame/graphic index within the atlas (informational; the provider
     /// computes `sourceRect` once it knows the decoded image dimensions).
@@ -170,13 +183,23 @@ public struct TabletopAssetPlacement: Equatable, Sendable {
     /// Team tint for the sprite's team-colored region, or `nil` for terrain and
     /// team-less content.
     public var teamTint: TabletopTeamTint?
+    /// True when `relativePath` names a file the *engine* generated at
+    /// runtime (e.g. the fully-expanded tileset PNG — see
+    /// PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG) rather than an
+    /// authored asset staged from the read-only game-data root. The engine
+    /// never writes into that read-only root (see EngineStartupPlan.swift),
+    /// so generated files live under a separate writable user/cache root;
+    /// the material provider resolves this placement against that root
+    /// instead of `dataRoot`.
+    public var isGeneratedCache: Bool
     public init(
         relativePath: String,
         frame: Int = 0,
         cellWidth: Int = 0,
         cellHeight: Int = 0,
         mirror: Bool = false,
-        teamTint: TabletopTeamTint? = nil
+        teamTint: TabletopTeamTint? = nil,
+        isGeneratedCache: Bool = false
     ) {
         self.relativePath = relativePath
         self.frame = frame
@@ -184,6 +207,7 @@ public struct TabletopAssetPlacement: Equatable, Sendable {
         self.cellHeight = cellHeight
         self.mirror = mirror
         self.teamTint = teamTint
+        self.isGeneratedCache = isGeneratedCache
     }
 
     /// The source rectangle for this placement given a decoded image's pixel
@@ -236,7 +260,8 @@ public final class WargusStagedAssetResolver: @unchecked Sendable {
             cellWidth: tileset.pixelTileWidth,
             cellHeight: tileset.pixelTileHeight,
             mirror: false,
-            teamTint: nil)
+            teamTint: nil,
+            isGeneratedCache: path.hasPrefix(TabletopAssetPath.generatedCachePrefix))
     }
 
     /// Placement for a unit's current sprite frame, or `nil` when the unit has

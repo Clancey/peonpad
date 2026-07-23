@@ -101,9 +101,13 @@ struct TabletopBoardView: View {
     /// Loads real Wargus terrain/unit textures from the staged read-only data
     /// directory at runtime. `nil` when the staged data is absent, so the board
     /// renders fully procedurally rather than silently faking success.
+    /// Also passes the writable user/cache directory, since engine-generated
+    /// assets (the expanded-tileset PNG cache) live there, never in the
+    /// read-only data directory (see EngineStartupPlan.swift).
     @State private var materialProvider: WargusTabletopMaterialProvider? =
         WargusTabletopMaterialProvider.make(
-            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath)
+            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath,
+            cachePath: PeonPadTabletopLaunch.resolveConfig().userPath)
 
     /// Chunked board entity manager: replaces the 32 768-entity per-tile
     /// approach with 16 terrain-chunk entities + 1 fog entity for a 128×128 map.

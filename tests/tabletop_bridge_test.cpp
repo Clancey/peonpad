@@ -51,17 +51,16 @@ static void Run(const char *name, bool (*test_fn)())
 
 // ── 1. ABI layout contract ─────────────────────────────────────────────────
 
-// Pure path/name helpers defined (with normal C++ linkage, outside the
-// `extern "C"` block) in PeonPadTabletopBridge.cpp. They back the
-// engine-only expanded-tileset-PNG export (ExportExpandedTilesetPNG) that
-// fixes the "wrong floor tiles" bug: Wargus tilesets append procedurally
-// generated transition/cliff frames to the in-memory tile graphic
-// (GenerateExtendedTileset -> CGraphic::AppendFrames), which have no
-// matching pixels in the on-disk tileset PNG. Declared here (rather than in
-// the public ABI header) since they are an internal implementation detail,
-// not part of the stable C ABI.
-std::string TabletopSanitizeTilesetCacheName(const std::string &tilesetName) noexcept;
-std::string TabletopExpandedTilesetRelativePath(const std::string &tilesetName) noexcept;
+// Pure path/name helpers (TabletopTilesetPath.h/.cpp): no engine/SDL
+// dependency, so they compile and link into this standalone host test
+// binary. They back the engine-only expanded-tileset-PNG export
+// (ExportExpandedTilesetPNG / TabletopExportTilesetSurfacePNG) that fixes
+// the "wrong floor tiles" bug: Wargus tilesets append procedurally generated
+// transition/cliff frames to the in-memory tile graphic (GenerateExtended
+// Tileset -> CGraphic::AppendFrames), which have no matching pixels in the
+// on-disk tileset PNG.
+#include "TabletopTilesetPath.h"
+#include "TabletopTilesetExportCache.h"
 
 static bool test_abi_version_constant()
 {
@@ -381,27 +380,167 @@ static bool test_expanded_tileset_cache_path()
     // Normal alphabetic tileset names pass through, lowercased.
     EXPECT(TabletopSanitizeTilesetCacheName("Forest") == "forest");
     EXPECT(TabletopSanitizeTilesetCacheName("Wasteland") == "wasteland");
-    EXPECT(TabletopExpandedTilesetRelativePath("Forest")
-           == "tabletop-generated/forest-expanded.png");
 
     // Dashes/underscores are preserved; other punctuation and whitespace are
-    // stripped so the result is always a single safe path segment.
+    // stripped so the display prefix is always a single safe path segment.
     EXPECT(TabletopSanitizeTilesetCacheName("Ice Cliffs-2") == "icecliffs-2");
     EXPECT(TabletopSanitizeTilesetCacheName("../etc/passwd") == "etcpasswd");
-    EXPECT(TabletopExpandedTilesetRelativePath("../etc/passwd")
-           == "tabletop-generated/etcpasswd-expanded.png");
 
     // Degenerate input (empty, or sanitizes to nothing) falls back to a
     // stable, non-empty name rather than producing a malformed path.
     EXPECT(TabletopSanitizeTilesetCacheName("") == "tileset");
     EXPECT(TabletopSanitizeTilesetCacheName("   ") == "tileset");
     EXPECT(TabletopSanitizeTilesetCacheName("!!!") == "tileset");
-    EXPECT(TabletopExpandedTilesetRelativePath("")
-           == "tabletop-generated/tileset-expanded.png");
+
+    // TabletopTilesetExportRelativePath always lands under the fixed
+    // "tabletop-generated/" subdirectory and ends in ".png".
+    const std::string p1 = TabletopTilesetExportRelativePath("Forest", "tilesets/summer/terrain/summer.png", 1);
+    EXPECT(p1.rfind("tabletop-generated/", 0) == 0);
+    EXPECT(p1.size() > 4 && p1.compare(p1.size() - 4, 4, ".png") == 0);
+
+    // Same (name, source, version) is deterministic (same filename every time).
+    const std::string p1again = TabletopTilesetExportRelativePath(
+        "Forest", "tilesets/summer/terrain/summer.png", 1);
+    EXPECT(p1 == p1again);
+
+    // A different version for the same tileset produces a different path
+    // (so a reload that changed the underlying surface never reuses a
+    // Swift-side cache entry keyed on the old path).
+    const std::string p2 = TabletopTilesetExportRelativePath(
+        "Forest", "tilesets/summer/terrain/summer.png", 2);
+    EXPECT(p1 != p2);
 
     // Distinct tileset names never collide on the same cache path.
-    EXPECT(TabletopExpandedTilesetRelativePath("Forest")
-           != TabletopExpandedTilesetRelativePath("Winter"));
+    const std::string winter = TabletopTilesetExportRelativePath(
+        "Winter", "tilesets/winter/terrain/winter.png", 1);
+    EXPECT(p1 != winter);
+
+    // Two different tilesets whose *sanitized display prefixes* coincide
+    // (e.g. "Ice Cliffs-2" and "IceCliffs-2" both sanitize to
+    // "icecliffs-2") must still resolve to different paths — collision
+    // resistance comes from hashing the full unsanitized identity, not the
+    // sanitized display prefix.
+    EXPECT(TabletopSanitizeTilesetCacheName("Ice Cliffs-2")
+           == TabletopSanitizeTilesetCacheName("IceCliffs-2"));
+    const std::string spaced = TabletopTilesetExportRelativePath(
+        "Ice Cliffs-2", "tilesets/ice/terrain/ice.png", 1);
+    const std::string nospace = TabletopTilesetExportRelativePath(
+        "IceCliffs-2", "tilesets/ice/terrain/ice.png", 1);
+    EXPECT(spaced != nospace);
+
+    // Two tilesets with the *same name* but a different source image path
+    // (an unusual but possible modded scenario) also never collide.
+    const std::string sourceA = TabletopTilesetExportRelativePath(
+        "Forest", "tilesets/summer/terrain/summer.png", 1);
+    const std::string sourceB = TabletopTilesetExportRelativePath(
+        "Forest", "tilesets/summer2/terrain/summer.png", 1);
+    EXPECT(sourceA != sourceB);
+
+    // Path length is always comfortably within PEONPAD_TABLETOP_MAX_PATH
+    // (128 bytes including the NUL terminator), even for a pathologically
+    // long/adversarial tileset name and a large version number.
+    const std::string longName(500, 'A');
+    const std::string longSource(500, '/');
+    const std::string longPath = TabletopTilesetExportRelativePath(
+        longName, longSource, 4000000000UL);
+    EXPECT(longPath.size() + 1 <= PEONPAD_TABLETOP_MAX_PATH);
+    EXPECT(longPath.rfind("tabletop-generated/", 0) == 0);
+
+    // Degenerate (empty) identity still produces a safe, bounded path.
+    const std::string emptyPath = TabletopTilesetExportRelativePath("", "", 0);
+    EXPECT(emptyPath.size() + 1 <= PEONPAD_TABLETOP_MAX_PATH);
+    EXPECT(emptyPath.rfind("tabletop-generated/", 0) == 0);
+
+    return true;
+}
+
+// Reload/versioning/backoff decision logic (TabletopTilesetExportCache),
+// exercised with synthetic identities (no real CGraphic/SDL needed) so the
+// exact regression this PR fixes — a same-pointer, same-name tileset reload
+// silently reusing a stale (too-small) export — is covered without engine
+// linkage.
+static bool test_tileset_export_cache_reload_and_backoff()
+{
+    TabletopTilesetExportCache cache;
+
+    // First observation of a new identity: must export (never "use cached"
+    // with nothing yet cached).
+    auto d1 = cache.Attempt(/*graphicIdentity=*/0x1000, "Winter", 512, 768,
+                             /*currentGameCycle=*/0, /*retryBackoffTicks=*/300);
+    EXPECT(d1.action == TabletopTilesetExportAction::Export);
+    EXPECT(d1.version == 1);
+    cache.RecordSuccess("tabletop-generated/winter-v1-aaaa.png", 512, 768);
+
+    // Same identity again (same pointer, name, dims): must reuse the cache,
+    // no re-export.
+    auto d2 = cache.Attempt(0x1000, "Winter", 512, 768, 10, 300);
+    EXPECT(d2.action == TabletopTilesetExportAction::UseCached);
+    EXPECT(d2.cachedRelativePath == "tabletop-generated/winter-v1-aaaa.png");
+    EXPECT(d2.cachedWidth == 512);
+    EXPECT(d2.cachedHeight == 768);
+
+    // The exact regression this cache exists to prevent: the *same*
+    // CGraphic pointer and tileset name reload for a different map, but
+    // GenerateExtendedTileset() ran again and grew the surface taller (a
+    // same-pointer, same-name, *different-dimensions* reload). Must be
+    // treated as a brand-new export, not served from the stale cache.
+    auto d3 = cache.Attempt(0x1000, "Winter", 512, 900, 20, 300);
+    EXPECT(d3.action == TabletopTilesetExportAction::Export);
+    EXPECT(d3.version == 2); // bumped: a new filename, never reusing v1's.
+    cache.RecordSuccess("tabletop-generated/winter-v2-bbbb.png", 512, 900);
+
+    // The new (larger) generation is now what's cached.
+    auto d4 = cache.Attempt(0x1000, "Winter", 512, 900, 25, 300);
+    EXPECT(d4.action == TabletopTilesetExportAction::UseCached);
+    EXPECT(d4.cachedRelativePath == "tabletop-generated/winter-v2-bbbb.png");
+    EXPECT(d4.cachedHeight == 900);
+
+    // A different CGraphic pointer with the same name/dims is also a new
+    // identity (defense in depth — distinct tileset instances never share a
+    // cache entry just because their name/dims happen to match).
+    auto d5 = cache.Attempt(0x2000, "Winter", 512, 900, 30, 300);
+    EXPECT(d5.action == TabletopTilesetExportAction::Export);
+    EXPECT(d5.version == 3);
+
+    return true;
+}
+
+static bool test_tileset_export_cache_failure_backoff()
+{
+    TabletopTilesetExportCache cache;
+
+    auto d1 = cache.Attempt(0x1000, "Forest", 256, 256, /*currentGameCycle=*/0, /*retryBackoffTicks=*/300);
+    EXPECT(d1.action == TabletopTilesetExportAction::Export);
+    cache.RecordFailure(/*currentGameCycle=*/0);
+
+    // Same identity, shortly after the failure: back off rather than
+    // retrying the write (and directory-creation attempt) every tick.
+    auto d2 = cache.Attempt(0x1000, "Forest", 256, 256, /*currentGameCycle=*/10, 300);
+    EXPECT(d2.action == TabletopTilesetExportAction::Backoff);
+    auto d3 = cache.Attempt(0x1000, "Forest", 256, 256, /*currentGameCycle=*/299, 300);
+    EXPECT(d3.action == TabletopTilesetExportAction::Backoff);
+
+    // Once the backoff window elapses, retry — at the *same* version, since
+    // the identity (and therefore target filename) hasn't changed.
+    auto d4 = cache.Attempt(0x1000, "Forest", 256, 256, /*currentGameCycle=*/300, 300);
+    EXPECT(d4.action == TabletopTilesetExportAction::Export);
+    EXPECT(d4.version == d1.version);
+
+    // A retry can succeed: subsequent identical calls then hit the fast
+    // cached path instead of ever retrying again.
+    cache.RecordSuccess("tabletop-generated/forest-v1-cccc.png", 256, 256);
+    auto d5 = cache.Attempt(0x1000, "Forest", 256, 256, /*currentGameCycle=*/1000, 300);
+    EXPECT(d5.action == TabletopTilesetExportAction::UseCached);
+
+    // An identity change immediately after a failure is *not* subject to
+    // backoff (backoff only applies to retrying the *same* failing
+    // identity) — a genuinely new tileset must still get its chance.
+    TabletopTilesetExportCache cache2;
+    auto e1 = cache2.Attempt(0x3000, "Swamp", 128, 128, 0, 300);
+    EXPECT(e1.action == TabletopTilesetExportAction::Export);
+    cache2.RecordFailure(0);
+    auto e2 = cache2.Attempt(0x4000, "Swamp", 128, 128, 1, 300);
+    EXPECT(e2.action == TabletopTilesetExportAction::Export);
 
     return true;
 }
@@ -857,6 +996,8 @@ int main()
     Run("synthetic_v3_descriptors", test_synthetic_v3_asset_descriptors);
     Run("synthetic_v3_bad_paths",   test_synthetic_v3_rejects_unterminated_paths);
     Run("expanded_tileset_cache_path", test_expanded_tileset_cache_path);
+    Run("tileset_export_cache_reload", test_tileset_export_cache_reload_and_backoff);
+    Run("tileset_export_cache_backoff", test_tileset_export_cache_failure_backoff);
     Run("retain_release",           test_retain_release);
     Run("null_safety",              test_null_safety);
     Run("data_is_immutable_copy",   test_snapshot_data_is_immutable_copy);

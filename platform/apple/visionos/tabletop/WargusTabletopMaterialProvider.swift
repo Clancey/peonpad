@@ -24,6 +24,11 @@ import UIKit
 public final class WargusTabletopMaterialProvider {
     /// The staged read-only game-data root (e.g. <container>/Documents/wargus-data).
     private let dataRoot: URL
+    /// The writable user/cache root (e.g. <container>/.../user), or `nil` when
+    /// unavailable. Engine-generated assets (see `TabletopAssetPlacement.
+    /// isGeneratedCache`) resolve here instead of `dataRoot`, since the engine
+    /// documents `dataRoot` as read-only and never writes into it.
+    private let cacheRoot: URL?
     private let resolver = WargusStagedAssetResolver()
     /// Bounded decoded-material cache keyed by `TabletopAssetPlacement.cacheKey`.
     private let cache: TabletopLRUCache<String, UnlitMaterial>
@@ -37,23 +42,47 @@ public final class WargusTabletopMaterialProvider {
     private let decodeQueue = DispatchQueue(
         label: "org.peonpad.visionos.tabletop.assetdecode", qos: .userInitiated)
 
-    public init(dataRoot: URL, cacheCapacity: Int = 512) {
+    public init(dataRoot: URL, cacheRoot: URL? = nil, cacheCapacity: Int = 512) {
         self.dataRoot = dataRoot
+        self.cacheRoot = cacheRoot
         self.cache = TabletopLRUCache(capacity: cacheCapacity)
     }
 
     /// Builds a provider rooted at the staged data directory, or `nil` when it
     /// does not exist (the board then renders fully procedurally — an explicit,
     /// per-app absence, not a silent fallback masking a broken pipeline).
+    ///
+    /// `cachePath` is the writable user/cache directory (see
+    /// `EngineLaunchConfig.userPath`) the engine writes its generated tileset
+    /// PNG cache into. Unlike `dataPath` (which must already be fully staged
+    /// before the engine can launch), `cachePath`'s "tabletop-generated/"
+    /// subdirectory is created lazily by the engine at runtime — often after
+    /// this provider is constructed — so its existence is deliberately *not*
+    /// checked up front; an absent or not-yet-populated cache directory
+    /// simply fails the later per-asset decode (as any missing asset does),
+    /// keeping that one tile/sprite's procedural fallback rather than
+    /// permanently disabling generated-cache resolution due to a race.
     public static func make(
         dataPath: String,
+        cachePath: String? = nil,
         fileManager: FileManager = .default
     ) -> WargusTabletopMaterialProvider? {
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: dataPath, isDirectory: &isDir), isDir.boolValue
         else { return nil }
+        let cacheRoot: URL? = cachePath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
         return WargusTabletopMaterialProvider(
-            dataRoot: URL(fileURLWithPath: dataPath, isDirectory: true))
+            dataRoot: URL(fileURLWithPath: dataPath, isDirectory: true),
+            cacheRoot: cacheRoot)
+    }
+
+    /// The root a placement should be resolved against: `cacheRoot` (falling
+    /// back to `dataRoot` if unavailable) for engine-generated assets,
+    /// `dataRoot` for everything else. Authored-asset confinement is
+    /// unaffected — `TabletopAssetPath.confine`/`resolvedURL` apply identically
+    /// to either root.
+    private func root(for placement: TabletopAssetPlacement) -> URL {
+        placement.isGeneratedCache ? (cacheRoot ?? dataRoot) : dataRoot
     }
 
     // MARK: - Public requests
@@ -117,7 +146,13 @@ public final class WargusTabletopMaterialProvider {
         tileset:  TabletopTilesetInfo?,
         completion: @escaping (PhysicallyBasedMaterial?) -> Void
     ) {
-        let root     = dataRoot
+        // All slots share the same tileset, so its generated-cache-ness (and
+        // therefore which root applies) is determined once up front rather
+        // than per placement.
+        let isGeneratedCache = tileset.map {
+            TabletopAssetPath.confine($0.imagePath)?.hasPrefix(TabletopAssetPath.generatedCachePrefix) ?? false
+        } ?? false
+        let root     = isGeneratedCache ? (cacheRoot ?? dataRoot) : dataRoot
         let resolver = self.resolver
 
         decodeQueue.async { [weak self] in
@@ -214,7 +249,7 @@ public final class WargusTabletopMaterialProvider {
         }
         pending[key] = [completion]
 
-        let root = dataRoot
+        let root = self.root(for: placement)
         decodeQueue.async { [weak self] in
             let cgImage = WargusTabletopMaterialProvider.decode(root: root, placement: placement)
             Task { @MainActor in

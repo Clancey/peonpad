@@ -13,6 +13,7 @@
 // peonpad_tabletop_publish_synthetic) is always compiled and testable.
 
 #include "PeonPadTabletopBridge.h"
+#include "TabletopTilesetPath.h"
 
 #include <atomic>
 #include <cassert>
@@ -25,11 +26,14 @@
 // ── Engine state includes (simulation thread only) ───────────────────────
 
 #ifdef PEONPAD_TABLETOP
+#include "TabletopTilesetExport.h"
+#include "TabletopTilesetExportCache.h"
 #include "commands.h"
 #include "fow.h"
 #include "interface.h"
 #include "iolib.h"
 #include "map.h"
+#include "parameters.h"
 #include "player.h"
 #include "stratagus.h"
 #include "tile.h"
@@ -39,8 +43,6 @@
 #include "unittype.h"
 #include "vec2i.h"
 #include "video.h"
-#include <SDL_image.h>
-#include <cctype>
 #endif
 
 // ── Internal snapshot struct ──────────────────────────────────────────────
@@ -122,58 +124,6 @@ bool CommandIsValid(const PeonPadCommand *cmd) noexcept
 }
 
 } // namespace
-
-// ── Expanded-tileset export (pure path/name logic; always compiled) ──────
-//
-// Stratagus tilesets (see game/wargus/scripts/tilesets/wargus/extended.lua)
-// call GenerateExtendedTileset() at load time, which procedurally generates
-// additional transition/cliff/coastline tile frames and appends them — only
-// in the *in-memory* CGraphic surface, via CGraphic::AppendFrames() (see
-// engine/stratagus/src/video/graphic.cpp) — after the frames already loaded
-// from the on-disk tileset PNG. A terrain cell's `graphic_index` can
-// therefore reference a frame that has no matching pixels in the authored
-// PNG on disk. Left unhandled, the Swift material provider's source-rect
-// bounds check (correctly) rejects those out-of-range frames and the tile
-// falls back to a flat procedural color — the "wrong floor tiles" bug.
-//
-// The fix (see ExportExpandedTilesetPNG, engine-only, further below) is to
-// export the engine's actual fully-expanded tile graphic (base + generated
-// frames) to a PNG once per tileset load, so every `graphic_index` the
-// engine can produce has a matching source rectangle.
-// `TabletopSanitizeTilesetCacheName` and `TabletopExpandedTilesetRelativePath`
-// contain the pure path-naming logic and have no engine/SDL dependency (and
-// deliberately sit outside the `extern "C"` block below so they keep normal
-// C++ linkage), so they compile and are unit-tested in the standalone host
-// build (tests/tabletop_bridge_test.cpp) even though the export itself only
-// runs in the real engine.
-
-// Keeps a tileset's display name safe for use as a single path segment: only
-// lowercase alphanumerics, '-', and '_' survive; everything else is dropped.
-// Falls back to "tileset" for a name that sanitizes to nothing (e.g. empty,
-// or entirely punctuation/whitespace).
-std::string TabletopSanitizeTilesetCacheName(const std::string &tilesetName) noexcept
-{
-    std::string safe;
-    safe.reserve(tilesetName.size());
-    for (unsigned char c : tilesetName) {
-        if (std::isalnum(c)) {
-            safe += static_cast<char>(std::tolower(c));
-        } else if (c == '-' || c == '_') {
-            safe += static_cast<char>(c);
-        }
-    }
-    if (safe.empty()) safe = "tileset";
-    return safe;
-}
-
-// The staged-data-root-relative path where the expanded tileset PNG for
-// `tilesetName` is (or will be) cached. Always under a single fixed
-// subdirectory so it never collides with authored asset paths and is trivial
-// to exclude from asset re-staging.
-std::string TabletopExpandedTilesetRelativePath(const std::string &tilesetName) noexcept
-{
-    return "tabletop-generated/" + TabletopSanitizeTilesetCacheName(tilesetName) + "-expanded.png";
-}
 
 // ── Public C API: snapshot accessors ─────────────────────────────────────
 
@@ -482,78 +432,64 @@ static std::string ResolveAssetPath(const std::string &raw) noexcept
     }
 }
 
-// Exports the engine's actual, fully-expanded tile graphic (the on-disk
-// tileset frames plus any procedurally-generated extended frames appended by
-// GenerateExtendedTileset — see the file-level comment above
-// TabletopSanitizeTilesetCacheName) to a PNG within the staged data root,
-// once per tileset load. Returns the staged-data-root-relative path on
-// success ("" on any failure), in which case the caller falls back to the
-// raw authored asset (correct only for a tileset with no extended/generated
-// frames referenced by the current map).
+// Exports the engine's actual, fully-expanded tile graphic (base tileset PNG
+// frames plus any procedurally-generated extended frames appended by
+// GenerateExtendedTileset — see the file-level comment in
+// TabletopTilesetPath.h) to a PNG under the writable user/cache directory
+// (Parameters::Instance.GetUserDirectory() — the `-u` root; never the
+// read-only `-d` staged data root, which EngineStartupPlan.swift documents
+// as a directory "the engine never writes into"), once per *distinct*
+// tileset load. Returns the cache-root-relative path on success ("" on any
+// failure), in which case the caller falls back to the raw authored asset
+// (correct only for a tileset with no extended/generated frames referenced
+// by the current map).
 //
-// Cheap on repeat calls: publish runs every simulation tick, but the export
-// only happens the first time it sees a given tileset load (identified by
-// both the CGraphic instance and the tileset name — see the cache-key
-// comment below), so subsequent calls for the same loaded map are just two
-// comparisons.
+// All reload/versioning/backoff *decision* logic lives in the pure,
+// host-testable TabletopTilesetExportCache (see its header for why identity
+// must include the surface dimensions, not just the CGraphic pointer +
+// tileset name); this function only supplies the engine-specific identity
+// (the CGraphic pointer, tileset name/source, and surface) and the actual
+// PNG write (TabletopExportTilesetSurfacePNG).
 static std::string ExportExpandedTilesetPNG(const CTileset &ts,
                                              uint16_t &out_width,
                                              uint16_t &out_height) noexcept
 {
-    static const CGraphic *s_exportedGraphic = nullptr;
-    static std::string     s_exportedName;
-    static std::string     s_exportedRelativePath;
-    static uint16_t        s_exportedWidth  = 0;
-    static uint16_t        s_exportedHeight = 0;
+    static TabletopTilesetExportCache s_cache;
+    constexpr uint64_t kRetryBackoffTicks = 300; // ~a few seconds of sim time
 
     if (!Map.TileGraphic) return {};
     CGraphic *graphic = Map.TileGraphic.get();
-
-    // Compare both the CGraphic pointer *and* the tileset name: Map.TileGraphic
-    // is a std::shared_ptr<CGraphic> that is reset and reallocated on every
-    // map/tileset (re)load (CMap::Clean() -> CclDefineTileset() ->
-    // CGraphic::New()), so a later allocation can legitimately reuse a freed
-    // CGraphic's address. A pointer-only comparison could then spuriously
-    // match a *different* tileset and hand back the previous tileset's cached
-    // path/dimensions — silently reintroducing the exact "wrong floor tiles"
-    // class of bug this export exists to fix.
-    if (graphic == s_exportedGraphic && ts.Name == s_exportedName
-        && !s_exportedRelativePath.empty()) {
-        out_width  = s_exportedWidth;
-        out_height = s_exportedHeight;
-        return s_exportedRelativePath;
-    }
-
     SDL_Surface *surface = graphic->getSurface();
     if (!surface || surface->w <= 0 || surface->h <= 0) return {};
     if (surface->w > UINT16_MAX || surface->h > UINT16_MAX) return {};
 
-    try {
-        const fs::path cacheDir = fs::path(StratagusLibPath) / "tabletop-generated";
-        std::error_code ec;
-        fs::create_directories(cacheDir, ec);
-        if (ec) return {};
+    const TabletopTilesetExportDecision decision = s_cache.Attempt(
+        reinterpret_cast<std::uintptr_t>(graphic), ts.Name,
+        surface->w, surface->h,
+        static_cast<uint64_t>(GameCycle), kRetryBackoffTicks);
 
-        const std::string relativePath = TabletopExpandedTilesetRelativePath(ts.Name);
-        const fs::path fullPath = fs::path(StratagusLibPath) / relativePath;
-
-        // IMG_SavePNG is SDL3_image's (this bridge only ever compiles with
-        // PEONPAD_TABLETOP under PEONPAD_ENABLE_SDL3 — see CMakeLists.txt),
-        // which returns `bool` (true = success), unlike SDL2_image's `int`
-        // (0 = success). Do not "fix" this to `!= 0`.
-        if (!IMG_SavePNG(surface, fullPath.string().c_str())) return {};
-
-        s_exportedGraphic      = graphic;
-        s_exportedName         = ts.Name;
-        s_exportedRelativePath = relativePath;
-        s_exportedWidth        = static_cast<uint16_t>(surface->w);
-        s_exportedHeight       = static_cast<uint16_t>(surface->h);
-        out_width  = s_exportedWidth;
-        out_height = s_exportedHeight;
-        return s_exportedRelativePath;
-    } catch (...) {
+    if (decision.action == TabletopTilesetExportAction::UseCached) {
+        out_width  = decision.cachedWidth;
+        out_height = decision.cachedHeight;
+        return decision.cachedRelativePath;
+    }
+    if (decision.action == TabletopTilesetExportAction::Backoff) {
         return {};
     }
+
+    const std::string cacheRoot = Parameters::Instance.GetUserDirectory().string();
+    const TabletopTilesetExportResult exported = TabletopExportTilesetSurfacePNG(
+        surface, ts.Name, ts.ImageFile, decision.version, cacheRoot);
+
+    if (!exported.ok) {
+        s_cache.RecordFailure(static_cast<uint64_t>(GameCycle));
+        return {};
+    }
+
+    s_cache.RecordSuccess(exported.relativePath, exported.width, exported.height);
+    out_width  = exported.width;
+    out_height = exported.height;
+    return exported.relativePath;
 }
 
 // Replicate the engine's DrawUnitType() frame resolution (see

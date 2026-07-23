@@ -61,6 +61,18 @@ extension TabletopTerrainChunkGeometry {
     }
 }
 
+/// Bridges the framework-free substrate slab geometry to a `MeshDescriptor`.
+extension TabletopBoardMeshData {
+    func meshDescriptor(name: String = "boardSubstrate") -> MeshDescriptor {
+        var desc = MeshDescriptor(name: name)
+        desc.positions           = MeshBuffer(positions)
+        desc.normals             = MeshBuffer(normals)
+        desc.textureCoordinates  = MeshBuffer(textureCoordinates)
+        desc.primitives          = .triangles(triangleIndices)
+        return desc
+    }
+}
+
 // MARK: - TabletopChunkBoard
 
 /// Manages the chunked terrain and fog-overlay entities for the tabletop board.
@@ -78,6 +90,9 @@ public final class TabletopChunkBoard {
 
     private var chunkEntities:    [TabletopChunkKey: ModelEntity] = [:]
     private var fogEntity:        ModelEntity?
+    /// The thick board substrate/frame slab drawn below the terrain to give the
+    /// board visible 2.5D depth. One entity for the whole board.
+    private var substrateEntity:  ModelEntity?
     /// Incremented each time a chunk is (re)built; async atlas completions
     /// compare their captured generation to the current value and abort if
     /// a newer rebuild has superseded them.
@@ -94,6 +109,15 @@ public final class TabletopChunkBoard {
     private var buildStart: CFAbsoluteTime = 0
     public private(set) var totalChunks:     Int = 0
     public private(set) var atlasReadyCount: Int = 0
+
+    /// Streaming-progress snapshot; `readiness.isStable` becomes true once every
+    /// terrain chunk has upgraded from its procedural placeholder to real art.
+    public var readiness: TabletopBoardReadiness {
+        TabletopBoardReadiness(totalChunks: totalChunks, atlasReadyCount: atlasReadyCount)
+    }
+    /// Set once, when the board first reaches the stable-ready state, so the
+    /// transition is logged exactly once.
+    private var didLogStable = false
 
     // Background queue for all CGImage / atlas work.
     private let decodeQueue = DispatchQueue(
@@ -136,6 +160,10 @@ public final class TabletopChunkBoard {
             })
 
         tabletopEngineLog("[Tabletop] build: terrainByKey indexed (\(terrainByKey.count) entries)")
+
+        // Build the thick substrate/frame slab first so it sits beneath the
+        // terrain surface and gives the board visible 2.5D depth.
+        buildSubstrate(snapshot: snapshot, fit: fit, to: boardRoot)
 
         // Build one ModelEntity per chunk.
         for chunkZ in 0..<cz {
@@ -236,12 +264,12 @@ public final class TabletopChunkBoard {
                     slotMap: slotMap, tileset: tileset
                 ) { [weak entity, weak self] material in
                     guard let entity, let material, let self else { return }
-                    guard self.chunkGeneration[key] == gen else { return }  // stale guard
+                    guard TabletopAtlasCompletionGate.accepts(
+                        requestGeneration: gen,
+                        currentGeneration: self.chunkGeneration[key] ?? 0) else { return }  // stale guard
                     entity.model?.materials = [material]
-                    self.atlasReadyCount += 1
-                    tabletopEngineLog(
-                        "[Tabletop] atlas updated chunk "
-                        + "\(key.chunkX).\(key.chunkZ) (terrain change)")
+                    self.noteAtlasReady(chunkX: key.chunkX, chunkZ: key.chunkZ,
+                                        reason: "terrain change")
                 }
             }
         }
@@ -293,12 +321,11 @@ public final class TabletopChunkBoard {
             materialProvider.buildTerrainAtlas(slotMap: slotMap, tileset: tileset) {
                 [weak entity, weak self] material in
                 guard let entity, let material, let self else { return }
-                guard self.chunkGeneration[key] == gen else { return }  // stale guard
+                guard TabletopAtlasCompletionGate.accepts(
+                    requestGeneration: gen,
+                    currentGeneration: self.chunkGeneration[key] ?? 0) else { return }  // stale guard
                 entity.model?.materials = [material]
-                self.atlasReadyCount += 1
-                tabletopEngineLog(
-                    "[Tabletop] atlas ready chunk \(self.atlasReadyCount)/\(self.totalChunks) "
-                    + "(\(key.chunkX).\(key.chunkZ))")
+                self.noteAtlasReady(chunkX: key.chunkX, chunkZ: key.chunkZ, reason: nil)
             }
         }
 
@@ -388,6 +415,55 @@ public final class TabletopChunkBoard {
         return mat
     }
 
+    // MARK: - Private: substrate slab
+
+    /// Builds the thick board substrate/frame slab beneath the terrain so the
+    /// board reads as a physical 2.5D object with visible depth, instead of a
+    /// flat decal. Sized to the terrain area plus a frame border.
+    private func buildSubstrate(
+        snapshot:  TabletopGameplaySnapshot,
+        fit:       TabletopMapFit,
+        to boardRoot: Entity
+    ) {
+        let (w, d) = TabletopSubstrateLayout.substrateExtent(
+            fit: fit, mapWidth: snapshot.mapSize.width, mapHeight: snapshot.mapSize.height)
+        let geo  = TabletopSubstrateMeshBuilder.build(width: w, depth: d)
+        let mesh = (try? MeshResource.generate(from: [geo.meshDescriptor()]))
+            ?? .generateBox(size: SIMD3<Float>(
+                w, TabletopBoardElevation.substrateThickness, d))
+        // Opaque, matte slab so the board frame is clearly distinct from the
+        // terrain surface above it and its side faces shade under the scene's
+        // image-based lighting — a real depth cue. No proprietary art.
+        let mat = SimpleMaterial(
+            color: UIColor(red: 0.20, green: 0.14, blue: 0.09, alpha: 1),
+            roughness: 0.9,
+            isMetallic: false)
+        let entity = ModelEntity(mesh: mesh, materials: [mat])
+        entity.name = "board.substrate"
+        boardRoot.addChild(entity)
+        substrateEntity = entity
+        tabletopEngineLog(
+            "[Tabletop] substrate slab: "
+            + "extent=\(String(format: "%.3f", w))x\(String(format: "%.3f", d))m "
+            + "thickness=\(String(format: "%.3f", TabletopBoardElevation.substrateThickness))m "
+            + "top=\(TabletopBoardElevation.substrateTopY) bottom=\(TabletopBoardElevation.substrateBottomY)")
+    }
+
+    /// Records one chunk's real-art atlas arrival and logs the stable-ready
+    /// transition exactly once, when the last chunk settles.
+    private func noteAtlasReady(chunkX: Int, chunkZ: Int, reason: String?) {
+        atlasReadyCount += 1
+        let suffix = reason.map { " (\($0))" } ?? ""
+        tabletopEngineLog(
+            "[Tabletop] atlas ready chunk \(atlasReadyCount)/\(totalChunks) "
+            + "(\(chunkX).\(chunkZ))\(suffix)")
+        if !didLogStable, readiness.isStable {
+            didLogStable = true
+            tabletopEngineLog(
+                "[Tabletop] board stable-ready: all \(totalChunks) chunks upgraded to real art")
+        }
+    }
+
     // MARK: - Private: fog entity
 
     private func buildFogEntity(
@@ -412,7 +488,7 @@ public final class TabletopChunkBoard {
         let mat    = makeFogMaterial(for: fog)
         let entity = ModelEntity(mesh: mesh, materials: [mat])
         entity.name     = "board.fog"
-        entity.position = [0, 0.005, 0]   // just above terrain
+        entity.position = [0, TabletopBoardElevation.fogY, 0]   // elevated, non-coplanar with terrain
         boardRoot.addChild(entity)
         fogEntity = entity
     }
@@ -428,8 +504,11 @@ public final class TabletopChunkBoard {
                image: cgImage, options: .init(semantic: .color)) {
             var mat = UnlitMaterial()
             mat.color    = .init(tint: .white, texture: .init(texture))
+            // Straight alpha blending from the fog texture: revealed tiles are
+            // fully transparent (alpha 0), hidden tiles a dark veil. A single,
+            // consistent blend mode (no simultaneous alpha-test cutout) keeps
+            // the elevated fog plane from flickering as it re-uploads.
             mat.blending = .transparent(opacity: .init(floatLiteral: 1.0))
-            mat.opacityThreshold = 0.1
             return mat
         }
         // Fallback: solid dark overlay.

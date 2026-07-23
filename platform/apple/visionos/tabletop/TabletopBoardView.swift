@@ -62,6 +62,12 @@ struct TabletopBoardView: View {
     @State private var manipulator = TabletopBoardManipulator(initial: TabletopPlacement.initialTransform)
     @State private var commandReducer = TabletopCommandReducer()
 
+    /// Board transform captured at the start of an in-progress indirect
+    /// (mouse/trackpad) gesture, so the cumulative SwiftUI drag/magnify/rotate
+    /// values are all folded against one stable base — pan, zoom and rotate
+    /// compose in a single update instead of clobbering one another.
+    @State private var indirectStartTransform: TabletopBoardTransform?
+
     // MARK: - Snapshot tracking
 
     /// Most-recently received snapshot. `nil` until the first snapshot arrives
@@ -153,6 +159,12 @@ struct TabletopBoardView: View {
                 .onChanged { events in handle(events: events) }
                 .onEnded   { events in handle(events: events) }
         )
+        // Indirect pointer navigation (mouse/trackpad), the only way to
+        // manipulate the board in the visionOS Simulator, which has no hand
+        // tracking. A single simultaneous gesture folds pan + zoom + rotate
+        // against one shared base so a trackpad pinch-rotate composes cleanly,
+        // and it never suppresses the physical-hand SpatialEventGesture above.
+        .simultaneousGesture(indirectNavigationGesture)
         // Subscribe to the gameplay source and apply incremental diffs.
         .task {
             for await snapshot in session.snapshots {
@@ -299,6 +311,44 @@ struct TabletopBoardView: View {
         previousSnapshot = next
         gameplaySnapshot = next
         chunkBoard?.updateSnapshot(next)
+    }
+
+    // MARK: - Indirect pointer navigation (Simulator)
+
+    /// One gesture that folds a mouse/trackpad pan (drag), zoom (magnify) and
+    /// rotate against a single shared base transform, so overlapping channels
+    /// (e.g. a trackpad pinch-rotate) compose instead of clobbering each other.
+    /// Any channel that is not currently active contributes its identity
+    /// (translation 0 / magnification 1 / rotation 0).
+    private var indirectNavigationGesture: some Gesture {
+        DragGesture()
+            .simultaneously(with: MagnifyGesture())
+            .simultaneously(with: RotateGesture())
+            .onChanged { value in
+                let base = indirectStartTransform ?? manipulator.transform
+                if indirectStartTransform == nil { indirectStartTransform = base }
+
+                let drag = value.first?.first
+                let zoom = value.first?.second
+                let turn = value.second
+
+                applyIndirect(TabletopIndirectNavigationReducer.apply(
+                    base: base,
+                    translationWidth: Double(drag?.translation.width ?? 0),
+                    translationHeight: Double(drag?.translation.height ?? 0),
+                    magnification: Double(zoom?.magnification ?? 1),
+                    rotationRadians: turn?.rotation.radians ?? 0))
+            }
+            .onEnded { _ in indirectStartTransform = nil }
+    }
+
+    /// Applies an indirect-navigation transform to both the hand manipulator
+    /// (so subsequent hand gestures resume from here) and the live board root.
+    private func applyIndirect(_ transform: TabletopBoardTransform) {
+        manipulator.setTransform(transform)
+        if let boardRoot {
+            applyTransform(transform, to: boardRoot)
+        }
     }
 
     // MARK: - Gesture bridging

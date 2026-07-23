@@ -146,6 +146,18 @@ public struct TabletopBoardManipulator: Equatable {
         transformAtGestureStart = initial
     }
 
+    /// Replaces the board transform (e.g. after indirect-pointer navigation in
+    /// the simulator, or a recenter) and re-anchors gesture tracking so the
+    /// next hand-gesture frame resumes from the new transform instead of a
+    /// stale start sample. Physical hand manipulation is unaffected: the very
+    /// next active sample re-anchors itself via the zero-hand → one-hand path.
+    public mutating func setTransform(_ transform: TabletopBoardTransform) {
+        self.transform = transform
+        self.transformAtGestureStart = transform
+        self.leftStart = nil
+        self.rightStart = nil
+    }
+
     /// Feed this frame's latest left/right-hand sample. Pass `nil` for a
     /// hand that has no active direct pinch this frame. Returns the updated
     /// transform. Deterministic: the same ordered sequence of calls always

@@ -12,15 +12,37 @@ struct TabletopPaletteView: View {
 
     let onRecenter: () -> Void
 
+    @State private var showHelp = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            Label("Tabletop", systemImage: "square.grid.3x3")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button(action: onRecenter) {
-                Label("Recenter", systemImage: "arrow.down.to.line.compact")
+        VStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Label("Tabletop", systemImage: "square.grid.3x3")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button(action: onRecenter) {
+                    Label("Recenter", systemImage: "arrow.down.to.line.compact")
+                }
+                .buttonStyle(.borderedProminent)
+                Button {
+                    showHelp.toggle()
+                } label: {
+                    Label("Controls", systemImage: "questionmark.circle")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.bordered)
+                .help("Show navigation controls")
             }
-            .buttonStyle(.borderedProminent)
+            if showHelp {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Drag to move · pinch to zoom · rotate to turn")
+                    Text("(trackpad/mouse in the Simulator; hands on device)")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+                .multilineTextAlignment(.leading)
+                .transition(.opacity)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

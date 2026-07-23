@@ -114,6 +114,7 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopTransport.swift"
   "$TABLETOP_SRC_DIR/TabletopGameplaySource.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardReconciler.swift"
+  "$TABLETOP_SRC_DIR/TabletopCommandHarness.swift"
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
   "$TABLETOP_SRC_DIR/TabletopPaletteView.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"
@@ -123,6 +124,8 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/EngineCommandEncoder.swift"
   "$TABLETOP_SRC_DIR/TabletopMapFit.swift"
   "$TABLETOP_SRC_DIR/WargusTabletopAssetResolver.swift"
+  "$TABLETOP_SRC_DIR/TabletopAssetResolution.swift"
+  "$TABLETOP_SRC_DIR/WargusTabletopMaterialProvider.swift"
   "$TABLETOP_SRC_DIR/EngineStartupPlan.swift"
   "$TABLETOP_SRC_DIR/EngineTabletopTransport.swift"
 )

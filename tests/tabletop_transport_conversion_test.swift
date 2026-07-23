@@ -331,6 +331,84 @@ func testStartupArguments() {
                 "argv omits map when no scenario")
 }
 
+// MARK: - Converter: ABI v3 asset descriptors
+
+func testConversionBuildsAssetCatalog() {
+    let tileset = EngineTilesetDescriptor(
+        imagePath: "tilesets/summer/terrain/summer.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest")
+    let terrain = [
+        EngineTerrainCell(tileIndex: 1, fogState: EngineFogState.visible.rawValue,
+                          terrainClass: EngineTerrainClass.grass.rawValue, graphicIndex: 100),
+        EngineTerrainCell(tileIndex: 2, fogState: EngineFogState.explored.rawValue,
+                          terrainClass: EngineTerrainClass.forest.rawValue, graphicIndex: 329),
+    ]
+    let units = [
+        EngineUnitRecord(id: 7, owner: 1, alive: 1, selected: 0, facing: 64,
+                         hp: 60, maxHP: 60, tileX: 0, tileY: 0,
+                         worldX: 0, worldY: 0, typeID: 3,
+                         spriteFrame: 45, spriteMirror: 1),
+    ]
+    let types = [
+        EngineUnitType(typeID: 3, ident: "unit-footman",
+                       spritePath: "human/units/footman.png",
+                       frameWidth: 72, frameHeight: 72, numDirections: 5, flip: 1,
+                       teamColorStart: 208, teamColorCount: 4),
+    ]
+    let snap = EngineSnapshot(
+        abiVersion: kPeonPadTabletopABIVersion, generation: 5,
+        mapWidth: 2, mapHeight: 1,
+        terrain: terrain, units: units, unitTypes: types, tileset: tileset)
+
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "v3 snapshot converts")
+        return
+    }
+
+    // Terrain graphic_index carried through.
+    expectEqual(ui.terrain[0].graphicIndex, 100, "terrain[0] graphic index")
+    expectEqual(ui.terrain[1].graphicIndex, 329, "terrain[1] graphic index")
+
+    // Unit sprite frame + mirror carried through.
+    expectEqual(ui.units[0].spriteFrame, 45, "unit sprite frame")
+    expectEqual(ui.units[0].spriteMirror, true, "unit sprite mirror")
+
+    // Asset catalog present with tileset + sprite descriptor.
+    guard let assets = ui.assets else {
+        expect(false, "asset catalog present for v3 snapshot")
+        return
+    }
+    expectEqual(assets.tileset?.imagePath, "tilesets/summer/terrain/summer.png",
+                "catalog tileset path")
+    expectEqual(assets.tileset?.pixelTileWidth, 32, "catalog tileset tile width")
+    let sprite = assets.sprite(forUnitKind: "unit-footman")
+    expectEqual(sprite?.spritePath, "human/units/footman.png", "catalog sprite path")
+    expectEqual(sprite?.frameWidth, 72, "catalog sprite frame width")
+    expectEqual(sprite?.flip, true, "catalog sprite flip")
+    expectEqual(sprite?.teamColorCount, 4, "catalog sprite team color span")
+
+    // End-to-end: the staged resolver turns the converted snapshot into a
+    // real placement without any bundled art.
+    let resolver = WargusStagedAssetResolver()
+    let placement = resolver.unitPlacement(unit: ui.units[0], sprite: sprite)
+    expectEqual(placement?.relativePath, "human/units/footman.png", "resolved unit path")
+    expectEqual(placement?.frame, 45, "resolved unit frame")
+    expectEqual(placement?.mirror, true, "resolved unit mirror")
+    expect(placement?.teamTint == TabletopTeamPalette.tint(owner: 1),
+           "resolved unit team tint for owner 1")
+}
+
+func testConversionOmitsCatalogForProceduralSnapshot() {
+    // A snapshot with no tileset and empty sprite paths yields no catalog.
+    let snap = makeEngineSnapshot()
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "procedural snapshot converts")
+        return
+    }
+    expect(ui.assets == nil, "no asset catalog without engine art descriptors")
+    expectEqual(ui.terrain[0].graphicIndex, 0, "default graphic index is 0")
+}
+
 // MARK: - Runner
 
 @main
@@ -344,6 +422,8 @@ struct TransportConversionTests {
         testFogMapping()
         testFullConversionUnitsAndSelection()
         testConversionMapsUnknownTypeToEmptyKind()
+        testConversionBuildsAssetCatalog()
+        testConversionOmitsCatalogForProceduralSnapshot()
         testCommandEncoding()
         testCommandEncodingRejectsBadInput()
         testMapFitTileSizeAndCentering()

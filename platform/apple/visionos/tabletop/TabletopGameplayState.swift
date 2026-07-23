@@ -41,10 +41,17 @@ public struct TabletopTerrainTile: Codable, Equatable {
     public var tileX: Int
     public var tileZ: Int
     public var kind: TabletopTerrainKind
-    public init(tileX: Int, tileZ: Int, kind: TabletopTerrainKind) {
+    /// Pixel-grid frame index of this tile within the tileset image (from the
+    /// engine snapshot, ABI v3). `nil` for procedural/demo content. The render
+    /// layer combines this with the snapshot's `assets.tileset` to crop the
+    /// real tile art, falling back to a solid color when either is missing.
+    public var graphicIndex: Int?
+    public init(tileX: Int, tileZ: Int, kind: TabletopTerrainKind,
+                graphicIndex: Int? = nil) {
         self.tileX = tileX
         self.tileZ = tileZ
         self.kind = kind
+        self.graphicIndex = graphicIndex
     }
 }
 
@@ -80,6 +87,12 @@ public struct TabletopGameplayUnit: Codable, Equatable {
     /// layer to resolve real Wargus sprites via `TabletopAssetResolver`. Empty
     /// for procedural/demo content that has no engine-defined type.
     public var kind: String
+    /// Engine-resolved sprite-sheet frame index for this unit's current facing
+    /// + animation (from the snapshot, ABI v3). `nil` for procedural content.
+    public var spriteFrame: Int?
+    /// Whether the resolved sprite frame must be drawn horizontally mirrored
+    /// (ABI v3). `nil`/`false` for procedural content.
+    public var spriteMirror: Bool?
 
     public init(
         id: String,
@@ -89,7 +102,9 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         facingRadians: Double,
         tileX: Int,
         tileZ: Int,
-        kind: String = ""
+        kind: String = "",
+        spriteFrame: Int? = nil,
+        spriteMirror: Bool? = nil
     ) {
         self.id = id
         self.owner = owner
@@ -99,6 +114,8 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         self.tileX = tileX
         self.tileZ = tileZ
         self.kind = kind
+        self.spriteFrame = spriteFrame
+        self.spriteMirror = spriteMirror
     }
 
     /// A unit with `hp == 0` is dead. Commands (select, move, stop) that
@@ -119,6 +136,84 @@ public struct TabletopGameplaySelection: Codable, Equatable {
     }
 }
 
+// MARK: - Asset catalog (engine-owned art descriptors, ABI v3)
+
+/// The active map's tileset image descriptor, carried on the snapshot so the
+/// render layer can crop real tile art without parsing any tileset script.
+public struct TabletopTilesetInfo: Codable, Equatable {
+    /// Tileset image path relative to the game-data root.
+    public var imagePath: String
+    public var pixelTileWidth: Int
+    public var pixelTileHeight: Int
+    /// Tileset image dimensions in pixels; `0` when the engine did not report
+    /// them (the render layer then derives columns from the decoded image).
+    public var imageWidth: Int
+    public var imageHeight: Int
+    public var name: String
+    public init(
+        imagePath: String, pixelTileWidth: Int, pixelTileHeight: Int,
+        imageWidth: Int = 0, imageHeight: Int = 0, name: String = ""
+    ) {
+        self.imagePath = imagePath
+        self.pixelTileWidth = pixelTileWidth
+        self.pixelTileHeight = pixelTileHeight
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.name = name
+    }
+}
+
+/// One unit type's sprite-sheet descriptor, carried on the snapshot so the
+/// render layer can locate and tint real sprites keyed by engine ident.
+public struct TabletopUnitSpriteInfo: Codable, Equatable {
+    /// Sprite-sheet path relative to the game-data root.
+    public var spritePath: String
+    public var frameWidth: Int
+    public var frameHeight: Int
+    /// Directions stored in the sheet (e.g. 1, 4, 5, 8).
+    public var numDirections: Int
+    /// Whether the sheet stores five directions and mirrors the other three.
+    public var flip: Bool
+    /// Palette span remapped for team color (`teamColorCount == 0` = none).
+    public var teamColorStart: Int
+    public var teamColorCount: Int
+    public init(
+        spritePath: String, frameWidth: Int, frameHeight: Int,
+        numDirections: Int, flip: Bool,
+        teamColorStart: Int = 0, teamColorCount: Int = 0
+    ) {
+        self.spritePath = spritePath
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
+        self.numDirections = numDirections
+        self.flip = flip
+        self.teamColorStart = teamColorStart
+        self.teamColorCount = teamColorCount
+    }
+}
+
+/// The engine-owned art descriptors for a snapshot: the map tileset plus a
+/// per-unit-type sprite descriptor keyed by engine ident (e.g.
+/// `"unit-footman"`). Absent (`nil`) for procedural/demo snapshots and for
+/// pre-v3 engines, so the render layer falls back to procedural content.
+public struct TabletopAssetCatalog: Codable, Equatable {
+    public var tileset: TabletopTilesetInfo?
+    public var unitTypes: [String: TabletopUnitSpriteInfo]
+    public init(
+        tileset: TabletopTilesetInfo? = nil,
+        unitTypes: [String: TabletopUnitSpriteInfo] = [:]
+    ) {
+        self.tileset = tileset
+        self.unitTypes = unitTypes
+    }
+
+    /// The sprite descriptor for a unit ident, or `nil` when the catalog has
+    /// no entry (missing sprite → procedural billboard fallback for that unit).
+    public func sprite(forUnitKind kind: String) -> TabletopUnitSpriteInfo? {
+        unitTypes[kind]
+    }
+}
+
 // MARK: - Versioned snapshot
 
 /// The complete, serialisable gameplay state. All fields are value types;
@@ -135,6 +230,10 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
     public var fogMask: [TabletopFogTile]
     public var units: [TabletopGameplayUnit]
     public var selection: TabletopGameplaySelection
+    /// Engine-owned art descriptors (tileset + per-unit sprite sheets, ABI v3).
+    /// `nil` for procedural/demo snapshots; the render layer then uses
+    /// procedural terrain colors and billboards.
+    public var assets: TabletopAssetCatalog?
 
     public init(
         version: Int,
@@ -142,7 +241,8 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         terrain: [TabletopTerrainTile],
         fogMask: [TabletopFogTile],
         units: [TabletopGameplayUnit],
-        selection: TabletopGameplaySelection
+        selection: TabletopGameplaySelection,
+        assets: TabletopAssetCatalog? = nil
     ) {
         self.version = version
         self.mapSize = mapSize
@@ -150,6 +250,7 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         self.fogMask = fogMask
         self.units = units
         self.selection = selection
+        self.assets = assets
     }
 
     // MARK: Convenience accessors

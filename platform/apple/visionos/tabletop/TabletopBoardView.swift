@@ -43,9 +43,19 @@ struct TabletopBoardView: View {
     }
 
     /// Designated init for tests and SwiftUI previews.
-    init<S: TabletopGameplaySource & TabletopCommandSink>(session: S) where S: Sendable {
+    init<S: TabletopGameplaySource & TabletopCommandSink>(
+        session: S,
+        harnessTransport: TabletopTransport? = nil
+    ) where S: Sendable {
         _session = State(initialValue: AnyTabletopSession(session))
+        self.harnessTransport = harnessTransport
     }
+
+    /// The production transport, passed through only so the opt-in command
+    /// integration harness can submit probes through the exact production
+    /// `send(_:)` and observe the results on the same live stream the board
+    /// reconciles. `nil` in tests/previews and when no transport is bound.
+    private var harnessTransport: TabletopTransport?
 
     // MARK: - Gesture / board state
 
@@ -78,6 +88,13 @@ struct TabletopBoardView: View {
     /// Resolves real Wargus terrain/unit art when a catalog is present;
     /// otherwise the board uses procedural coloring (no proprietary art).
     private let assetResolver: TabletopAssetResolver = WargusTabletopAssetResolver()
+
+    /// Loads real Wargus terrain/unit textures from the staged read-only data
+    /// directory at runtime. `nil` when the staged data is absent, so the board
+    /// renders fully procedurally rather than silently faking success.
+    @State private var materialProvider: WargusTabletopMaterialProvider? =
+        WargusTabletopMaterialProvider.make(
+            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath)
 
     // MARK: - Body
 
@@ -141,6 +158,14 @@ struct TabletopBoardView: View {
             // is bound. `gameplaySnapshot` remains nil; the overlay below
             // surfaces the diagnostic to the developer.
         }
+        // Opt-in command integration harness (disabled unless
+        // PEONPAD_TABLETOP_COMMAND_HARNESS is set): submits select→move→stop
+        // through the production transport and logs whether the engine changed
+        // state, as observed on the same live stream the board reconciles.
+        .task {
+            guard let harnessTransport else { return }
+            _ = TabletopCommandHarnessDriver.runIfEnabled(transport: harnessTransport)
+        }
         // Diagnostic overlay: visible when no snapshot has been received
         // (live session with no transport bound).
         .overlay(alignment: .center) {
@@ -173,6 +198,7 @@ struct TabletopBoardView: View {
     /// Computes the diff from the previous snapshot and applies the minimal
     /// set of RealityKit mutations needed to bring the board up to date.
     /// Does not rebuild `boardRoot` or discard active gesture state.
+    @MainActor
     private func applySnapshotDiff(_ next: TabletopGameplaySnapshot) {
         guard let boardRoot else { return }
 
@@ -190,18 +216,24 @@ struct TabletopBoardView: View {
 
         if previousSnapshot == nil {
             tileEntities = TabletopBoardBuilder.addSurface(
-                to: boardRoot, snapshot: next, fit: fit, resolver: assetResolver)
+                to: boardRoot, snapshot: next, fit: fit, resolver: assetResolver,
+                materialProvider: materialProvider)
             tabletopEngineLog("[Tabletop] board built from first snapshot: "
                 + "map=\(next.mapSize.width)x\(next.mapSize.height) "
-                + "tiles=\(tileEntities.count) units=\(next.units.count)")
+                + "tiles=\(tileEntities.count) units=\(next.units.count) "
+                + "assets=\(next.assets != nil ? "real" : "procedural")")
         } else {
-            TabletopBoardBuilder.updateTerrainTiles(diff.changedTerrainTiles, in: tileEntities)
+            TabletopBoardBuilder.updateTerrainTiles(
+                diff.changedTerrainTiles, in: tileEntities,
+                tileset: next.assets?.tileset, materialProvider: materialProvider)
             TabletopBoardBuilder.updateFogTiles(diff.changedFogTiles, in: tileEntities)
         }
 
         // -- Units added --
         for unit in diff.addedUnits {
-            let live = TabletopBoardBuilder.addUnit(unit, to: boardRoot, snapshot: next, fit: fit)
+            let live = TabletopBoardBuilder.addUnit(
+                unit, to: boardRoot, snapshot: next, fit: fit,
+                materialProvider: materialProvider)
             liveUnitsByID[unit.id] = live
         }
 
@@ -220,6 +252,12 @@ struct TabletopBoardView: View {
             }
             if unitDiff.ownerChanged {
                 live.updateOwnerTint(TabletopBoardBuilder.ownerTint(owner: unit.owner))
+            }
+            // Re-crop the real sprite when the engine advanced the animation
+            // frame or mirror (or ownership changed the team tint).
+            if unitDiff.frameChanged || unitDiff.ownerChanged {
+                TabletopBoardBuilder.refreshUnitSprite(
+                    live, unit: unit, snapshot: next, materialProvider: materialProvider)
             }
             if unitDiff.hpChanged {
                 live.setAlive(unit.isAlive)

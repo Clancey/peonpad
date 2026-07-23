@@ -50,23 +50,33 @@ static void Run(const char *name, bool (*test_fn)())
 
 static bool test_abi_version_constant()
 {
-    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 2u);
+    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 3u);
     return true;
 }
 
 static bool test_struct_sizes()
 {
-    // PeonPadTerrainCell: tile_index(2) + fog_state(1) + terrain_class(1) = 4
-    EXPECT(sizeof(PeonPadTerrainCell) == 4u);
+    // PeonPadTerrainCell (ABI v3): tile_index(2) + fog_state(1)
+    //   + terrain_class(1) + graphic_index(2) + _pad(2) = 8 bytes
+    EXPECT(sizeof(PeonPadTerrainCell) == 8u);
 
-    // PeonPadUnitRecord field layout (ABI v2, explicit accounting):
+    // PeonPadUnitRecord field layout (ABI v3, explicit accounting):
     //   id(4) + owner(1) + alive(1) + selected(1) + facing(1)
     //   + hp(4) + max_hp(4) + tile_x(2) + tile_y(2)
-    //   + world_x(4) + world_y(4) + type_id(2) + _pad2(2) = 32 bytes
-    EXPECT(sizeof(PeonPadUnitRecord) == 32u);
+    //   + world_x(4) + world_y(4) + type_id(2) + sprite_frame(2)
+    //   + sprite_mirror(1) + _pad3(3) = 36 bytes
+    EXPECT(sizeof(PeonPadUnitRecord) == 36u);
 
-    // PeonPadUnitType: type_id(2) + _pad(2) + ident(32) = 36 bytes
-    EXPECT(sizeof(PeonPadUnitType) == 36u);
+    // PeonPadUnitType (ABI v3): type_id(2) + _pad(2) + ident(32)
+    //   + sprite_path(128) + frame_width(2) + frame_height(2)
+    //   + num_directions(1) + flip(1) + team_color_start(1)
+    //   + team_color_count(1) = 172 bytes
+    EXPECT(sizeof(PeonPadUnitType) == 172u);
+
+    // PeonPadTilesetDescriptor (ABI v3): image_path(128)
+    //   + pixel_tile_width(2) + pixel_tile_height(2)
+    //   + image_width(2) + image_height(2) + name(32) = 168 bytes
+    EXPECT(sizeof(PeonPadTilesetDescriptor) == 168u);
 
     // PeonPadCommand:
     //   type(4) + abi_ver(4) + unit_id(4) + tile_x(4) + tile_y(4)
@@ -81,22 +91,40 @@ static bool test_struct_field_offsets()
     EXPECT(offsetof(PeonPadTerrainCell, tile_index)    == 0u);
     EXPECT(offsetof(PeonPadTerrainCell, fog_state)     == 2u);
     EXPECT(offsetof(PeonPadTerrainCell, terrain_class) == 3u);
+    EXPECT(offsetof(PeonPadTerrainCell, graphic_index) == 4u);
 
-    EXPECT(offsetof(PeonPadUnitRecord, id)       ==  0u);
-    EXPECT(offsetof(PeonPadUnitRecord, owner)    ==  4u);
-    EXPECT(offsetof(PeonPadUnitRecord, alive)    ==  5u);
-    EXPECT(offsetof(PeonPadUnitRecord, selected) ==  6u);
-    EXPECT(offsetof(PeonPadUnitRecord, facing)   ==  7u);
-    EXPECT(offsetof(PeonPadUnitRecord, hp)       ==  8u);
-    EXPECT(offsetof(PeonPadUnitRecord, max_hp)   == 12u);
-    EXPECT(offsetof(PeonPadUnitRecord, tile_x)   == 16u);
-    EXPECT(offsetof(PeonPadUnitRecord, tile_y)   == 18u);
-    EXPECT(offsetof(PeonPadUnitRecord, world_x)  == 20u);
-    EXPECT(offsetof(PeonPadUnitRecord, world_y)  == 24u);
-    EXPECT(offsetof(PeonPadUnitRecord, type_id)  == 28u);
+    EXPECT(offsetof(PeonPadUnitRecord, id)            ==  0u);
+    EXPECT(offsetof(PeonPadUnitRecord, owner)         ==  4u);
+    EXPECT(offsetof(PeonPadUnitRecord, alive)         ==  5u);
+    EXPECT(offsetof(PeonPadUnitRecord, selected)      ==  6u);
+    EXPECT(offsetof(PeonPadUnitRecord, facing)        ==  7u);
+    EXPECT(offsetof(PeonPadUnitRecord, hp)            ==  8u);
+    EXPECT(offsetof(PeonPadUnitRecord, max_hp)        == 12u);
+    EXPECT(offsetof(PeonPadUnitRecord, tile_x)        == 16u);
+    EXPECT(offsetof(PeonPadUnitRecord, tile_y)        == 18u);
+    EXPECT(offsetof(PeonPadUnitRecord, world_x)       == 20u);
+    EXPECT(offsetof(PeonPadUnitRecord, world_y)       == 24u);
+    EXPECT(offsetof(PeonPadUnitRecord, type_id)       == 28u);
+    EXPECT(offsetof(PeonPadUnitRecord, sprite_frame)  == 30u);
+    EXPECT(offsetof(PeonPadUnitRecord, sprite_mirror) == 32u);
 
-    EXPECT(offsetof(PeonPadUnitType, type_id) == 0u);
-    EXPECT(offsetof(PeonPadUnitType, ident)   == 4u);
+    EXPECT(offsetof(PeonPadUnitType, type_id)      == 0u);
+    EXPECT(offsetof(PeonPadUnitType, ident)        == 4u);
+    EXPECT(offsetof(PeonPadUnitType, sprite_path)  == 36u);
+    // sprite_path is 128 bytes: 36 + 128 = 164.
+    EXPECT(offsetof(PeonPadUnitType, frame_width)      == 164u);
+    EXPECT(offsetof(PeonPadUnitType, frame_height)     == 166u);
+    EXPECT(offsetof(PeonPadUnitType, num_directions)   == 168u);
+    EXPECT(offsetof(PeonPadUnitType, flip)             == 169u);
+    EXPECT(offsetof(PeonPadUnitType, team_color_start) == 170u);
+    EXPECT(offsetof(PeonPadUnitType, team_color_count) == 171u);
+
+    EXPECT(offsetof(PeonPadTilesetDescriptor, image_path)        == 0u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, pixel_tile_width)  == 128u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, pixel_tile_height) == 130u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, image_width)       == 132u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, image_height)      == 134u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, name)              == 136u);
 
     EXPECT(offsetof(PeonPadCommand, type)     ==  0u);
     EXPECT(offsetof(PeonPadCommand, abi_ver)  ==  4u);
@@ -324,6 +352,116 @@ static bool test_synthetic_v2_rejects_unterminated_ident()
     EXPECT(peonpad_snapshot_unit_types(s) == nullptr);
 
     peonpad_snapshot_release(s);
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
+static bool test_synthetic_v3_asset_descriptors()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    // Terrain carries the v3 graphic_index (pixel-grid frame in the tileset).
+    PeonPadTerrainCell cell{};
+    cell.tile_index    = 12u;
+    cell.fog_state     = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
+    cell.terrain_class = static_cast<uint8_t>(PEONPAD_TERRAIN_GRASS);
+    cell.graphic_index = 329u;
+
+    // Units carry the v3 resolved sprite_frame + sprite_mirror.
+    PeonPadUnitRecord units[1] = {};
+    units[0].id = 1; units[0].alive = 1; units[0].type_id = 7;
+    units[0].sprite_frame = 45u;
+    units[0].sprite_mirror = 1u;
+
+    // Unit type carries the v3 sprite metadata.
+    PeonPadUnitType types[1] = {};
+    types[0].type_id = 7;
+    std::snprintf(types[0].ident, PEONPAD_TABLETOP_MAX_IDENT, "unit-footman");
+    std::snprintf(types[0].sprite_path, PEONPAD_TABLETOP_MAX_PATH,
+                  "human/units/footman.png");
+    types[0].frame_width      = 72u;
+    types[0].frame_height     = 72u;
+    types[0].num_directions   = 5u;
+    types[0].flip             = 1u;
+    types[0].team_color_start = 208u;
+    types[0].team_color_count = 4u;
+
+    PeonPadTilesetDescriptor tileset{};
+    std::snprintf(tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
+                  "tilesets/summer/terrain/summer.png");
+    std::snprintf(tileset.name, PEONPAD_TABLETOP_MAX_IDENT, "Forest");
+    tileset.pixel_tile_width  = 32u;
+    tileset.pixel_tile_height = 32u;
+
+    EXPECT(peonpad_tabletop_publish_synthetic_v3(
+        9, 1, 1, &cell, 1, units, 1, types, 1, &tileset) == 0);
+
+    PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+    EXPECT(s != nullptr);
+    EXPECT(peonpad_snapshot_abi_version(s) == PEONPAD_TABLETOP_ABI_VERSION);
+
+    // Terrain graphic_index round-trips.
+    const PeonPadTerrainCell *tc = peonpad_snapshot_terrain(s);
+    EXPECT(tc != nullptr);
+    EXPECT(tc[0].graphic_index == 329u);
+
+    // Unit sprite frame + mirror round-trip.
+    const PeonPadUnitRecord *ur = peonpad_snapshot_units(s);
+    EXPECT(ur != nullptr);
+    EXPECT(ur[0].sprite_frame == 45u);
+    EXPECT(ur[0].sprite_mirror == 1u);
+
+    // Unit-type sprite metadata round-trips.
+    const PeonPadUnitType *ut = peonpad_snapshot_unit_types(s);
+    EXPECT(ut != nullptr);
+    EXPECT(std::strcmp(ut[0].sprite_path, "human/units/footman.png") == 0);
+    EXPECT(ut[0].frame_width == 72u);
+    EXPECT(ut[0].frame_height == 72u);
+    EXPECT(ut[0].num_directions == 5u);
+    EXPECT(ut[0].flip == 1u);
+    EXPECT(ut[0].team_color_start == 208u);
+    EXPECT(ut[0].team_color_count == 4u);
+
+    // Tileset descriptor round-trips.
+    const PeonPadTilesetDescriptor *td = peonpad_snapshot_tileset(s);
+    EXPECT(td != nullptr);
+    EXPECT(std::strcmp(td->image_path, "tilesets/summer/terrain/summer.png") == 0);
+    EXPECT(std::strcmp(td->name, "Forest") == 0);
+    EXPECT(td->pixel_tile_width == 32u);
+    EXPECT(td->pixel_tile_height == 32u);
+
+    peonpad_snapshot_release(s);
+
+    // A v1/v2 publish attaches no tileset descriptor.
+    EXPECT(peonpad_tabletop_publish_synthetic(1, 0, 0, nullptr, 0, nullptr, 0) == 0);
+    PeonPadSnapshot *s2 = peonpad_tabletop_latest_snapshot();
+    EXPECT(s2 != nullptr);
+    EXPECT(peonpad_snapshot_tileset(s2) == nullptr);
+    peonpad_snapshot_release(s2);
+
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
+static bool test_synthetic_v3_rejects_unterminated_paths()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    // Unterminated sprite_path is rejected.
+    PeonPadUnitType type{};
+    type.type_id = 1;
+    std::snprintf(type.ident, PEONPAD_TABLETOP_MAX_IDENT, "unit-x");
+    std::memset(type.sprite_path, 'A', PEONPAD_TABLETOP_MAX_PATH);
+    EXPECT(peonpad_tabletop_publish_synthetic_v3(
+        1, 0, 0, nullptr, 0, nullptr, 0, &type, 1, nullptr) == -2);
+
+    // Unterminated tileset image_path is rejected.
+    PeonPadTilesetDescriptor tileset{};
+    std::memset(tileset.image_path, 'B', PEONPAD_TABLETOP_MAX_PATH);
+    std::snprintf(tileset.name, PEONPAD_TABLETOP_MAX_IDENT, "T");
+    EXPECT(peonpad_tabletop_publish_synthetic_v3(
+        1, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, &tileset) == -2);
+
     peonpad_tabletop_cleanup();
     return true;
 }
@@ -625,6 +763,8 @@ int main()
     Run("synthetic_publish_full",   test_synthetic_publish_with_terrain_and_units);
     Run("synthetic_v2_type_registry", test_synthetic_v2_unit_type_registry);
     Run("synthetic_v2_bad_ident",   test_synthetic_v2_rejects_unterminated_ident);
+    Run("synthetic_v3_descriptors", test_synthetic_v3_asset_descriptors);
+    Run("synthetic_v3_bad_paths",   test_synthetic_v3_rejects_unterminated_paths);
     Run("retain_release",           test_retain_release);
     Run("null_safety",              test_null_safety);
     Run("data_is_immutable_copy",   test_snapshot_data_is_immutable_copy);

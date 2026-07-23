@@ -237,12 +237,87 @@ window. `tests/script-guardrails.sh` (including the tabletop-specific static
 checks, the 99/99-passing gesture pure-logic test run, and the 171/171-passing
 gameplay pure-logic test run) passed in full.
 
+## Real Wargus art via the ABI v3 asset-descriptor contract
+
+Once the live engine is bound (PR #14), the board renders **real runtime-loaded
+Warcraft II terrain and unit art** instead of procedural colors -- without the
+UI ever guessing filenames or duplicating tileset/unit Lua parsing. The engine
+is the single source of truth: it exports an **append-only, version-gated asset
+descriptor (ABI v3)** on every snapshot (`platform/bridge/PeonPadTabletopBridge.h`):
+
+- **Tileset descriptor** (`PeonPadTilesetDescriptor`, one per snapshot): the
+  tileset image path (relative to the game-data root, from `CTileset::ImageFile`),
+  pixel tile size, and name.
+- **Per terrain cell**: `graphic_index` -- the pixel-grid frame of the tile
+  within the tileset image (`CMapField::getGraphicTile()`).
+- **Per unit type** (`PeonPadUnitType`): sprite sheet path (`CUnitType::File`),
+  frame size, direction count, flip flag, and the team-color palette span.
+- **Per unit record**: `sprite_frame` + `sprite_mirror` -- the engine-resolved
+  sheet frame and horizontal mirror for the unit's current facing + animation,
+  computed with the engine's own `DrawUnitType` formula (replicated once in the
+  C++ bridge, never re-derived in Swift/Lua).
+
+ABI v3 is a strict superset of v2: v1/v2 field offsets are unchanged, new fields
+are appended (or repurpose reserved padding), and a consumer must check
+`peonpad_snapshot_abi_version()` -- a v2 consumer safely discards a v3 snapshot.
+Struct layout and round-trip are covered by `tests/tabletop_bridge_test.cpp`.
+
+### Swift resolution and rendering pipeline
+
+- **`TabletopAssetResolution.swift`** (framework-free, host-tested): staged-data
+  **path confinement** (rejects absolute/`..`/backslash/NUL, keeps everything
+  under the read-only data root), **atlas source-rectangle math** (graphic/frame
+  index -> pixel rect), a **team-color palette**, the production
+  `WargusStagedAssetResolver` (turns descriptors into confined *placements* with
+  per-item fallback), and a **bounded LRU cache**.
+- **`WargusTabletopMaterialProvider.swift`** (app-only, `@MainActor`): decodes
+  the staged PNG **off the main actor**, crops the atlas frame, bakes any
+  horizontal mirror, applies a team tint, then creates the
+  `TextureResource`/`UnlitMaterial` **on the main actor** and caches it in the
+  bounded LRU. Every failure is **per-asset** -- the procedural color/billboard
+  stays for that one tile/unit; there is never a silent whole-app demo fallback.
+- **`TabletopSnapshotConverter`** carries the descriptors onto the pure
+  `TabletopGameplaySnapshot` as a `TabletopAssetCatalog`; **`TabletopSceneBuilder`**
+  requests real terrain/unit materials progressively; **`TabletopBoardReconciler`**
+  now also detects per-unit sprite-frame/mirror changes (animation) and per-tile
+  graphic-index changes so incremental updates re-crop only what changed. No
+  per-frame disk reads: decoded textures are cached and only re-requested on an
+  observed frame/ownership change.
+
+All pixels come from the staged read-only game-data directory at runtime
+(`docs/visionos-wargus-data.md`); **no proprietary art is bundled or committed.**
+With no staged data the board renders fully procedurally.
+
+## Opt-in command integration harness
+
+`TabletopCommandHarness.swift` is an opt-in, non-production probe that proves the
+command path is accepted end-to-end when immersive gesture injection is
+unavailable in the Simulator. Enabled only when
+`PEONPAD_TABLETOP_COMMAND_HARNESS` is set, it submits `select -> move -> stop`
+through the **exact production `TabletopTransport.send(_:)`** and only advances
+each step when it **observes the engine's state change on the same live snapshot
+stream the board reconciles** (e.g. the unit becomes selected, then its tile
+changes), logging `PASS`/`FAIL` verdicts. It never bypasses the command path and
+is disabled by default, so no automation controls run in production. Gating and
+the select/move/stop sequencing are host-tested
+(`scripts/test-visionos-tabletop-harness.sh`).
+
+## Host tests (no Simulator)
+
+```sh
+./scripts/test-visionos-tabletop-gestures.sh     # gesture, billboard, two-hand
+./scripts/test-visionos-tabletop-gameplay.sh     # snapshot model, reducer
+./scripts/test-visionos-tabletop-live-state.sh   # transport source, reconciler diffs
+./scripts/test-visionos-tabletop-transport.sh    # snapshot conversion, asset catalog
+./scripts/test-visionos-tabletop-assets.sh       # path confinement, atlas math, LRU
+./scripts/test-visionos-tabletop-harness.sh      # command-harness gating + sequencing
+```
+
 ## Scope boundary
 
 RealityKit/SwiftUI ownership in this app is confined entirely to
 `platform/apple/visionos/tabletop`; nothing under the smoke shell's
-`platform/apple/visionos` files was touched. There is no Stratagus, no map
-loading, no real unit stats or sprite art, and no persistent save state --
-only a procedural demo board, a roster of eight tinted placeholder units (one
-per canonical direction, two player teams), and the gesture/board-manipulation/
-directional-billboard/gameplay mechanics described above.
+`platform/apple/visionos` files was touched. The board renders real
+engine-driven terrain and unit art when the live engine + staged data are
+present, and falls back per-asset to procedural content otherwise. All engine
+state arrives through the versioned C ABI; the UI never links Stratagus directly.

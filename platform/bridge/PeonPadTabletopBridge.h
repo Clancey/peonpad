@@ -54,7 +54,29 @@ extern "C" {
 ///     so the UI can resolve real unit art without guessing from unit IDs.
 /// Consumers must check peonpad_snapshot_abi_version() before trusting the
 /// v2 fields; a v1-only consumer can still read every v1 field safely.
-#define PEONPAD_TABLETOP_ABI_VERSION 2u
+///
+/// ABI v3 (asset-descriptor extension of v2):
+///   • PeonPadTerrainCell: appends `graphic_index` (+ reserved padding) — the
+///     pixel-grid frame index of this tile within the tileset image, so the UI
+///     can crop the real tile art.  v1/v2 field offsets are unchanged; the
+///     struct grows from 4 to 8 bytes.
+///   • PeonPadUnitRecord: repurposes the v2 reserved `_pad2` as `sprite_frame`
+///     and appends `sprite_mirror` (+ reserved padding) — the engine-resolved
+///     sprite-sheet frame index and horizontal-mirror flag for this unit's
+///     current facing/animation, computed with the engine's own draw formula
+///     (never re-derived in Swift/Lua).  v1/v2 field offsets are unchanged.
+///   • PeonPadUnitType: appends the unit's sprite metadata (relative sprite
+///     path, frame size, direction count, flip flag, team-color palette span)
+///     so the UI can locate and tint the real sprite sheet.  v2 offsets
+///     (type_id, ident) are unchanged.
+///   • New PeonPadTilesetDescriptor (one per snapshot): the tileset image path,
+///     pixel tile size, and image dimensions, so terrain `graphic_index` maps
+///     to a source rectangle without guessing the tileset layout.
+/// All v3 additions are engine-owned metadata sourced from CTileset/CUnitType;
+/// the UI resolves real art from the staged read-only data directory at runtime
+/// and never embeds proprietary assets.  A v2 consumer must discard a v3
+/// snapshot (the version differs), so struct growth is safe.
+#define PEONPAD_TABLETOP_ABI_VERSION 3u
 
 // ── Hard limits ─────────────────────────────────────────────────────────────
 
@@ -68,6 +90,9 @@ extern "C" {
 #define PEONPAD_TABLETOP_MAX_IDENT    32u
 /// Maximum number of distinct unit types in a snapshot's type registry.
 #define PEONPAD_TABLETOP_MAX_UNIT_TYPES 512u
+/// Maximum length (including the terminating NUL) of a relative asset path
+/// (tileset or unit sprite), expressed relative to the game-data root.  (ABI v3.)
+#define PEONPAD_TABLETOP_MAX_PATH    128u
 
 // ── Fog-of-war cell state ─────────────────────────────────────────────────
 
@@ -97,9 +122,14 @@ typedef enum PeonPadTerrainClass {
 /// One terrain cell in a snapshot, corresponding to a single map tile.
 /// Cells are stored in row-major order: cell[y * map_width + x].
 typedef struct PeonPadTerrainCell {
-    uint16_t tile_index;    ///< Tileset graphic index (transport-layer opaque).
+    uint16_t tile_index;    ///< Tileset tile number (index into the tileset's tiles).
     uint8_t  fog_state;     ///< PeonPadFogState from the local player's POV.
     uint8_t  terrain_class; ///< PeonPadTerrainClass (ABI v2; was reserved _pad).
+    uint16_t graphic_index; ///< Pixel-grid frame index of this tile within the
+                            ///< tileset image (ABI v3).  Combined with the
+                            ///< snapshot's PeonPadTilesetDescriptor it yields the
+                            ///< source rectangle for the real tile art.
+    uint8_t  _pad[2];       ///< Must be zero; reserved for future payload (ABI v3).
 } PeonPadTerrainCell;
 
 // ── Per-unit record ───────────────────────────────────────────────────────
@@ -129,7 +159,16 @@ typedef struct PeonPadUnitRecord {
                         ///< snapshot's unit-type registry; stable within a
                         ///< session.  0 is a valid type id; consumers that
                         ///< need the ident string look it up in the registry.
-    uint8_t  _pad2[2];  ///< Must be zero; reserved for future payload.
+    uint16_t sprite_frame; ///< Engine-resolved sprite-sheet frame index for this
+                        ///< unit's current facing + animation (ABI v3; was the
+                        ///< reserved `_pad2`).  Already accounts for the unit's
+                        ///< direction using the engine's own draw formula, so
+                        ///< the UI never re-derives it.  Index into the sprite
+                        ///< sheet described by this unit's PeonPadUnitType.
+    uint8_t  sprite_mirror; ///< 1 = draw the sprite horizontally mirrored (ABI
+                        ///< v3).  Set for the mirrored half of a flip-storage
+                        ///< sprite sheet (e.g. west reusing a flipped east frame).
+    uint8_t  _pad3[3];  ///< Must be zero; reserved for future payload (ABI v3).
 } PeonPadUnitRecord;
 
 // ── Unit-type registry entry (ABI v2) ─────────────────────────────────────
@@ -144,7 +183,37 @@ typedef struct PeonPadUnitType {
     uint16_t type_id;                       ///< Matches PeonPadUnitRecord.type_id.
     uint8_t  _pad[2];                       ///< Must be zero.
     char     ident[PEONPAD_TABLETOP_MAX_IDENT]; ///< NUL-terminated engine ident.
+    // ── ABI v3 sprite metadata (engine-owned, sourced from CUnitType) ──
+    char     sprite_path[PEONPAD_TABLETOP_MAX_PATH]; ///< NUL-terminated sprite
+                             ///< sheet path, relative to the game-data root
+                             ///< (e.g. "human/units/footman.png").  Empty when
+                             ///< the type has no sprite; the UI then falls back
+                             ///< to a procedural billboard for that unit.
+    uint16_t frame_width;    ///< Sprite frame width in pixels (0 if unknown).
+    uint16_t frame_height;   ///< Sprite frame height in pixels (0 if unknown).
+    uint8_t  num_directions; ///< Directions stored in the sheet (e.g. 1, 4, 5, 8).
+    uint8_t  flip;           ///< 1 = the sheet stores five directions and mirrors
+                             ///< the other three (Warcraft II convention).
+    uint8_t  team_color_start; ///< First palette index remapped for team color.
+    uint8_t  team_color_count; ///< Number of palette entries remapped (0 if none).
 } PeonPadUnitType;
+
+// ── Tileset descriptor (ABI v3) ───────────────────────────────────────────
+
+/// Describes the tileset image the snapshot's terrain `graphic_index` values
+/// index into.  One descriptor per snapshot (the active map's tileset).  With
+/// `graphic_index`, `pixel_tile_width/height`, and `image_width` the UI derives
+/// each tile's source rectangle without parsing any tileset Lua.
+/// `image_path` is relative to the game-data root and NUL-terminated; it is
+/// empty for synthetic or terrain-less snapshots.
+typedef struct PeonPadTilesetDescriptor {
+    char     image_path[PEONPAD_TABLETOP_MAX_PATH]; ///< Relative tileset PNG path.
+    uint16_t pixel_tile_width;  ///< Tile width in pixels within the image.
+    uint16_t pixel_tile_height; ///< Tile height in pixels within the image.
+    uint16_t image_width;       ///< Tileset image width in pixels (0 if unknown).
+    uint16_t image_height;      ///< Tileset image height in pixels (0 if unknown).
+    char     name[PEONPAD_TABLETOP_MAX_IDENT]; ///< NUL-terminated tileset name.
+} PeonPadTilesetDescriptor;
 
 // ── Snapshot (opaque, reference-counted) ─────────────────────────────────
 
@@ -193,6 +262,11 @@ uint32_t peonpad_snapshot_unit_type_count(const PeonPadSnapshot *s);
 /// Valid until peonpad_snapshot_release() drops the last reference.
 /// Returns NULL when unit_type_count == 0.
 const PeonPadUnitType *peonpad_snapshot_unit_types(const PeonPadSnapshot *s);
+
+/// Pointer to this snapshot's tileset descriptor (ABI v3), or NULL when the
+/// snapshot carries no tileset (synthetic or terrain-less snapshots).
+/// Valid until peonpad_snapshot_release() drops the last reference.
+const PeonPadTilesetDescriptor *peonpad_snapshot_tileset(const PeonPadSnapshot *s);
 
 /// Increment the reference count.  Returns 0 on success, -1 if s is NULL.
 int peonpad_snapshot_retain(PeonPadSnapshot *s);
@@ -306,6 +380,28 @@ int peonpad_tabletop_publish_synthetic_v2(
     uint32_t                    unit_count,
     const PeonPadUnitType      *types,
     uint32_t                    type_count
+);
+
+/// Synthetic publish including the ABI v3 tileset descriptor.
+/// Behaves exactly like peonpad_tabletop_publish_synthetic_v2 but also attaches
+/// a single tileset descriptor so consumers can map terrain `graphic_index`
+/// values to source rectangles.  `tileset` may be NULL (no tileset attached).
+///
+/// Returns 0 on success, -1 if the bridge is not initialized, -2 if any count
+/// exceeds the hard limits, is inconsistent with map_width × map_height, a type
+/// ident/sprite_path is not NUL-terminated within its fixed buffer, or the
+/// tileset image_path/name is not NUL-terminated within its fixed buffer.
+int peonpad_tabletop_publish_synthetic_v3(
+    uint64_t                        generation,
+    uint32_t                        map_width,
+    uint32_t                        map_height,
+    const PeonPadTerrainCell       *terrain,
+    uint32_t                        terrain_count,
+    const PeonPadUnitRecord        *units,
+    uint32_t                        unit_count,
+    const PeonPadUnitType          *types,
+    uint32_t                        type_count,
+    const PeonPadTilesetDescriptor *tileset
 );
 
 #ifdef __cplusplus

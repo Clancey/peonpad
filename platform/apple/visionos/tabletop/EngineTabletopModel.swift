@@ -15,7 +15,7 @@ import Foundation
 /// `PEONPAD_TABLETOP_ABI_VERSION` in PeonPadTabletopBridge.h. The transport
 /// rejects any engine snapshot whose embedded version differs, rather than
 /// misreading struct fields at a stale layout.
-public let kPeonPadTabletopABIVersion: UInt32 = 2
+public let kPeonPadTabletopABIVersion: UInt32 = 3
 
 /// Fog-of-war state of a single tile (mirrors `PeonPadFogState`).
 public enum EngineFogState: UInt8, Equatable {
@@ -42,10 +42,14 @@ public struct EngineTerrainCell: Equatable {
     public var tileIndex: UInt16
     public var fogState: UInt8
     public var terrainClass: UInt8
-    public init(tileIndex: UInt16, fogState: UInt8, terrainClass: UInt8) {
+    /// Pixel-grid frame index of this tile within the tileset image (ABI v3).
+    public var graphicIndex: UInt16
+    public init(tileIndex: UInt16, fogState: UInt8, terrainClass: UInt8,
+                graphicIndex: UInt16 = 0) {
         self.tileIndex = tileIndex
         self.fogState = fogState
         self.terrainClass = terrainClass
+        self.graphicIndex = graphicIndex
     }
 }
 
@@ -63,11 +67,17 @@ public struct EngineUnitRecord: Equatable {
     public var worldX: Float
     public var worldY: Float
     public var typeID: UInt16
+    /// Engine-resolved sprite-sheet frame index for the current facing +
+    /// animation (ABI v3).
+    public var spriteFrame: UInt16
+    /// 1 = draw the sprite horizontally mirrored (ABI v3).
+    public var spriteMirror: UInt8
 
     public init(
         id: UInt32, owner: UInt8, alive: UInt8, selected: UInt8, facing: UInt8,
         hp: Int32, maxHP: Int32, tileX: Int16, tileY: Int16,
-        worldX: Float, worldY: Float, typeID: UInt16
+        worldX: Float, worldY: Float, typeID: UInt16,
+        spriteFrame: UInt16 = 0, spriteMirror: UInt8 = 0
     ) {
         self.id = id
         self.owner = owner
@@ -81,16 +91,63 @@ public struct EngineUnitRecord: Equatable {
         self.worldX = worldX
         self.worldY = worldY
         self.typeID = typeID
+        self.spriteFrame = spriteFrame
+        self.spriteMirror = spriteMirror
     }
 }
 
-/// One unit-type registry entry (mirrors `PeonPadUnitType`, ABI v2).
+/// One unit-type registry entry (mirrors `PeonPadUnitType`, ABI v2 + v3 sprite
+/// metadata).
 public struct EngineUnitType: Equatable {
     public var typeID: UInt16
     public var ident: String
-    public init(typeID: UInt16, ident: String) {
+    /// Sprite-sheet path relative to the game-data root (ABI v3). Empty when
+    /// the type has no sprite.
+    public var spritePath: String
+    public var frameWidth: UInt16
+    public var frameHeight: UInt16
+    public var numDirections: UInt8
+    public var flip: UInt8
+    public var teamColorStart: UInt8
+    public var teamColorCount: UInt8
+    public init(
+        typeID: UInt16, ident: String,
+        spritePath: String = "", frameWidth: UInt16 = 0, frameHeight: UInt16 = 0,
+        numDirections: UInt8 = 0, flip: UInt8 = 0,
+        teamColorStart: UInt8 = 0, teamColorCount: UInt8 = 0
+    ) {
         self.typeID = typeID
         self.ident = ident
+        self.spritePath = spritePath
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
+        self.numDirections = numDirections
+        self.flip = flip
+        self.teamColorStart = teamColorStart
+        self.teamColorCount = teamColorCount
+    }
+}
+
+/// The active map's tileset descriptor (mirrors `PeonPadTilesetDescriptor`,
+/// ABI v3). Combined with a terrain cell's `graphicIndex`, `pixelTileWidth`,
+/// and `imageWidth` it yields a tile's source rectangle in the tileset image.
+public struct EngineTilesetDescriptor: Equatable {
+    public var imagePath: String
+    public var pixelTileWidth: UInt16
+    public var pixelTileHeight: UInt16
+    public var imageWidth: UInt16
+    public var imageHeight: UInt16
+    public var name: String
+    public init(
+        imagePath: String, pixelTileWidth: UInt16, pixelTileHeight: UInt16,
+        imageWidth: UInt16 = 0, imageHeight: UInt16 = 0, name: String = ""
+    ) {
+        self.imagePath = imagePath
+        self.pixelTileWidth = pixelTileWidth
+        self.pixelTileHeight = pixelTileHeight
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.name = name
     }
 }
 
@@ -103,6 +160,9 @@ public struct EngineSnapshot: Equatable {
     public var terrain: [EngineTerrainCell]
     public var units: [EngineUnitRecord]
     public var unitTypes: [EngineUnitType]
+    /// The active map's tileset descriptor (ABI v3), or `nil` when the snapshot
+    /// carries no tileset (synthetic or terrain-less snapshots).
+    public var tileset: EngineTilesetDescriptor?
 
     public init(
         abiVersion: UInt32,
@@ -111,7 +171,8 @@ public struct EngineSnapshot: Equatable {
         mapHeight: UInt32,
         terrain: [EngineTerrainCell],
         units: [EngineUnitRecord],
-        unitTypes: [EngineUnitType]
+        unitTypes: [EngineUnitType],
+        tileset: EngineTilesetDescriptor? = nil
     ) {
         self.abiVersion = abiVersion
         self.generation = generation
@@ -120,6 +181,7 @@ public struct EngineSnapshot: Equatable {
         self.terrain = terrain
         self.units = units
         self.unitTypes = unitTypes
+        self.tileset = tileset
     }
 }
 

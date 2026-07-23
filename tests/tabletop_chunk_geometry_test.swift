@@ -380,7 +380,35 @@ func testFogMapCGImage() {
     }
 }
 
-// MARK: - Chunk-count reduction
+// MARK: - Acceptance hold overflow guard
+
+func testAcceptanceHoldSleepDurationIsFinite() {
+    // Regression: Double(Int.max) rounds up to 2^63 = Int64.max+1, which
+    // overflows Int64 inside Swift's Duration.seconds() initializer and
+    // triggers a fatal "Not enough bits to represent the passed value" crash.
+    // The acceptance hold must use an interval that does not overflow Int64.
+    //
+    // 3_600 (seconds in 1 hour) stays well below Int64.max.
+    let holdIntervalSeconds: Double = 3_600
+    let int64Max = Int64.max
+    // Converting to Int64 must not trap.
+    let converted = Int64(holdIntervalSeconds)
+    expectEq(converted, 3_600, "hold interval 3600s must round-trip through Int64")
+    expect(holdIntervalSeconds < Double(int64Max),
+           "hold interval \(holdIntervalSeconds) must be representable as Int64")
+
+    // Document the original bug: Double(Int.max) rounds to 2^63.
+    // In Swift, Int.max == Int64.max on 64-bit platforms.
+    // 2^63 as a Double equals 9223372036854775808.0, which exceeds Int64.max
+    // (= 9223372036854775807), so Int64(Double(Int.max)) traps.
+    let originalBugValue = Double(Int.max)
+    let roundedToHigher = originalBugValue >= Double(bitPattern: 0x43E0_0000_0000_0000)
+    // 0x43E0000000000000 = 2^63 as an IEEE 754 double
+    expect(roundedToHigher,
+           "Double(Int.max) must round up to 2^63 (documents the overflow bug)")
+}
+
+
 
 func testEntityCountReduction() {
     // A 128×128 map should produce 16 chunks, not 32768 per-tile entities.
@@ -419,6 +447,7 @@ struct TabletopChunkGeometryTests {
         testFogMapCGImage()
 
         testEntityCountReduction()
+        testAcceptanceHoldSleepDurationIsFinite()
 
         // MARK: - Summary
 

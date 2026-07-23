@@ -127,17 +127,22 @@ public final class TabletopChunkBoard {
             mapWidth: mapW, mapHeight: mapH, chunkTiles: chunkTiles)
         totalChunks = cx * cz
 
+        tabletopEngineLog("[Tabletop] build: map=\(mapW)x\(mapH) chunks=\(cx)x\(cz)=\(totalChunks) terrain=\(snapshot.terrain.count) assets=\(snapshot.assets != nil ? "real" : "none")")
+
         // Index terrain tiles for fast chunk lookup.
         let terrainByKey: [Int: TabletopTerrainTile] = Dictionary(
             uniqueKeysWithValues: snapshot.terrain.map {
                 (TabletopChunkLayout.tileKey($0.tileX, $0.tileZ), $0)
             })
 
+        tabletopEngineLog("[Tabletop] build: terrainByKey indexed (\(terrainByKey.count) entries)")
+
         // Build one ModelEntity per chunk.
         for chunkZ in 0..<cz {
             for chunkX in 0..<cx {
                 let key = TabletopChunkKey(chunkX: chunkX, chunkZ: chunkZ)
                 chunkGeneration[key] = (chunkGeneration[key] ?? 0) + 1
+                tabletopEngineLog("[Tabletop] build: chunk \(chunkX).\(chunkZ) starting")
                 let entity = buildChunkEntity(
                     key: key,
                     chunkX: chunkX, chunkZ: chunkZ,
@@ -148,8 +153,11 @@ public final class TabletopChunkBoard {
                 entity.name = "board.chunk.\(chunkX).\(chunkZ)"
                 boardRoot.addChild(entity)
                 chunkEntities[key] = entity
+                tabletopEngineLog("[Tabletop] build: chunk \(chunkX).\(chunkZ) added")
             }
         }
+
+        tabletopEngineLog("[Tabletop] build: all terrain chunks done, building fog")
 
         // Build single fog entity.
         buildFogEntity(snapshot: snapshot, fit: fit, to: boardRoot)
@@ -315,6 +323,8 @@ public final class TabletopChunkBoard {
         }
         let slotMap = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
 
+        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): tiles=\(tiles.count) slots=\(slotMap.slotCount)")
+
         // slot → terrain kind (from first tile with each slot's graphicIndex)
         var slotToKind: [Int: TabletopTerrainKind] = [:]
         for tc in tileCoords {
@@ -328,9 +338,12 @@ public final class TabletopChunkBoard {
             return (nil, slotMap, slotToKind)
         }
 
+        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building mesh geometry")
         let geo  = TabletopTerrainChunkMeshBuilder.build(tiles: tiles, fit: fit, slotMap: slotMap)
+        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): geo verts=\(geo.positions.count) tris=\(geo.triangleIndices.count/3)")
         let mesh = try? MeshResource.generate(from: [geo.meshDescriptor(
             name: "chunk.\(chunkX).\(chunkZ)")])
+        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): mesh=\(mesh != nil ? "ok" : "nil")")
         return (mesh, slotMap, slotToKind)
     }
 

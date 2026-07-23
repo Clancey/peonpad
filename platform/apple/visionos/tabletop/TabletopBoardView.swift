@@ -179,7 +179,12 @@ struct TabletopBoardView: View {
             else { return }
             tabletopEngineLog("[Tabletop] acceptance hold active "
                 + "(PEONPAD_TABLETOP_ACCEPTANCE_HOLD); app will not exit automatically")
-            try? await Task.sleep(for: .seconds(Double(Int.max)))
+            // Sleep in cancellable 1-hour slices. Avoid passing Double(Int.max) to
+            // Duration.seconds() — the Double rounds to 2^63 which overflows Int64
+            // inside Duration's initializer (Swift/Integers.swift fatal error).
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3_600))
+            }
         }
         // Diagnostic overlay: visible when no snapshot has been received
         // (live session with no transport bound).

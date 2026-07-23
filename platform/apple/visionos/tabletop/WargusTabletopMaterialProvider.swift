@@ -191,6 +191,13 @@ public final class WargusTabletopMaterialProvider {
             ctx.translateBy(x: CGFloat(width), y: 0)
             ctx.scaleBy(x: -1, y: 1)
         }
+        // CGBitmapContext uses a y-up coordinate system; CGImage rows are y-down.
+        // Without a vertical flip, ctx.draw() places the image's first row at
+        // the canvas bottom, producing an upside-down texture in RealityKit
+        // (which uses Metal's y-down UV convention). Flip here so visual row 0
+        // lands at the canvas top, regardless of whether mirror is also set.
+        ctx.translateBy(x: 0, y: CGFloat(height))
+        ctx.scaleBy(x: 1, y: -1)
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
         ctx.draw(image, in: rect)
 

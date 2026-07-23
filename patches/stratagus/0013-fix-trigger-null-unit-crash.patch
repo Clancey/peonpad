@@ -1,0 +1,225 @@
+commit e4bf9345e38e5ac7086a417aed2a10f4ac6d849c
+Author: James Clancey <james.clancey@gmail.com>
+Date:   Wed Jul 22 21:12:09 2026 -0700
+
+    fix(engine): guard GetUnitVariable against destroyed-unit SIGSEGV
+    
+    When a unit is fully released, CUnit::Release() clears Orders (Orders.clear()).
+    A Lua trigger that held the old slot number could then call GetUnitVariable(),
+    which called UpdateUnitVariables() -> CurrentOrder() -> Orders[0].get() on an
+    empty vector, producing a SIGSEGV.
+    
+    Observed on the private test map (2)pytest-sync-stress.smp: the shared gold
+    mine could be destroyed by incidental catapult/ballista fire while the trigger
+    `GetUnitVariable(shared_mine, "ResourcesHeld") <= 0` was still live.
+    
+    Fix:
+    - Check unit->Destroyed before calling UpdateUnitVariables in CclGetUnitVariable.
+      Destroyed is set before Orders.clear() in the release path, so this guard
+      prevents the out-of-bounds Orders[0] access.
+    - Push nil explicitly (matching the existing nullptr sentinel contract) and
+      always clean up the pushed unit-value from the Lua stack.
+    
+    Also:
+    - Add test_script_unit.cpp: regression tests for the destroyed-unit nil path
+      and the existing sentinel-(-1) nil path.
+    - Link macOS frameworks for stratagus_tests so the test binary links on Apple.
+    
+    Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>
+    Copilot-Session: 3376cfd0-7fca-4776-9112-7261edc7a354
+
+diff --git a/CMakeLists.txt b/engine/stratagus/CMakeLists.txt
+index 164d531..988995b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -560,6 +560,7 @@ set(stratagus_tests_SRCS
+ 	tests/stratagus/test_luacallback.cpp
+ 	tests/stratagus/test_missile_fire.cpp
+ 	tests/stratagus/test_resource_cleanup.cpp
++	tests/stratagus/test_script_unit.cpp
+ 	tests/stratagus/test_trigger.cpp
+ 	tests/stratagus/test_unitptr.cpp
+ 	tests/stratagus/test_util.cpp
+@@ -1241,6 +1242,11 @@ if(BUILD_TESTING)
+ 
+ 	add_executable(stratagus_tests ${stratagus_tests_SRCS})
+ 	target_link_libraries(stratagus_tests PUBLIC stratagus_lib doctest)
++	if(APPLE)
++		set_target_properties(stratagus_tests PROPERTIES
++			LINK_FLAGS "-ObjC -framework AppKit -framework Carbon -framework AudioToolbox -framework Cocoa -framework CoreAudio -framework CoreGraphics -framework CoreFoundation -framework CoreVideo -framework CoreHaptics -framework GameController -framework ForceFeedback -framework IOKit -framework Metal -liconv"
++		)
++	endif()
+ 	doctest_discover_tests(stratagus_tests)
+ 
+ 	if(PEONPAD_USE_SDL3 AND NOT CMAKE_CROSSCOMPILING)
+diff --git a/src/unit/script_unit.cpp b/engine/stratagus/src/unit/script_unit.cpp
+index 84b68c9..a7f22c5 100644
+--- a/src/unit/script_unit.cpp
++++ b/src/unit/script_unit.cpp
+@@ -1297,11 +1297,15 @@ static int CclGetUnitVariable(lua_State *l)
+ 
+ 	lua_pushvalue(l, 1);
+ 	CUnit *unit = CclGetUnit(l);
+-	if (unit == nullptr) {
++	lua_pop(l, 1);
++	// A destroyed unit has had Orders.clear() called; accessing CurrentOrder()
++	// inside UpdateUnitVariables would be an out-of-bounds vector read (SIGSEGV).
++	// Return nil so the caller can detect the dead reference.
++	if (unit == nullptr || unit->Destroyed) {
++		lua_pushnil(l);
+ 		return 1;
+ 	}
+ 	UpdateUnitVariables(*unit);
+-	lua_pop(l, 1);
+ 
+ 	const std::string_view value = LuaToString(l, 2);
+ 	if (value == "RegenerationRate") {
+diff --git a/tests/stratagus/test_script_unit.cpp b/engine/stratagus/tests/stratagus/test_script_unit.cpp
+new file mode 100644
+index 0000000..e53a661
+--- /dev/null
++++ b/tests/stratagus/test_script_unit.cpp
+@@ -0,0 +1,143 @@
++//       _________ __                 __
++//      /   _____//  |_____________ _/  |______     ____  __ __  ______
++//      \_____  \\   __\_  __ \__  \\   __\__  \   / ___\|  |  \/  ___/
++//      /        \|  |  |  | \// __ \|  |  / __ \_/ /_/  >  |  /\___ |
++//     /_______  /|__|  |__|  (____  /__| (____  /\___  /|____//____  >
++//             \/                  \/          \//_____/            \/
++//  ______________________                           ______________________
++//                        T H E   W A R   B E G I N S
++//         Stratagus - A free fantasy real time strategy game engine
++//
++/**@name test_script_unit.cpp - Regression tests for script_unit Lua bindings. */
++//
++//      (c) Copyright 2026 by The Stratagus Project
++//
++//      This program is free software; you can redistribute it and/or modify
++//      it under the terms of the GNU General Public License as published by
++//      the Free Software Foundation; only version 2 of the License.
++//
++//      This program is distributed in the hope that it will be useful,
++//      but WITHOUT ANY WARRANTY; without even the implied warranty of
++//      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++//      GNU General Public License for more details.
++//
++//      You should have received a copy of the GNU General Public License
++//      along with this program; if not, write to the Free Software
++//      Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++//      02111-1307, USA.
++//
++
++#include <doctest.h>
++
++#include "stratagus.h"
++#include "interface.h"
++#include "results.h"
++#include "script.h"
++#include "unit.h"
++#include "unit_manager.h"
++
++// Exposed for testing — defined in script_unit.cpp
++extern void UnitCclRegister();
++
++namespace
++{
++
++// RAII fixture: initialises a minimal Lua + UnitManager environment,
++// registers GetUnitVariable, and tears everything down afterwards.
++struct ScriptUnitFixture
++{
++	CUnitManager mgr;
++
++	ScriptUnitFixture()
++	{
++		GameRunning = true;
++		GamePaused = false;
++		GameResult = GameNoResult;
++		InitLua();
++		REQUIRE(Lua);
++		UnitCclRegister();
++		UnitManager = &mgr;
++		mgr.Init();
++	}
++
++	~ScriptUnitFixture()
++	{
++		UnitManager = nullptr;
++		if (Lua) {
++			lua_close(Lua);
++			Lua = nullptr;
++		}
++		GameRunning = false;
++		GamePaused = false;
++		GameResult = GameNoResult;
++	}
++};
++
++// Run a Lua snippet and return whether it succeeded (no error).
++bool runLua(const std::string &code)
++{
++	const int status = luaL_loadbuffer(Lua, code.data(), code.size(), "test");
++	if (status != 0) {
++		lua_pop(Lua, 1);
++		return false;
++	}
++	return LuaCall(Lua, 0, 0, lua_gettop(Lua), /*exitOnError=*/false) == 0;
++}
++
++} // namespace
++
++// ---------------------------------------------------------------------------
++// Regression: GetUnitVariable on a destroyed unit must return nil, not crash.
++//
++// Root cause: CUnit::Release() calls Orders.clear() after Destroyed = 1.
++// A Lua trigger holding a stale slot number called GetUnitVariable on it,
++// which reached UpdateUnitVariables() → unit.CurrentOrder() on an empty
++// Orders vector → out-of-bounds read → SIGSEGV.
++//
++// Fix: CclGetUnitVariable() guards on unit->Destroyed before calling
++// UpdateUnitVariables() and returns nil for destroyed/released units.
++// ---------------------------------------------------------------------------
++TEST_CASE("GetUnitVariable returns nil for a destroyed unit (no crash)")
++{
++	ScriptUnitFixture fix;
++
++	// Allocate slot 0.
++	CUnit *unit = fix.mgr.AllocUnit();
++	REQUIRE(unit != nullptr);
++	const int slot = unit->UnitManagerData.GetUnitId();
++	CHECK(slot == 0);
++
++	// Simulate the state produced by CUnit::Release() after the last
++	// reference drops: Destroyed = 1 and Orders cleared.
++	// This is the exact state that caused the SIGSEGV.
++	unit->Destroyed = 1;
++	unit->Orders.clear();
++
++	// Call GetUnitVariable(slot, "HitPoints") from Lua and capture the type
++	// of the returned value.  Must not crash.
++	const std::string code =
++		"_result_type = type(GetUnitVariable(" + std::to_string(slot) + ", 'HitPoints'))\n";
++	REQUIRE(runLua(code));
++
++	lua_getglobal(Lua, "_result_type");
++	const std::string_view t = LuaToString(Lua, -1);
++	lua_pop(Lua, 1);
++	CHECK(t == "nil");
++}
++
++// ---------------------------------------------------------------------------
++// Sanity: GetUnitVariable with the sentinel (-1) and nothing selected still
++// returns nil (existing behaviour preserved).
++// ---------------------------------------------------------------------------
++TEST_CASE("GetUnitVariable returns nil for sentinel -1 with nothing selected")
++{
++	ScriptUnitFixture fix;
++
++	REQUIRE(runLua("_result_type = type(GetUnitVariable(-1, 'HitPoints'))\n"));
++
++	lua_getglobal(Lua, "_result_type");
++	const std::string_view t = LuaToString(Lua, -1);
++	lua_pop(Lua, 1);
++	CHECK(t == "nil");
++}
++

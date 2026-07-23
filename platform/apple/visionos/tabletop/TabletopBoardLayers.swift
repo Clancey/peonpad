@@ -148,6 +148,35 @@ public enum TabletopTreePlacement {
     }
 }
 
+/// Pure UV layout for an upright tree billboard card, host-testable so the
+/// vertical orientation can't silently regress.
+///
+/// Trees reuse the flat forest *terrain* tile texture (a top-down tile) on a
+/// vertical card. In that texture v=0 is the tile's NORTH edge and v=1 its
+/// SOUTH edge (see `TabletopTerrainChunkMeshBuilder`: NW→v0, SW→v1). Mapping the
+/// tile's north edge (v=0) to the *top* of a standing card draws the tree
+/// upside down — the forest art's near/base detail lives on the south (v=1)
+/// edge, so an upright billboard must put v=1 at the card top and v=0 at the
+/// bottom. (User visual feedback: the north-at-top mapping read upside down.)
+public enum TabletopTreeCard {
+    /// The V texture coordinate at the *top* edge of an upright tree card.
+    public static let topV: Float = 1
+    /// The V texture coordinate at the *bottom* edge of an upright tree card.
+    public static let bottomV: Float = 0
+
+    /// UVs for the four card corners in (top-left, bottom-left, bottom-right,
+    /// top-right) order — the vertex order `makeTreeCardMesh` uses. U runs left
+    /// (0) → right (1); V is oriented so the card stands upright.
+    public static func cornerUVs() -> (tl: SIMD2<Float>, bl: SIMD2<Float>,
+                                       br: SIMD2<Float>, tr: SIMD2<Float>) {
+        (tl: SIMD2<Float>(0, topV),
+         bl: SIMD2<Float>(0, bottomV),
+         br: SIMD2<Float>(1, bottomV),
+         tr: SIMD2<Float>(1, topV))
+    }
+}
+
+
 /// Flat vertex arrays for one RealityKit mesh, framework-free so the geometry
 /// can be built and asserted on the host.  Mirrors the shape of
 /// `TabletopTerrainChunkGeometry`; the RealityKit layer adds a `meshDescriptor`

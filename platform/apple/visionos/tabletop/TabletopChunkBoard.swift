@@ -542,19 +542,19 @@ public final class TabletopChunkBoard {
             "[Tabletop] trees: forest=\(forest.count) stride=\(stride) billboards=\(placed)")
     }
 
-    /// A double-sided vertical quad for a tree billboard, centred on the origin,
-    /// with UVs oriented so the (top-down) forest tile texture stands upright
-    /// (v=0 at the top edge, matching the terrain mesh convention) rather than
-    /// upside down. Double-sided so it is never back-face culled regardless of
-    /// which way the billboard turns.
+    /// A double-sided vertical quad for a tree billboard, centred on the origin.
+    /// UVs come from `TabletopTreeCard` so the (top-down) forest tile texture
+    /// stands upright (the tile's south/near edge, v=1, at the card top) rather
+    /// than upside down. Double-sided so it is never back-face culled regardless
+    /// of which way the billboard turns.
     private static func makeTreeCardMesh(width: Float, height: Float) -> MeshResource {
         let hw = width / 2, hh = height / 2
         let tl = SIMD3<Float>(-hw,  hh, 0)
         let bl = SIMD3<Float>(-hw, -hh, 0)
         let br = SIMD3<Float>( hw, -hh, 0)
         let tr = SIMD3<Float>( hw,  hh, 0)
-        let uvTL = SIMD2<Float>(0, 0), uvBL = SIMD2<Float>(0, 1)
-        let uvBR = SIMD2<Float>(1, 1), uvTR = SIMD2<Float>(1, 0)
+        let uv = TabletopTreeCard.cornerUVs()
+        let uvTL = uv.tl, uvBL = uv.bl, uvBR = uv.br, uvTR = uv.tr
 
         // Front (+Z) then back (−Z), each with its own vertices/normal so the
         // texture reads upright from both sides.

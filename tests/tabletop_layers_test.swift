@@ -136,6 +136,27 @@ func testTreePlacementIsRegularSubgrid() {
            "stride 1 selects every tile")
 }
 
+// MARK: - Tree billboard vertical orientation (upside-down-tree regression)
+
+func testTreeCardStandsUpright() {
+    // Trees sample the flat forest terrain tile, whose v=0 is the tile's NORTH
+    // edge and v=1 its SOUTH edge. An upright standing card must put the SOUTH
+    // edge (v=1) at the TOP and the NORTH edge (v=0) at the BOTTOM — the
+    // opposite of the flat terrain's north-up mapping. This guards the
+    // upside-down-tree bug: a naive v=0-at-top card renders inverted.
+    let uv = TabletopTreeCard.cornerUVs()
+    expect(uv.tl.y > uv.bl.y, "tree card top samples a higher V than its bottom (upright)")
+    expect(uv.tr.y > uv.br.y, "tree card top-right samples a higher V than bottom-right")
+    expectEq(uv.tl.y, TabletopTreeCard.topV, "top-left V is the card top V")
+    expectEq(uv.bl.y, TabletopTreeCard.bottomV, "bottom-left V is the card bottom V")
+    expect(TabletopTreeCard.topV > TabletopTreeCard.bottomV,
+           "card top V (\(TabletopTreeCard.topV)) is above bottom V (\(TabletopTreeCard.bottomV))")
+    // Horizontal (U) is not mirrored: left column stays left.
+    expectEq(uv.tl.x, uv.bl.x, "left corners share U")
+    expectEq(uv.tr.x, uv.br.x, "right corners share U")
+    expect(uv.tl.x < uv.tr.x, "U increases left→right")
+}
+
 func testFogFollowsAboveEveryTerrainHeight() {
     // Fog floats a fixed gap above each tile's own terrain height, so it is
     // above the tallest terrain and never coplanar with any of it.
@@ -279,6 +300,7 @@ struct TabletopLayersTests {
         testTreeStrideOneWhenUnderCap()
         testTreeStrideBoundsCount()
         testTreePlacementIsRegularSubgrid()
+        testTreeCardStandsUpright()
         testFogFollowsAboveEveryTerrainHeight()
 
         testTerrainExtent()

@@ -98,12 +98,42 @@ func testTerrainReliefHasVisibleSpread() {
 }
 
 func testForestStandsUp() {
-    // Forest tiles get an upright standing prop; other classes do not.
+    // Forest tiles get an upright tree billboard; other classes do not.
     expect(TabletopTerrainRelief.standupHeight(.forest) > 0.02,
            "forest has a visible standing (tree) prop")
     for kind in TabletopTerrainKind.allCases where kind != .forest {
         expectEq(TabletopTerrainRelief.standupHeight(kind), 0, "\(kind) has no standing prop")
     }
+}
+
+// MARK: - Tree billboard decimation
+
+func testTreeStrideOneWhenUnderCap() {
+    expectEq(TabletopTreePlacement.stride(forestTileCount: 100, maxTrees: 700), 1,
+             "few forest tiles ⇒ every tile is a tree")
+    expectEq(TabletopTreePlacement.stride(forestTileCount: 700, maxTrees: 700), 1,
+             "exactly at cap ⇒ stride 1")
+}
+
+func testTreeStrideBoundsCount() {
+    // 10 000 forest tiles capped at 700 must not exceed the cap after decimation.
+    let n = 10_000
+    let s = TabletopTreePlacement.stride(forestTileCount: n, maxTrees: 700)
+    expect(s > 1, "dense forest decimates (stride > 1)")
+    let approx = (n + s * s - 1) / (s * s)
+    expect(approx <= 700, "decimated tree count \(approx) stays within the cap")
+}
+
+func testTreePlacementIsRegularSubgrid() {
+    expect(TabletopTreePlacement.isPlacementTile(tileX: 0, tileZ: 0, stride: 3),
+           "(0,0) is on the stride-3 sub-grid")
+    expect(TabletopTreePlacement.isPlacementTile(tileX: 3, tileZ: 6, stride: 3),
+           "(3,6) is on the stride-3 sub-grid")
+    expect(!TabletopTreePlacement.isPlacementTile(tileX: 1, tileZ: 0, stride: 3),
+           "(1,0) is not on the stride-3 sub-grid")
+    // Stride 1 selects every tile.
+    expect(TabletopTreePlacement.isPlacementTile(tileX: 7, tileZ: 4, stride: 1),
+           "stride 1 selects every tile")
 }
 
 func testFogFollowsAboveEveryTerrainHeight() {
@@ -246,6 +276,9 @@ struct TabletopLayersTests {
         testTerrainReliefOrdering()
         testTerrainReliefHasVisibleSpread()
         testForestStandsUp()
+        testTreeStrideOneWhenUnderCap()
+        testTreeStrideBoundsCount()
+        testTreePlacementIsRegularSubgrid()
         testFogFollowsAboveEveryTerrainHeight()
 
         testTerrainExtent()

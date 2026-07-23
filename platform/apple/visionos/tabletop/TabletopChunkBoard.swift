@@ -93,6 +93,9 @@ public final class TabletopChunkBoard {
     /// The thick board substrate/frame slab drawn below the terrain to give the
     /// board visible 2.5D depth. One entity for the whole board.
     private var substrateEntity:  ModelEntity?
+    /// Upright viewer-facing tree billboards (decimated for a bounded count),
+    /// with their board-plane XZ position for per-frame yaw-toward-viewer.
+    private var treeEntities: [(entity: ModelEntity, x: Float, z: Float)] = []
     /// Incremented each time a chunk is (re)built; async atlas completions
     /// compare their captured generation to the current value and abort if
     /// a newer rebuild has superseded them.
@@ -209,6 +212,10 @@ public final class TabletopChunkBoard {
 
         // Build single fog entity.
         buildFogEntity(snapshot: snapshot, fit: fit, to: boardRoot)
+
+        // Build upright tree billboards for forest tiles (decimated).
+        buildTrees(snapshot: snapshot, fit: fit, to: boardRoot,
+                   materialProvider: materialProvider)
 
         let elapsed = CFAbsoluteTimeGetCurrent() - buildStart
         tabletopEngineLog(
@@ -393,16 +400,13 @@ public final class TabletopChunkBoard {
             return (nil, slotMap, slotToKind)
         }
 
-        // Relief tiles carry a per-tile height and, for forest, an upright tree
-        // standup height; skirts are emitted where a neighbour is lower.
-        let reliefTiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float, standupHeight: Float)] =
-            tiles.map { tile in
-                let kind = terrainByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)]?.kind
-                return (tile.tileX, tile.tileZ, tile.graphicIndex,
-                        self.heightByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)]
-                            ?? TabletopBoardElevation.terrainSurfaceY,
-                        kind.map { TabletopTerrainRelief.standupHeight($0) } ?? 0)
-            }
+        // Relief tiles carry a per-tile height; skirts are emitted where a
+        // neighbour (looked up across the whole map) is lower, so elevation
+        // changes show real shaded edges. (Trees are separate billboards.)
+        let reliefTiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)] =
+            tiles.map { ($0.tileX, $0.tileZ, $0.graphicIndex,
+                         self.heightByKey[TabletopChunkLayout.tileKey($0.tileX, $0.tileZ)]
+                             ?? TabletopBoardElevation.terrainSurfaceY) }
 
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building relief geometry")
         let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
@@ -458,6 +462,80 @@ public final class TabletopChunkBoard {
         mat.roughness = 1.0
         mat.metallic  = 0.0
         return mat
+    }
+
+    // MARK: - Private: tree billboards
+
+    /// Builds upright, viewer-facing tree billboards for forest tiles. Forest is
+    /// top-down tileset art (no side sprite), so trees are rendered as discrete
+    /// billboard cards standing on the forest ground — decimated to a bounded
+    /// count so a densely-forested map stays performant. All trees share one
+    /// material (the real forest tile texture once decoded), so this adds far
+    /// fewer entities than one-per-tile and no per-tile decode.
+    private func buildTrees(
+        snapshot:  TabletopGameplaySnapshot,
+        fit:       TabletopMapFit,
+        to boardRoot: Entity,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        let forest = snapshot.terrain.filter { $0.kind == .forest }
+        guard !forest.isEmpty else {
+            tabletopEngineLog("[Tabletop] trees: no forest tiles")
+            return
+        }
+        let stride = TabletopTreePlacement.stride(forestTileCount: forest.count)
+
+        // Tree card sized relative to the tile so it scales with the map; a
+        // couple of tiles tall so it reads as a standing tree, not a decal.
+        let cardH = max(fit.tileSize * 3.0, 0.014)
+        let cardW = max(fit.tileSize * 2.0, 0.010)
+        let mesh  = MeshResource.generatePlane(width: cardW, height: cardH)
+        // Procedural forest-green until the real forest tile texture decodes.
+        let procMat = translucentUnlitMaterial(
+            UIColor(hue: 0.34, saturation: 0.55, brightness: 0.32, alpha: 1))
+
+        var placed = 0
+        for tile in forest
+        where TabletopTreePlacement.isPlacementTile(
+            tileX: tile.tileX, tileZ: tile.tileZ, stride: stride) {
+            let c = fit.tileCenter(tileX: tile.tileX, tileZ: tile.tileZ)
+            let y = heightByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)]
+                ?? TabletopBoardElevation.terrainSurfaceY
+            let e = ModelEntity(mesh: mesh, materials: [procMat])
+            e.name = "board.tree.\(tile.tileX).\(tile.tileZ)"
+            // Feet on the terrain; the card's centre sits half its height up.
+            e.position = SIMD3<Float>(c.x, y + cardH / 2, c.z)
+            boardRoot.addChild(e)
+            treeEntities.append((entity: e, x: c.x, z: c.z))
+            placed += 1
+        }
+
+        // Upgrade all trees to the real forest tile art (one shared decode).
+        if let materialProvider, let gi = forest.first?.graphicIndex {
+            materialProvider.terrainMaterial(
+                graphicIndex: gi, tileset: snapshot.assets?.tileset
+            ) { [weak self] material in
+                guard let self else { return }
+                for t in self.treeEntities { t.entity.model?.materials = [material] }
+                tabletopEngineLog("[Tabletop] trees: real forest texture applied")
+            }
+        }
+
+        tabletopEngineLog(
+            "[Tabletop] trees: forest=\(forest.count) stride=\(stride) billboards=\(placed)")
+    }
+
+    /// Re-orients every tree billboard to face the viewer, rotating strictly
+    /// about the board vertical (trees stay upright). Called each frame from the
+    /// board view alongside the unit billboards.
+    public func refreshTreeBillboards(viewerBoardPosition: TabletopPoint3D) {
+        guard !treeEntities.isEmpty else { return }
+        for t in treeEntities {
+            let yaw = TabletopBillboardOrientation.yawFacingViewer(
+                unitBoardPosition: TabletopPoint3D(x: Double(t.x), y: 0, z: Double(t.z)),
+                viewerBoardPosition: viewerBoardPosition)
+            t.entity.orientation = simd_quatf(angle: Float(yaw), axis: [0, 1, 0])
+        }
     }
 
     // MARK: - Private: substrate slab

@@ -95,12 +95,13 @@ public enum TabletopTerrainRelief {
         Float(level(kind)) * stepMeters
     }
 
-    /// Height (meters) of an upright "standing" prop drawn on top of a tile —
-    /// e.g. trees on forest tiles that should read as standing vegetation, not a
-    /// flat-topped raised tile. Zero for classes with no standing prop.
+    /// Height (meters) of the upright viewer-facing tree billboard drawn on a
+    /// forest tile so trees read as standing vegetation in the 2.5D view (they
+    /// are rendered as decimated billboard cards, not as part of the terrain
+    /// mesh). Zero for classes with no tree billboard.
     public static func standupHeight(_ kind: TabletopTerrainKind) -> Float {
         switch kind {
-        case .forest: return 0.055   // upright tree canopy
+        case .forest: return 0.05   // upright tree card height
         default:      return 0
         }
     }
@@ -116,7 +117,36 @@ public enum TabletopTerrainRelief {
     }
 }
 
-// MARK: - Shared mesh data
+// MARK: - Tree billboard decimation
+
+/// Selects a bounded, evenly-spread subset of forest tiles to render as upright
+/// tree billboards, so a densely-forested map produces a readable stand of
+/// discrete trees instead of thousands of entities. Framework-free/testable.
+public enum TabletopTreePlacement {
+
+    /// Hard cap on rendered tree billboards, regardless of map/forest size.
+    public static let maxTrees = 700
+
+    /// Grid stride (in tiles) at which forest tiles become trees, chosen so the
+    /// total stays under `maxTrees`. Stride 1 = every forest tile; larger =
+    /// sparser. Always ≥ 1.
+    public static func stride(forestTileCount: Int, maxTrees: Int = maxTrees) -> Int {
+        guard forestTileCount > maxTrees, maxTrees > 0 else { return 1 }
+        // trees ≈ forestTileCount / stride² ; solve for the smallest stride that
+        // brings the count under the cap.
+        var s = 1
+        while (forestTileCount + s * s - 1) / (s * s) > maxTrees { s += 1 }
+        return s
+    }
+
+    /// True when a forest tile at (tileX, tileZ) is a placement point for the
+    /// given stride (a regular sub-grid), keeping the selection deterministic
+    /// and spatially even.
+    public static func isPlacementTile(tileX: Int, tileZ: Int, stride: Int) -> Bool {
+        let s = max(1, stride)
+        return tileX % s == 0 && tileZ % s == 0
+    }
+}
 
 /// Flat vertex arrays for one RealityKit mesh, framework-free so the geometry
 /// can be built and asserted on the host.  Mirrors the shape of

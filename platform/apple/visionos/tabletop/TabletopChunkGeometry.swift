@@ -221,9 +221,7 @@ public enum TabletopTerrainChunkMeshBuilder {
     /// mesh per chunk) while giving the board visible 2.5D relief.
     ///
     /// - Parameters:
-    ///   - tiles:      (tileX, tileZ, graphicIndex?, height, standupHeight) per
-    ///                 chunk tile. `standupHeight > 0` adds an upright crossed
-    ///                 billboard (e.g. a standing tree) on the tile.
+    ///   - tiles:      (tileX, tileZ, graphicIndex?, height) for each chunk tile.
     ///   - fit:        Board-space tile sizing and centering.
     ///   - slotMap:    Atlas layout — maps each graphicIndex to a UV column.
     ///   - heightAt:   Height of an arbitrary map tile (nil ⇒ outside the map).
@@ -231,7 +229,7 @@ public enum TabletopTerrainChunkMeshBuilder {
     ///   - edgeFloorY: Skirt bottom used at the map boundary (typically the
     ///                 substrate top), so border tiles drop cleanly to the slab.
     public static func buildRelief(
-        tiles:      [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float, standupHeight: Float)],
+        tiles:      [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)],
         fit:        TabletopMapFit,
         slotMap:    TabletopAtlasSlotMap,
         heightAt:   (Int, Int) -> Float?,
@@ -308,34 +306,6 @@ public enum TabletopTerrainChunkMeshBuilder {
                   topA: se, topB: sw, outward: SIMD3<Float>(0, 0, 1))  // South
             skirt(neighborX: tile.tileX - 1, neighborZ: tile.tileZ,
                   topA: sw, topB: nw, outward: SIMD3<Float>(-1, 0, 0)) // West
-
-            // Upright standing prop (e.g. a tree): two crossed vertical quads
-            // through the tile centre, each emitted double-sided so the prop
-            // reads as standing from any viewing angle around the board without
-            // per-frame billboarding. Textured with the tile's own atlas slot.
-            if tile.standupHeight > eps {
-                let topY = h + tile.standupHeight
-                let uvTL = SIMD2<Float>(u0, 0), uvTR = SIMD2<Float>(u1, 0)
-                let uvBR = SIMD2<Float>(u1, 1), uvBL = SIMD2<Float>(u0, 1)
-                // Plane spanning X (faces ±Z).
-                let ax0 = SIMD3<Float>(cx - halfTile, topY, cz)
-                let ax1 = SIMD3<Float>(cx + halfTile, topY, cz)
-                let ax2 = SIMD3<Float>(cx + halfTile, h,    cz)
-                let ax3 = SIMD3<Float>(cx - halfTile, h,    cz)
-                addQuad(ax0, ax1, ax2, ax3, normal: SIMD3<Float>(0, 0, 1),
-                        uvTL, uvTR, uvBR, uvBL)
-                addQuad(ax0, ax1, ax2, ax3, normal: SIMD3<Float>(0, 0, -1),
-                        uvTL, uvTR, uvBR, uvBL)
-                // Plane spanning Z (faces ±X).
-                let bx0 = SIMD3<Float>(cx, topY, cz - halfTile)
-                let bx1 = SIMD3<Float>(cx, topY, cz + halfTile)
-                let bx2 = SIMD3<Float>(cx, h,    cz + halfTile)
-                let bx3 = SIMD3<Float>(cx, h,    cz - halfTile)
-                addQuad(bx0, bx1, bx2, bx3, normal: SIMD3<Float>(1, 0, 0),
-                        uvTL, uvTR, uvBR, uvBL)
-                addQuad(bx0, bx1, bx2, bx3, normal: SIMD3<Float>(-1, 0, 0),
-                        uvTL, uvTR, uvBR, uvBL)
-            }
         }
 
         return TabletopTerrainChunkGeometry(

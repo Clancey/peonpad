@@ -285,6 +285,26 @@ func testPlacementSourceRectAndKey() {
         kind: "unit-footman", spriteFrame: 9, spriteMirror: false)
     let p3 = resolver.unitPlacement(unit: otherUnit, sprite: sprite)!
     expect(p.cacheKey != p3.cacheKey, "different team tint => different cache key")
+
+    // Regression: the *same* relative path under the data root vs. the
+    // writable cache root must never alias in the LRU cache / in-flight
+    // `pending` dictionary (both keyed on `cacheKey`), even though the path
+    // text, frame, cell size, mirror, and tint are otherwise identical —
+    // otherwise a tileset transition that toggles only the root (not the
+    // path text) could serve/coalesce onto a decode of the wrong root's
+    // file. See WargusTabletopMaterialProvider.root(for:).
+    let dataRootPlacement = TabletopAssetPlacement(
+        relativePath: "tabletop-generated/forest-v1-aaaa.png",
+        frame: 5, cellWidth: 32, cellHeight: 32, mirror: false, teamTint: nil,
+        isGeneratedCache: false)
+    let cacheRootPlacement = TabletopAssetPlacement(
+        relativePath: "tabletop-generated/forest-v1-aaaa.png",
+        frame: 5, cellWidth: 32, cellHeight: 32, mirror: false, teamTint: nil,
+        isGeneratedCache: true)
+    expect(dataRootPlacement.relativePath == cacheRootPlacement.relativePath,
+           "precondition: identical path text")
+    expect(dataRootPlacement.cacheKey != cacheRootPlacement.cacheKey,
+           "same relative path but different root => distinct cache keys (never aliased)")
 }
 
 // MARK: - Bounded LRU cache

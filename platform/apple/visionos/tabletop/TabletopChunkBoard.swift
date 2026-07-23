@@ -24,11 +24,10 @@ import RealityKit
 import UIKit
 
 // MARK: - Chunk key
-
-struct TabletopChunkKey: Hashable {
-    let chunkX: Int
-    let chunkZ: Int
-}
+//
+// TabletopChunkKey and the readiness state machine
+// (TabletopChunkReadinessTracker) live in TabletopChunkReadiness.swift —
+// pure, framework-free, and unit-tested on the host without RealityKit.
 
 // MARK: - Terrain kind colour
 
@@ -105,6 +104,13 @@ public final class TabletopChunkBoard {
     /// superseded in-flight tree-material decode (from a tileset that has
     /// since changed again) cannot overwrite a newer one.
     private var treeGeneration = 0
+    /// The procedural forest-green fallback material trees are built with
+    /// and restored to at the start of every `refreshTreeMaterial` call, so
+    /// a tileset change never leaves them showing a stale, previously-real
+    /// tileset's art while a new decode is pending, missing, or never
+    /// completes (e.g. a missing/invalid asset — the per-asset fallback
+    /// contract means the completion simply never fires for that request).
+    private var treeProceduralMaterial: UnlitMaterial?
 
     // MARK: State
 
@@ -118,17 +124,19 @@ public final class TabletopChunkBoard {
     // MARK: Readiness
 
     private var buildStart: CFAbsoluteTime = 0
-    public private(set) var totalChunks:     Int = 0
-    public private(set) var atlasReadyCount: Int = 0
+    /// Pure state machine (TabletopChunkReadiness.swift) tracking which
+    /// chunks currently show real, current-generation atlas art. See its
+    /// header comment for why `atlasReadyCount` must be derived from a live
+    /// set rather than a monotonically incrementing counter.
+    private var readinessTracker = TabletopChunkReadinessTracker(totalChunks: 0)
+    public var totalChunks:     Int { readinessTracker.totalChunks }
+    public var atlasReadyCount: Int { readinessTracker.atlasReadyCount }
 
     /// Streaming-progress snapshot; `readiness.isStable` becomes true once every
     /// terrain chunk has upgraded from its procedural placeholder to real art.
     public var readiness: TabletopBoardReadiness {
         TabletopBoardReadiness(totalChunks: totalChunks, atlasReadyCount: atlasReadyCount)
     }
-    /// Set once, when the board first reaches the stable-ready state, so the
-    /// transition is logged exactly once.
-    private var didLogStable = false
 
     // Background queue for all CGImage / atlas work.
     private let decodeQueue = DispatchQueue(
@@ -168,7 +176,7 @@ public final class TabletopChunkBoard {
         let mapH = snapshot.mapSize.height
         let (cx, cz) = TabletopChunkLayout.chunkCount(
             mapWidth: mapW, mapHeight: mapH, chunkTiles: chunkTiles)
-        totalChunks = cx * cz
+        readinessTracker.totalChunks = cx * cz
 
         tabletopEngineLog("[Tabletop] build: map=\(mapW)x\(mapH) chunks=\(cx)x\(cz)=\(totalChunks) terrain=\(snapshot.terrain.count) assets=\(snapshot.assets != nil ? "real" : "none")")
 
@@ -289,9 +297,11 @@ public final class TabletopChunkBoard {
                 fit: fit, terrainByKey: terrainByKey)
             guard let mesh else { continue }
             // Increment generation so any in-flight atlas for this chunk is
-            // considered stale when it completes.
+            // considered stale when it completes, and mark it pending (not
+            // ready) again for the new generation — see `readinessTracker`.
             chunkGeneration[key] = (chunkGeneration[key] ?? 0) + 1
             let gen = chunkGeneration[key]!
+            readinessTracker.markPending(key)
             // Apply procedural material immediately.
             if let procMat = makeProceduralAtlasMaterial(
                 slotMap: slotMap, slotToKind: slotToKind) {
@@ -538,6 +548,7 @@ public final class TabletopChunkBoard {
         // Procedural forest-green until the real forest tile texture decodes.
         let procMat = translucentUnlitMaterial(
             UIColor(hue: 0.34, saturation: 0.55, brightness: 0.32, alpha: 1))
+        treeProceduralMaterial = procMat
 
         var placed = 0
         for tile in forest
@@ -573,18 +584,30 @@ public final class TabletopChunkBoard {
     /// a tileset the caller has since superseded with another refresh) can
     /// never overwrite a newer result — mirroring `chunkGeneration`'s
     /// per-chunk stale-completion guard.
+    ///
+    /// Unconditionally bumps `treeGeneration` and restores every tree to its
+    /// procedural fallback *before* attempting any new decode: a tileset
+    /// change with no forest tile, no material provider, or a missing/
+    /// invalid asset whose completion never fires (the per-asset fallback
+    /// contract — see WargusTabletopMaterialProvider) must never leave trees
+    /// showing another (now-superseded) tileset's stale real art.
     private func refreshTreeMaterial(
         snapshot: TabletopGameplaySnapshot,
         tileset: TabletopTilesetInfo?,
         materialProvider: WargusTabletopMaterialProvider?
     ) {
-        guard !treeEntities.isEmpty,
-              let materialProvider,
-              let gi = snapshot.terrain.first(where: { $0.kind == .forest })?.graphicIndex
-        else { return }
+        guard !treeEntities.isEmpty else { return }
 
         treeGeneration += 1
         let gen = treeGeneration
+        if let procMat = treeProceduralMaterial {
+            for t in treeEntities { t.entity.model?.materials = [procMat] }
+        }
+
+        guard let materialProvider,
+              let gi = snapshot.terrain.first(where: { $0.kind == .forest })?.graphicIndex
+        else { return }
+
         materialProvider.terrainMaterial(
             graphicIndex: gi, tileset: tileset
         ) { [weak self] material in
@@ -664,15 +687,16 @@ public final class TabletopChunkBoard {
     }
 
     /// Records one chunk's real-art atlas arrival and logs the stable-ready
-    /// transition exactly once, when the last chunk settles.
+    /// transition exactly once per round, when the last pending chunk settles.
+    /// Idempotent: a duplicate callback invocation for an already-ready chunk
+    /// never double-counts `atlasReadyCount` (see `TabletopChunkReadinessTracker`).
     private func noteAtlasReady(chunkX: Int, chunkZ: Int, reason: String?) {
-        atlasReadyCount += 1
+        let becameStable = readinessTracker.markReady(TabletopChunkKey(chunkX: chunkX, chunkZ: chunkZ))
         let suffix = reason.map { " (\($0))" } ?? ""
         tabletopEngineLog(
             "[Tabletop] atlas ready chunk \(atlasReadyCount)/\(totalChunks) "
             + "(\(chunkX).\(chunkZ))\(suffix)")
-        if !didLogStable, readiness.isStable {
-            didLogStable = true
+        if becameStable {
             tabletopEngineLog(
                 "[Tabletop] board stable-ready: all \(totalChunks) chunks upgraded to real art")
         }

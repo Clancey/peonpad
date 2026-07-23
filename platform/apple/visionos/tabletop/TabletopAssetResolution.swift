@@ -224,9 +224,19 @@ public struct TabletopAssetPlacement: Equatable, Sendable {
     }
 
     /// A stable cache key for a decoded, cropped, mirrored, tinted result.
+    /// A stable cache key for a decoded, cropped, mirrored, tinted result.
+    /// Includes `isGeneratedCache` (the root discriminator) so the *same*
+    /// relative path under the data root vs. the cache root — which the
+    /// LRU cache and in-flight `pending` dictionary key on this string —
+    /// never alias: without it, a tileset transition that toggles only the
+    /// root (not the path text) could serve a completed data-root decode (or
+    /// coalesce onto an in-flight data-root request) for a placement that
+    /// actually needs the cache-root file, even though the chunk-level
+    /// generation guard is otherwise correct.
     public var cacheKey: String {
         let tint = teamTint.map { "\($0.red),\($0.green),\($0.blue),\($0.alpha)" } ?? "-"
-        return "\(relativePath)#f\(frame)#c\(cellWidth)x\(cellHeight)#m\(mirror ? 1 : 0)#t\(tint)"
+        return "\(relativePath)#f\(frame)#c\(cellWidth)x\(cellHeight)#m\(mirror ? 1 : 0)"
+            + "#r\(isGeneratedCache ? 1 : 0)#t\(tint)"
     }
 }
 

@@ -211,6 +211,28 @@ public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
         self.name = name
         self.pathRoot = pathRoot
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case imagePath, pixelTileWidth, pixelTileHeight, imageWidth, imageHeight, name, pathRoot
+    }
+
+    // Custom decoding: `pathRoot` (ABI v5) is optional in the wire format and
+    // defaults to `.dataRoot`, so a `TabletopGameplaySnapshot` serialized
+    // before this field existed — still `currentVersion == 1` — decodes
+    // successfully instead of failing with `keyNotFound` on every tileset it
+    // carries. All other fields remain required, preserving prior behavior
+    // for them; `encode(to:)` stays synthesized (all fields are Codable, so
+    // the compiler still generates it despite this custom `init(from:)`).
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        imagePath = try container.decode(String.self, forKey: .imagePath)
+        pixelTileWidth = try container.decode(Int.self, forKey: .pixelTileWidth)
+        pixelTileHeight = try container.decode(Int.self, forKey: .pixelTileHeight)
+        imageWidth = try container.decode(Int.self, forKey: .imageWidth)
+        imageHeight = try container.decode(Int.self, forKey: .imageHeight)
+        name = try container.decode(String.self, forKey: .name)
+        pathRoot = try container.decodeIfPresent(TabletopTilesetPathRoot.self, forKey: .pathRoot) ?? .dataRoot
+    }
 }
 
 /// One unit type's sprite-sheet descriptor, carried on the snapshot so the

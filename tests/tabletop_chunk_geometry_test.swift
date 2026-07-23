@@ -638,6 +638,89 @@ func testReliefQuadIndexLocality() {
     }
 }
 
+// MARK: - TabletopChunkReadinessTracker
+//
+// Regression coverage for the "wholesale tileset-change refresh falsely
+// reports stable" bug: TabletopChunkBoard.refreshForTilesetChange marks
+// every chunk pending again (even chunks whose terrain didn't individually
+// change) and re-requests every atlas. Before this fix, a plain
+// incrementing counter would keep growing past totalChunks across repeated
+// refreshes and readiness.isStable would report true throughout the
+// (actually still-procedural) refresh window.
+
+func testReadinessTrackerStartsAtZero() {
+    let tracker = TabletopChunkReadinessTracker(totalChunks: 4)
+    expectEq(tracker.atlasReadyCount, 0, "fresh tracker starts with nothing ready")
+    expect(!tracker.isStable, "fresh tracker with totalChunks > 0 is not stable")
+}
+
+func testReadinessTrackerProgressesToStable() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 2)
+    let a = TabletopChunkKey(chunkX: 0, chunkZ: 0)
+    let b = TabletopChunkKey(chunkX: 1, chunkZ: 0)
+
+    let becameStableA = tracker.markReady(a)
+    expect(!becameStableA, "one of two ready chunks is not yet stable")
+    expectEq(tracker.atlasReadyCount, 1, "1/2 ready")
+    expect(!tracker.isStable, "not stable with 1/2 chunks ready")
+
+    let becameStableB = tracker.markReady(b)
+    expect(becameStableB, "the second (last) ready chunk newly makes the tracker stable")
+    expectEq(tracker.atlasReadyCount, 2, "2/2 ready")
+    expect(tracker.isStable, "stable once every chunk is ready")
+}
+
+func testReadinessTrackerMarkReadyIsDeduplicated() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 3)
+    let a = TabletopChunkKey(chunkX: 0, chunkZ: 0)
+    _ = tracker.markReady(a)
+    _ = tracker.markReady(a) // duplicate/late callback for the same chunk
+    _ = tracker.markReady(a)
+    expectEq(tracker.atlasReadyCount, 1, "marking the same chunk ready repeatedly never double-counts")
+}
+
+func testReadinessTrackerMarkReadyOnlyReportsStableOnce() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 1)
+    let a = TabletopChunkKey(chunkX: 0, chunkZ: 0)
+    expect(tracker.markReady(a), "the only chunk becoming ready makes the tracker stable")
+    expect(!tracker.markReady(a), "reporting the same chunk ready again does not re-report stability")
+}
+
+func testReadinessTrackerWholesaleRefreshResetsToZeroThenProgresses() {
+    // Simulates TabletopChunkBoard.refreshForTilesetChange: every chunk in a
+    // 2x2 board is marked pending again (even though none of them are
+    // individually "dirty" by terrain value), then each one's freshly
+    // requested atlas lands.
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 4)
+    let keys = (0..<2).flatMap { x in (0..<2).map { z in TabletopChunkKey(chunkX: x, chunkZ: z) } }
+    for k in keys { _ = tracker.markReady(k) }
+    expect(tracker.isStable, "precondition: fully stable after the initial build")
+
+    // Tileset-change refresh: mark every chunk pending again.
+    for k in keys { tracker.markPending(k) }
+    expectEq(tracker.atlasReadyCount, 0, "wholesale refresh immediately reports 0/N, not a stale N/N")
+    expect(!tracker.isStable, "not stable immediately after a wholesale refresh")
+
+    // New atlases land one by one; only the last one restabilizes.
+    for (i, k) in keys.enumerated() {
+        let becameStable = tracker.markReady(k)
+        if i < keys.count - 1 {
+            expect(!becameStable, "not yet stable before the last chunk lands")
+        } else {
+            expect(becameStable, "the last chunk landing restabilizes the tracker")
+        }
+    }
+    expectEq(tracker.atlasReadyCount, 4, "deduped progression reaches exactly N/N, never more")
+    expect(tracker.isStable, "stable again after the wholesale refresh completes")
+}
+
+func testReadinessTrackerMarkPendingIsIdempotentForUnknownKey() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 2)
+    let unknown = TabletopChunkKey(chunkX: 9, chunkZ: 9)
+    tracker.markPending(unknown) // never seen before — must not crash or go negative
+    expectEq(tracker.atlasReadyCount, 0, "marking an unknown key pending is a harmless no-op")
+}
+
 // MARK: - Run all tests
 
 @main
@@ -679,6 +762,13 @@ struct TabletopChunkGeometryTests {
         testReliefBoundedForFlatGround()
         testReliefChunkEdgeContinuity()
         testReliefQuadIndexLocality()
+
+        testReadinessTrackerStartsAtZero()
+        testReadinessTrackerProgressesToStable()
+        testReadinessTrackerMarkReadyIsDeduplicated()
+        testReadinessTrackerMarkReadyOnlyReportsStableOnce()
+        testReadinessTrackerWholesaleRefreshResetsToZeroThenProgresses()
+        testReadinessTrackerMarkPendingIsIdempotentForUnknownKey()
 
         // MARK: - Summary
 

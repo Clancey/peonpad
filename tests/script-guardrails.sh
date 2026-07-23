@@ -263,6 +263,17 @@ cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 # the host Mac; no Simulator needed.
 "$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" --help >/dev/null
 "$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" >/dev/null
+
+# Live-state transport source + reconciler diffs, snapshot conversion + ABI v3
+# asset-catalog conversion, the framework-free asset-resolution layer (path
+# confinement, atlas math, team color, bounded LRU), and the opt-in command
+# integration harness (gating + select/move/stop sequencing). All host-only.
+"$ROOT_DIR/scripts/test-visionos-tabletop-live-state.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-transport.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-assets.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-assets.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" >/dev/null
 if rg -Fq 'assert(' \
     "$ROOT_DIR/tests/tabletop_gameplay_state_test.swift"; then
   print -u2 "tabletop gameplay tests rely on Swift assert instead of" \

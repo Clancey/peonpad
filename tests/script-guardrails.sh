@@ -410,6 +410,7 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
+  0013-fix-trigger-null-unit-crash.patch \
   0012-tabletop-bridge-gamehook.patch \
   0011-visionos-indirect-controls.patch \
   0010-direct-sdl3-engine.patch \
@@ -447,6 +448,8 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0013-fix-trigger-null-unit-crash.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
 EXPECTED_STRATAGUS_TREE_SHA=$(awk -F ' *= *' '

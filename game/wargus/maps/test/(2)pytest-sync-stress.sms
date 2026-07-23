@@ -122,7 +122,10 @@ AddTrigger(
   end)
 
 AddTrigger(
-  function() return GameCycle > 100 and GetUnitVariable(shared_mine, "ResourcesHeld") <= 0 end,
+  function()
+    local resources = GetUnitVariable(shared_mine, "ResourcesHeld")
+    return GameCycle > 100 and (resources == nil or resources <= 0)
+  end,
   function()
     print("PYTEST_SYNC_STRESS_GOLD_EXHAUSTED")
     return true

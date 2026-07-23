@@ -159,6 +159,13 @@ public final class WargusTabletopMaterialProvider {
                 return
             }
             ctx.interpolationQuality = .none
+            // Flood the entire atlas with a neutral fallback before drawing
+            // decoded tiles.  This prevents transparent holes for any slot
+            // whose graphicIndex is nil or whose image failed to decode —
+            // those slots show a neutral grey rather than a transparent cutout
+            // that would expose the RealityKit background.
+            ctx.setFillColor(CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1.0))
+            ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(atlasW), height: CGFloat(atlasH)))
             // Match the y-flip applied by decode() so atlas tiles are not
             // inverted relative to tiles decoded by the single-material path.
             ctx.translateBy(x: 0, y: CGFloat(atlasH))

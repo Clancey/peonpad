@@ -212,4 +212,117 @@ public enum TabletopTerrainChunkMeshBuilder {
             textureCoordinates: uvs,
             triangleIndices:    indices)
     }
+
+    /// Builds a terrain-chunk mesh with per-tile relief: each tile's top quad
+    /// is raised/recessed to its `height`, and a vertical "skirt" quad is
+    /// emitted on any edge where the neighbouring tile is lower (or the map
+    /// ends) so the elevation change shows a real, shaded edge instead of a
+    /// seam.  This keeps the chunked, bounded-entity architecture (still one
+    /// mesh per chunk) while giving the board visible 2.5D relief.
+    ///
+    /// - Parameters:
+    ///   - tiles:      (tileX, tileZ, graphicIndex?, height) for each chunk tile.
+    ///   - fit:        Board-space tile sizing and centering.
+    ///   - slotMap:    Atlas layout — maps each graphicIndex to a UV column.
+    ///   - heightAt:   Height of an arbitrary map tile (nil ⇒ outside the map).
+    ///                 Used to decide where cliffs/skirts are needed.
+    ///   - edgeFloorY: Skirt bottom used at the map boundary (typically the
+    ///                 substrate top), so border tiles drop cleanly to the slab.
+    public static func buildRelief(
+        tiles:      [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)],
+        fit:        TabletopMapFit,
+        slotMap:    TabletopAtlasSlotMap,
+        heightAt:   (Int, Int) -> Float?,
+        edgeFloorY: Float
+    ) -> TabletopTerrainChunkGeometry {
+        var positions: [SIMD3<Float>] = []
+        var normals:   [SIMD3<Float>] = []
+        var uvs:       [SIMD2<Float>] = []
+        var indices:   [UInt32]       = []
+
+        let halfTile = fit.tileSize / 2
+        let N        = Float(slotMap.slotCount)
+        let up       = SIMD3<Float>(0, 1, 0)
+        let eps: Float = 1e-5
+
+        // Appends one quad from four corners with an explicit outward normal.
+        // The triangle winding is auto-corrected so the geometric normal always
+        // agrees with `normal` (front-facing under back-face culling).
+        func addQuad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>,
+                     _ p2: SIMD3<Float>, _ p3: SIMD3<Float>,
+                     normal: SIMD3<Float>,
+                     _ uv0: SIMD2<Float>, _ uv1: SIMD2<Float>,
+                     _ uv2: SIMD2<Float>, _ uv3: SIMD2<Float>) {
+            let base = UInt32(positions.count)
+            let geo = crossProduct(p1 - p0, p2 - p0)
+            let flip = dot(geo, normal) < 0
+            if flip {
+                positions.append(contentsOf: [p0, p3, p2, p1])
+                uvs.append(contentsOf: [uv0, uv3, uv2, uv1])
+            } else {
+                positions.append(contentsOf: [p0, p1, p2, p3])
+                uvs.append(contentsOf: [uv0, uv1, uv2, uv3])
+            }
+            normals.append(contentsOf: [normal, normal, normal, normal])
+            indices.append(contentsOf: [base, base + 1, base + 2,
+                                        base, base + 2, base + 3])
+        }
+
+        for tile in tiles {
+            let center = fit.tileCenter(tileX: tile.tileX, tileZ: tile.tileZ)
+            let cx = center.x, cz = center.z
+            let h  = tile.height
+            let s  = Float(slotMap.slot(for: tile.graphicIndex))
+            let u0 = s / N, u1 = (s + 1) / N
+
+            // Top quad (raised/recessed to the tile height).
+            let nw = SIMD3<Float>(cx - halfTile, h, cz - halfTile)
+            let ne = SIMD3<Float>(cx + halfTile, h, cz - halfTile)
+            let se = SIMD3<Float>(cx + halfTile, h, cz + halfTile)
+            let sw = SIMD3<Float>(cx - halfTile, h, cz + halfTile)
+            addQuad(nw, ne, se, sw, normal: up,
+                    SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0),
+                    SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
+
+            // Side skirts wherever this tile stands above its neighbour (or the
+            // map edge). The higher tile owns the cliff; equal-height neighbours
+            // produce no skirt.
+            func skirt(neighborX: Int, neighborZ: Int,
+                       topA: SIMD3<Float>, topB: SIMD3<Float>,
+                       outward: SIMD3<Float>) {
+                let nh = heightAt(neighborX, neighborZ) ?? edgeFloorY
+                guard nh < h - eps else { return }
+                let botA = SIMD3<Float>(topA.x, nh, topA.z)
+                let botB = SIMD3<Float>(topB.x, nh, topB.z)
+                addQuad(topA, topB, botB, botA, normal: outward,
+                        SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0),
+                        SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
+            }
+            skirt(neighborX: tile.tileX, neighborZ: tile.tileZ - 1,
+                  topA: nw, topB: ne, outward: SIMD3<Float>(0, 0, -1)) // North
+            skirt(neighborX: tile.tileX + 1, neighborZ: tile.tileZ,
+                  topA: ne, topB: se, outward: SIMD3<Float>(1, 0, 0))  // East
+            skirt(neighborX: tile.tileX, neighborZ: tile.tileZ + 1,
+                  topA: se, topB: sw, outward: SIMD3<Float>(0, 0, 1))  // South
+            skirt(neighborX: tile.tileX - 1, neighborZ: tile.tileZ,
+                  topA: sw, topB: nw, outward: SIMD3<Float>(-1, 0, 0)) // West
+        }
+
+        return TabletopTerrainChunkGeometry(
+            positions:          positions,
+            normals:            normals,
+            textureCoordinates: uvs,
+            triangleIndices:    indices)
+    }
+
+    /// Framework-free 3-vector cross product (avoids importing `simd`).
+    static func crossProduct(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(a.y * b.z - a.z * b.y,
+                     a.z * b.x - a.x * b.z,
+                     a.x * b.y - a.y * b.x)
+    }
+
+    static func dot(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float {
+        a.x * b.x + a.y * b.y + a.z * b.z
+    }
 }

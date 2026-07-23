@@ -23,26 +23,29 @@ import simd
 /// planes are the classic source of depth-buffer flicker ("z-fighting"), which
 /// is exactly what the old fog-at-0.005-above-terrain-at-0 layout produced.
 ///
-/// Ordering (low → high):  substrate bottom < substrate top < terrain < fog.
+/// Terrain is no longer a single flat plane: tiles are raised/recessed by
+/// class (see `TabletopTerrainRelief`), so `terrainSurfaceY` is the *ground
+/// baseline* and the substrate sits below the lowest (water) terrain.
 public enum TabletopBoardElevation {
 
-    /// Terrain surface plane.  Unit billboards' feet rest here.
+    /// Ground-terrain baseline plane. Raised/recessed terrain is measured
+    /// relative to this (see TabletopTerrainRelief). Unit feet rest on the
+    /// terrain height of their tile.
     public static let terrainSurfaceY: Float = 0.0
 
-    /// Top face of the board substrate/frame slab.  Sits just *below* the
-    /// terrain so the terrain reads as the tabletop surface resting on a solid
-    /// slab, and the two planes are never coplanar.
-    public static let substrateTopY: Float = -0.004
+    /// Top face of the board substrate/frame slab. Sits below the *lowest*
+    /// terrain (recessed water) so terrain always rests on a solid slab and the
+    /// two are never coplanar.
+    public static let substrateTopY: Float = -0.016
 
-    /// Bottom face of the substrate slab.  The gap to `substrateTopY` gives the
-    /// board a visible ~4.6 cm thickness so it reads as a physical 2.5D board
-    /// rather than a flat decal.
-    public static let substrateBottomY: Float = -0.05
+    /// Bottom face of the substrate slab. The gap to `substrateTopY` gives the
+    /// board a visible ~4.4 cm thickness so it reads as a physical 2.5D board.
+    public static let substrateBottomY: Float = -0.06
 
-    /// Fog-of-war / effects elevation.  Clearly above the terrain so the fog
-    /// veil and the terrain surface are never coplanar (the previous 5 mm gap
-    /// combined a transparent overlay with the opaque terrain plane).
-    public static let fogY: Float = 0.008
+    /// Vertical gap the fog veil floats above each tile's terrain height, so
+    /// the fog follows the relief without ever being coplanar with (or clipping
+    /// through) the terrain surface below it.
+    public static let fogGap: Float = 0.006
 
     /// Meters the substrate frame extends beyond the terrain area on every
     /// side, so the slab reads as a framed board with a visible rim.
@@ -51,10 +54,55 @@ public enum TabletopBoardElevation {
     /// Solid thickness of the substrate slab (always > 0).
     public static var substrateThickness: Float { substrateTopY - substrateBottomY }
 
-    /// The distinct layer elevations, low → high.  Exposed so tests can assert
-    /// strict separation (no coplanar layers).
+    /// Representative distinct elevations, low → high, used by tests to assert
+    /// strict separation (no coplanar layers): substrate bottom/top, lowest
+    /// terrain (water), ground baseline, and the fog above the ground baseline.
     public static var orderedElevations: [Float] {
-        [substrateBottomY, substrateTopY, terrainSurfaceY, fogY]
+        [substrateBottomY,
+         substrateTopY,
+         TabletopTerrainRelief.minHeight,
+         terrainSurfaceY,
+         terrainSurfaceY + fogGap]
+    }
+}
+
+// MARK: - Terrain relief (per-class elevation)
+
+/// Maps each terrain class to a board-local height so the terrain surface has
+/// visible, edged relief instead of reading as a flat decal: water is recessed
+/// into the board, ground is the baseline, and forest/rock rise above it.
+/// Framework-free and host-testable.
+public enum TabletopTerrainRelief {
+
+    /// Height in discrete steps relative to the ground baseline (0).
+    /// Negative = recessed, positive = raised.
+    public static func level(_ kind: TabletopTerrainKind) -> Int {
+        switch kind {
+        case .water:  return -1   // recessed basin
+        case .dirt:   return  0   // ground baseline
+        case .grass:  return  0   // ground baseline
+        case .forest: return  1   // raised
+        case .rock:   return  2   // highest
+        }
+    }
+
+    /// Board-local meters per relief step. Deliberately exaggerated relative to
+    /// the (small) per-tile size so the elevation difference reads at a glance.
+    public static let stepMeters: Float = 0.010
+
+    /// Board-local Y (meters) of a terrain class's top surface.
+    public static func height(_ kind: TabletopTerrainKind) -> Float {
+        Float(level(kind)) * stepMeters
+    }
+
+    /// Lowest terrain height across all classes (water).
+    public static var minHeight: Float {
+        TabletopTerrainKind.allCases.map { height($0) }.min() ?? 0
+    }
+
+    /// Highest terrain height across all classes (rock).
+    public static var maxHeight: Float {
+        TabletopTerrainKind.allCases.map { height($0) }.max() ?? 0
     }
 }
 
@@ -209,5 +257,37 @@ public struct TabletopBoardReadiness: Equatable {
 public enum TabletopAtlasCompletionGate {
     public static func accepts(requestGeneration: Int, currentGeneration: Int) -> Bool {
         requestGeneration == currentGeneration
+    }
+}
+
+// MARK: - Initial board placement
+
+/// The board's default placement in the immersive space. Framework-free so the
+/// "reads as an oblique tabletop, not a face-on rectangle" intent is testable:
+/// the board is at table height, clearly below the viewer's eye level and close
+/// in front, so the viewer looks *down* at it and the relief/thickness read as
+/// 3D immediately.
+public enum TabletopInitialPlacement {
+    /// Board-centre height (meters, immersive-space Y). A seated/standing
+    /// viewer's head is ~1.1–1.5 m; this is well below that.
+    public static let height: Double = 0.68
+    /// Distance in front of the viewer (meters, −Z is forward).
+    public static let distance: Double = 0.82
+    /// Assumed viewer eye height, used only to assert the board sits below it.
+    public static let assumedViewerEyeHeight: Double = 1.30
+
+    public static var transform: TabletopBoardTransform {
+        TabletopBoardTransform(
+            position: TabletopPoint3D(x: 0, y: height, z: -distance),
+            yawRadians: 0,
+            scale: 1)
+    }
+
+    /// The downward pitch (radians, >0 = looking down) from the assumed viewer
+    /// eye position to the board centre. A meaningfully positive value means an
+    /// oblique tabletop view rather than an edge-on/face-on one.
+    public static var viewerLookDownPitch: Double {
+        let dy = assumedViewerEyeHeight - height   // eye is above the board
+        return atan2(dy, distance)
     }
 }

@@ -107,7 +107,7 @@ public final class WargusTabletopMaterialProvider {
     public func buildTerrainAtlas(
         slotMap:  TabletopAtlasSlotMap,
         tileset:  TabletopTilesetInfo?,
-        completion: @escaping (UnlitMaterial?) -> Void
+        completion: @escaping (PhysicallyBasedMaterial?) -> Void
     ) {
         let root     = dataRoot
         let resolver = self.resolver
@@ -182,7 +182,7 @@ public final class WargusTabletopMaterialProvider {
 
             Task { @MainActor [weak self] in
                 guard let self else { completion(nil); return }
-                completion(self.makeMaterial(cgImage: atlasImage))
+                completion(self.makeLitTerrainMaterial(cgImage: atlasImage))
             }
         }
     }
@@ -233,6 +233,22 @@ public final class WargusTabletopMaterialProvider {
         // Sprites and cut-out tiles carry alpha; blend so transparency shows.
         material.blending = .transparent(opacity: .init(floatLiteral: 1.0))
         material.opacityThreshold = 0.5
+        return material
+    }
+
+    /// Main-actor lit terrain-atlas material. Terrain is opaque (gray-filled
+    /// atlas slots), so a `PhysicallyBasedMaterial` lets the relief cliffs and
+    /// slopes shade under the scene light — the depth cue that an unlit terrain
+    /// surface cannot provide.
+    private func makeLitTerrainMaterial(cgImage: CGImage) -> PhysicallyBasedMaterial? {
+        guard let texture = try? TextureResource(
+            image: cgImage,
+            options: TextureResource.CreateOptions(semantic: .color)
+        ) else { return nil }
+        var material = PhysicallyBasedMaterial()
+        material.baseColor = .init(tint: .white, texture: .init(texture))
+        material.roughness = 1.0
+        material.metallic  = 0.0
         return material
     }
 

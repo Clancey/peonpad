@@ -103,6 +103,9 @@ public final class TabletopChunkBoard {
     private var fogMap:  TabletopFogMap?
     private var mapFit:  TabletopMapFit?
     private var snapshot: TabletopGameplaySnapshot?
+    /// Board-local Y of each map tile's top surface (terrain relief), keyed by
+    /// tileKey. Unit anchoring and the relief-following fog mesh read this.
+    private var heightByKey: [Int: Float] = [:]
 
     // MARK: Readiness
 
@@ -127,6 +130,14 @@ public final class TabletopChunkBoard {
 
     public init(chunkTiles: Int = TabletopChunkLayout.defaultChunkTiles) {
         self.chunkTiles = chunkTiles
+    }
+
+    /// Board-local Y of the top surface of tile (tileX, tileZ), from terrain
+    /// relief. Falls back to the ground baseline for unknown tiles. Read by the
+    /// board view to stand unit billboards on the correct terrain height.
+    public func terrainHeight(tileX: Int, tileZ: Int) -> Float {
+        heightByKey[TabletopChunkLayout.tileKey(tileX, tileZ)]
+            ?? TabletopBoardElevation.terrainSurfaceY
     }
 
     // MARK: - Build
@@ -160,6 +171,15 @@ public final class TabletopChunkBoard {
             })
 
         tabletopEngineLog("[Tabletop] build: terrainByKey indexed (\(terrainByKey.count) entries)")
+
+        // Per-tile relief heights drive the terrain geometry, unit anchoring
+        // and the relief-following fog mesh.
+        heightByKey = Self.computeHeights(terrainByKey: terrainByKey)
+
+        // A directional key light so the terrain relief cliffs and the substrate
+        // frame shade with clear light/dark contrast — the passthrough
+        // image-based light alone reads too flat for the elevation to register.
+        addBoardLight(to: boardRoot)
 
         // Build the thick substrate/frame slab first so it sits beneath the
         // terrain surface and gives the board visible 2.5D depth.
@@ -239,6 +259,13 @@ public final class TabletopChunkBoard {
             terrainByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)] = tile
         }
 
+        // Refresh relief heights for the changed tiles so the rebuilt chunk
+        // meshes (and adjacent skirts) use the new elevation.
+        for tile in changedTiles {
+            heightByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)] =
+                TabletopTerrainRelief.height(tile.kind)
+        }
+
         let mapW = current.mapSize.width
         let mapH = current.mapSize.height
 
@@ -308,7 +335,8 @@ public final class TabletopChunkBoard {
 
         let entity: ModelEntity
         if let mesh {
-            entity = ModelEntity(mesh: mesh, materials: [procMat ?? translucentUnlitMaterial(.gray)])
+            let material: Material = procMat ?? SimpleMaterial(color: .gray, roughness: 1, isMetallic: false)
+            entity = ModelEntity(mesh: mesh, materials: [material])
         } else {
             entity = ModelEntity()
         }
@@ -365,8 +393,19 @@ public final class TabletopChunkBoard {
             return (nil, slotMap, slotToKind)
         }
 
-        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building mesh geometry")
-        let geo  = TabletopTerrainChunkMeshBuilder.build(tiles: tiles, fit: fit, slotMap: slotMap)
+        // Relief tiles carry a per-tile height; skirts are emitted where a
+        // neighbour (looked up across the whole map) is lower, so elevation
+        // changes show real shaded edges.
+        let reliefTiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)] =
+            tiles.map { ($0.tileX, $0.tileZ, $0.graphicIndex,
+                         self.heightByKey[TabletopChunkLayout.tileKey($0.tileX, $0.tileZ)]
+                             ?? TabletopBoardElevation.terrainSurfaceY) }
+
+        tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building relief geometry")
+        let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+            tiles: reliefTiles, fit: fit, slotMap: slotMap,
+            heightAt: { [heightByKey] x, z in heightByKey[TabletopChunkLayout.tileKey(x, z)] },
+            edgeFloorY: TabletopBoardElevation.substrateTopY)
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): geo verts=\(geo.positions.count) tris=\(geo.triangleIndices.count/3)")
         let mesh = try? MeshResource.generate(from: [geo.meshDescriptor(
             name: "chunk.\(chunkX).\(chunkZ)")])
@@ -377,12 +416,13 @@ public final class TabletopChunkBoard {
     // MARK: - Private: procedural atlas material
 
     /// Builds a tiny N × 1-pixel texture (one colour per atlas slot) and wraps
-    /// it in an `UnlitMaterial`.  Used as an immediate procedural placeholder
-    /// while real tile art is decoded in the background.
+    /// it in a **lit** `PhysicallyBasedMaterial`.  Used as an immediate
+    /// procedural placeholder while real tile art is decoded in the background.
+    /// Lit (not unlit) so the relief cliffs already shade before real art lands.
     private func makeProceduralAtlasMaterial(
         slotMap:    TabletopAtlasSlotMap,
         slotToKind: [Int: TabletopTerrainKind]
-    ) -> UnlitMaterial? {
+    ) -> PhysicallyBasedMaterial? {
         let N = slotMap.slotCount
         var raw = [UInt8](repeating: 255, count: N * 4)
         for (slot, kind) in slotToKind {
@@ -410,8 +450,10 @@ public final class TabletopChunkBoard {
                   options: .init(semantic: .color))
         else { return nil }
 
-        var mat = UnlitMaterial()
-        mat.color = .init(tint: .white, texture: .init(texture))
+        var mat = PhysicallyBasedMaterial()
+        mat.baseColor = .init(tint: .white, texture: .init(texture))
+        mat.roughness = 1.0
+        mat.metallic  = 0.0
         return mat
     }
 
@@ -480,15 +522,16 @@ public final class TabletopChunkBoard {
         }
         fogMap = fog
 
-        // The fog plane covers the same XZ extent as the tile area so pixel
-        // centres align exactly with tile centres (see TabletopFogMap docs).
-        let planeW = Float(mapW) * fit.tileSize
-        let planeD = Float(mapH) * fit.tileSize
-        let mesh   = makeFogPlaneMesh(width: planeW, depth: planeD)
+        // The fog is a per-tile mesh that follows the terrain relief: each tile
+        // quad floats a fixed gap above that tile's own terrain height, so the
+        // veil hugs valleys and rises over highlands without ever being
+        // coplanar with (or clipping through) the terrain. Heights are baked in,
+        // so the entity stays at the board origin and only its texture updates.
+        let mesh   = makeFogReliefMesh(mapWidth: mapW, mapHeight: mapH, fit: fit)
         let mat    = makeFogMaterial(for: fog)
         let entity = ModelEntity(mesh: mesh, materials: [mat])
         entity.name     = "board.fog"
-        entity.position = [0, TabletopBoardElevation.fogY, 0]   // elevated, non-coplanar with terrain
+        entity.position = [0, 0, 0]
         boardRoot.addChild(entity)
         fogEntity = entity
     }
@@ -515,35 +558,81 @@ public final class TabletopChunkBoard {
         return translucentUnlitMaterial(UIColor(white: 0.06, alpha: 0.88))
     }
 
-    /// Custom 4-vertex plane mesh with UV(0,0) at the (−X,−Z) corner so pixel
-    /// (tileX, tileZ) in the fog texture maps to the correct board tile.
-    private func makeFogPlaneMesh(width: Float, depth: Float) -> MeshResource {
-        var desc = MeshDescriptor(name: "fogPlane")
-        let hw = width / 2, hd = depth / 2
-        // Vertices: (−X,−Z), (+X,−Z), (+X,+Z), (−X,+Z)
-        // UV: (0,0),         (1,0),    (1,1),    (0,1)
-        // UV v=0 → z=−hd → tileZ=0 (north/UV-top edge)
-        desc.positions = MeshBuffer([
-            SIMD3<Float>(-hw, 0, -hd),
-            SIMD3<Float>( hw, 0, -hd),
-            SIMD3<Float>( hw, 0,  hd),
-            SIMD3<Float>(-hw, 0,  hd),
-        ])
-        desc.normals = MeshBuffer([
-            SIMD3<Float>(0,1,0), SIMD3<Float>(0,1,0),
-            SIMD3<Float>(0,1,0), SIMD3<Float>(0,1,0),
-        ])
-        desc.textureCoordinates = MeshBuffer([
-            SIMD2<Float>(0,0), SIMD2<Float>(1,0),
-            SIMD2<Float>(1,1), SIMD2<Float>(0,1),
-        ])
-        desc.primitives = .triangles([
-            // Same CCW-from-above winding as terrain chunks:
-            // cross((SE−NW),(NE−SE)) = +Y ✓
-            0, 2, 1,   // NW→SE→NE
-            0, 3, 2,   // NW→SW→SE
-        ])
+    /// Builds the relief-following fog mesh: one quad per map tile, positioned a
+    /// fixed gap above that tile's terrain height, with the four corners sampling
+    /// the tile's own texel in the fog texture (UV = tile-centre).  Baking the
+    /// heights in keeps the fog a single entity whose texture (not geometry)
+    /// updates as fog-of-war changes.
+    private func makeFogReliefMesh(mapWidth: Int, mapHeight: Int, fit: TabletopMapFit) -> MeshResource {
+        var positions: [SIMD3<Float>] = []
+        var normals:   [SIMD3<Float>] = []
+        var uvs:       [SIMD2<Float>] = []
+        var indices:   [UInt32]       = []
+        let ht  = fit.tileSize / 2
+        let up  = SIMD3<Float>(0, 1, 0)
+        let gap = TabletopBoardElevation.fogGap
+        positions.reserveCapacity(mapWidth * mapHeight * 4)
+
+        for tz in 0..<mapHeight {
+            for tx in 0..<mapWidth {
+                let c = fit.tileCenter(tileX: tx, tileZ: tz)
+                let y = (heightByKey[TabletopChunkLayout.tileKey(tx, tz)]
+                         ?? TabletopBoardElevation.terrainSurfaceY) + gap
+                let base = UInt32(positions.count)
+                positions.append(SIMD3<Float>(c.x - ht, y, c.z - ht)) // NW
+                positions.append(SIMD3<Float>(c.x + ht, y, c.z - ht)) // NE
+                positions.append(SIMD3<Float>(c.x + ht, y, c.z + ht)) // SE
+                positions.append(SIMD3<Float>(c.x - ht, y, c.z + ht)) // SW
+                normals.append(contentsOf: [up, up, up, up])
+                // All four corners sample this tile's own texel centre.
+                let u = (Float(tx) + 0.5) / Float(mapWidth)
+                let v = (Float(tz) + 0.5) / Float(mapHeight)
+                let uv = SIMD2<Float>(u, v)
+                uvs.append(contentsOf: [uv, uv, uv, uv])
+                // Same CCW-from-above winding as the terrain tops.
+                indices.append(contentsOf: [base, base + 2, base + 1,
+                                            base, base + 3, base + 2])
+            }
+        }
+
+        var desc = MeshDescriptor(name: "fogRelief")
+        desc.positions          = MeshBuffer(positions)
+        desc.normals            = MeshBuffer(normals)
+        desc.textureCoordinates = MeshBuffer(uvs)
+        desc.primitives         = .triangles(indices)
         return (try? MeshResource.generate(from: [desc]))
-            ?? .generatePlane(width: width, depth: depth)
+            ?? .generatePlane(width: Float(mapWidth) * fit.tileSize,
+                              depth: Float(mapHeight) * fit.tileSize)
+    }
+
+    // MARK: - Private: relief heights + lighting
+
+    /// Maps each terrain tile to its relief height (framework-free math).
+    private static func computeHeights(
+        terrainByKey: [Int: TabletopTerrainTile]
+    ) -> [Int: Float] {
+        var heights: [Int: Float] = [:]
+        heights.reserveCapacity(terrainByKey.count)
+        for (key, tile) in terrainByKey {
+            heights[key] = TabletopTerrainRelief.height(tile.kind)
+        }
+        return heights
+    }
+
+    /// Adds a single angled directional key light (with a soft shadow) to the
+    /// board root so terrain relief cliffs and the substrate frame read with
+    /// clear light/dark contrast and units cast contact shadows onto terrain.
+    private func addBoardLight(to boardRoot: Entity) {
+        let light = DirectionalLight()
+        light.name = "board.keyLight"
+        light.light.intensity = 2_600
+        light.shadow = DirectionalLightComponent.Shadow(
+            maximumDistance: 2.0, depthBias: 2.0)
+        // Angle down and across the board so cliffs facing the light are bright
+        // and their shadowed sides are dark — the elevation depth cue.
+        light.orientation =
+            simd_quatf(angle: -.pi / 3, axis: [1, 0, 0]) *
+            simd_quatf(angle:  .pi / 5, axis: [0, 1, 0])
+        boardRoot.addChild(light)
     }
 }

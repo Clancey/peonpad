@@ -34,6 +34,8 @@ mkdir -p "${TEST_BINARY:h}"
 
 swiftc \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopMapFit.swift" \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopGestureState.swift" \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopGameplayState.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopBoardLayers.swift" \
   "$ROOT_DIR/tests/tabletop_layers_test.swift" \
   -o "$TEST_BINARY"

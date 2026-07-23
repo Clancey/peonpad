@@ -16,15 +16,14 @@ import Spatial
 import UIKit
 
 /// Where the board first appears, and how far in front of the viewer
-/// "Recenter" places it again.
+/// "Recenter" places it again. The board is placed at table height (well below
+/// eye level) and close in front, so a standing/seated viewer looks *down* at
+/// it at an oblique angle — the relief and the board's thickness read as 3D
+/// immediately, instead of the near edge-on view a chest-height board gave.
 private enum TabletopPlacement {
-    static let initialTransform = TabletopBoardTransform(
-        position: TabletopPoint3D(x: 0, y: 1.1, z: -1.15),
-        yawRadians: 0,
-        scale: 1
-    )
-    static let recenterDistance: Double = 1.15
-    static let recenterHeight: Double = 1.1
+    static let initialTransform = TabletopInitialPlacement.transform
+    static let recenterDistance: Double = TabletopInitialPlacement.distance
+    static let recenterHeight: Double = TabletopInitialPlacement.height
 }
 
 struct TabletopBoardView: View {
@@ -268,6 +267,7 @@ struct TabletopBoardView: View {
             let live = TabletopBoardBuilder.addUnit(
                 unit, to: boardRoot, snapshot: next, fit: fit,
                 materialProvider: materialProvider)
+            live.root.position = unitPosition(fit: fit, tileX: unit.tileX, tileZ: unit.tileZ)
             liveUnitsByID[unit.id] = live
         }
 
@@ -277,9 +277,7 @@ struct TabletopBoardView: View {
                   let unit = next.units.first(where: { $0.id == unitDiff.id }) else { continue }
 
             if unitDiff.positionChanged {
-                live.root.position = TabletopBoardMetrics.tileCenter(
-                    fit, tileX: unit.tileX, tileZ: unit.tileZ
-                )
+                live.root.position = unitPosition(fit: fit, tileX: unit.tileX, tileZ: unit.tileZ)
             }
             if unitDiff.facingChanged {
                 live.currentFacingRadians = unit.facingRadians
@@ -477,6 +475,16 @@ struct TabletopBoardView: View {
         )
         manipulator = TabletopBoardManipulator(initial: newTransform)
         applyTransform(newTransform, to: boardRoot)
+    }
+
+    /// Board-local position of a unit standing on tile (tileX, tileZ), with its
+    /// feet at that tile's terrain relief height so units sit *on* the terrain
+    /// surface rather than sinking into valleys or floating over highlands.
+    private func unitPosition(fit: TabletopMapFit, tileX: Int, tileZ: Int) -> SIMD3<Float> {
+        var p = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+        p.y = chunkBoard?.terrainHeight(tileX: tileX, tileZ: tileZ)
+            ?? TabletopBoardElevation.terrainSurfaceY
+        return p
     }
 
     private func applyTransform(_ transform: TabletopBoardTransform, to entity: Entity) {

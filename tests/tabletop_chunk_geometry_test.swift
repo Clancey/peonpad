@@ -419,6 +419,84 @@ func testEntityCountReduction() {
     expectEq(cx * cz + 1, 17, "total terrain+fog entities = 17 for 128×128 map")
 }
 
+// MARK: - Relief mesh (2.5D terrain)
+
+private func geoNormal(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>) -> SIMD3<Float> {
+    let a = p1 - p0, b = p2 - p0
+    return SIMD3<Float>(a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x)
+}
+private func dot3(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float { a.x*b.x + a.y*b.y + a.z*b.z }
+
+private let reliefFit = TabletopMapFit(width: 8, height: 8, boardExtent: 0.8)
+
+func testReliefTopAtTileHeight() {
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.01))]
+    let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    // Every neighbour equal height ⇒ no skirts, only the raised top quad.
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { _, _ in 0.01 }, edgeFloorY: 0.01)
+    expectEq(geo.positions.count, 4, "equal-height tile emits only a top quad")
+    expect(geo.positions.allSatisfy { abs($0.y - 0.01) < 1e-6 }, "top quad sits at the tile height")
+    expect(geo.normals.allSatisfy { $0.y > 0.9 }, "top quad faces up")
+}
+
+func testReliefSkirtWhenNeighborLower() {
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.02))]
+    let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    // Only the east neighbour is lower; the other three are equal height.
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { x, z in (x == 5 && z == 4) ? 0.0 : 0.02 }, edgeFloorY: 0.02)
+    expectEq(geo.positions.count, 8, "one lower neighbour ⇒ top quad + one skirt")
+    // The skirt drops from 0.02 to 0.0 and faces +X (east).
+    expect(geo.normals.contains { $0.x > 0.9 }, "east skirt faces +X")
+    expect(geo.positions.contains { abs($0.y - 0.0) < 1e-6 }, "skirt reaches the lower neighbour height")
+}
+
+func testReliefSkirtsAllFrontFacing() {
+    // A lone raised tile with all neighbours off-map: 4 skirts down to the floor.
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(2), height: Float(0.015))]
+    let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { _, _ in nil }, edgeFloorY: -0.02)
+    expectEq(geo.positions.count, 20, "raised edge tile ⇒ top quad + 4 skirts (20 verts)")
+    // Every triangle's geometric normal must agree with its stored vertex
+    // normal (front-facing under back-face culling).
+    let idx = geo.triangleIndices
+    var frontFacing = true
+    var t = 0
+    while t < idx.count {
+        let i0 = Int(idx[t]), i1 = Int(idx[t+1]), i2 = Int(idx[t+2])
+        let gn = geoNormal(geo.positions[i0], geo.positions[i1], geo.positions[i2])
+        if dot3(gn, geo.normals[i0]) <= 0 { frontFacing = false }
+        t += 3
+    }
+    expect(frontFacing, "all relief triangles are front-facing (winding matches normal)")
+    // Skirts span from the top height down to the edge floor.
+    expect(geo.positions.contains { abs($0.y - 0.015) < 1e-6 }, "skirt tops at tile height")
+    expect(geo.positions.contains { abs($0.y - (-0.02)) < 1e-6 }, "skirt bottoms at edge floor")
+}
+
+func testReliefBoundedForFlatGround() {
+    // A 3×3 all-equal-height patch: interior tile has no skirts; only boundary
+    // tiles skirt to the floor. Vertex count stays bounded (no per-tile blowup).
+    var tiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)] = []
+    for z in 0..<3 { for x in 0..<3 { tiles.append((x, z, 1, 0.0)) } }
+    let slot = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    let inside: Set<Int> = [0,1,2,3,4,5,6,7,8]
+    _ = inside
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { x, z in (x >= 0 && x < 3 && z >= 0 && z < 3) ? 0.0 : nil },
+        edgeFloorY: -0.02)
+    // 9 top quads (36 verts) + skirts only on the 8 outer-edge boundaries.
+    // Center tile (1,1) contributes no skirt.
+    expect(geo.positions.count >= 36, "at least one top quad per tile")
+    expect(geo.positions.count < 9 * 20, "far fewer than every-tile-4-skirts (bounded)")
+}
+
 // MARK: - Run all tests
 
 @main
@@ -448,6 +526,11 @@ struct TabletopChunkGeometryTests {
 
         testEntityCountReduction()
         testAcceptanceHoldSleepDurationIsFinite()
+
+        testReliefTopAtTileHeight()
+        testReliefSkirtWhenNeighborLower()
+        testReliefSkirtsAllFrontFacing()
+        testReliefBoundedForFlatGround()
 
         // MARK: - Summary
 

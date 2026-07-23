@@ -48,7 +48,7 @@ func expectClose(_ a: Float, _ b: Float, _ eps: Float, _ message: String,
 
 func testElevationOrderingStrictlyIncreasing() {
     let e = TabletopBoardElevation.orderedElevations
-    expectEq(e.count, 4, "four distinct layers")
+    expectEq(e.count, 5, "five distinct layer reference elevations")
     for i in 1..<e.count {
         expect(e[i] > e[i - 1],
                "layer \(i) elevation \(e[i]) must be strictly above \(e[i-1]) (no coplanar)")
@@ -56,10 +56,11 @@ func testElevationOrderingStrictlyIncreasing() {
 }
 
 func testTerrainAndFogNotCoplanar() {
-    expect(TabletopBoardElevation.fogY > TabletopBoardElevation.terrainSurfaceY,
+    let fogAboveGround = TabletopBoardElevation.terrainSurfaceY + TabletopBoardElevation.fogGap
+    expect(fogAboveGround > TabletopBoardElevation.terrainSurfaceY,
            "fog must be elevated above terrain")
-    expect(TabletopBoardElevation.fogY != TabletopBoardElevation.terrainSurfaceY,
-           "fog and terrain must not be coplanar")
+    expect(TabletopBoardElevation.fogGap > 0,
+           "fog gap must be positive so fog and terrain are never coplanar")
 }
 
 func testSubstrateBelowTerrain() {
@@ -70,6 +71,40 @@ func testSubstrateBelowTerrain() {
     // A board that reads as 2.5D needs meaningful thickness (> 1 cm).
     expect(TabletopBoardElevation.substrateThickness > 0.01,
            "substrate thickness \(TabletopBoardElevation.substrateThickness) should be visibly thick")
+    // The slab must sit below even the lowest (recessed water) terrain.
+    expect(TabletopBoardElevation.substrateTopY < TabletopTerrainRelief.minHeight,
+           "substrate top must be below the lowest terrain (recessed water)")
+}
+
+// MARK: - Terrain relief (per-class height)
+
+func testTerrainReliefOrdering() {
+    // Water recessed, ground baseline, forest raised, rock highest.
+    expect(TabletopTerrainRelief.height(.water) < 0, "water is recessed")
+    expectEq(TabletopTerrainRelief.height(.grass), 0, "grass is the ground baseline")
+    expectEq(TabletopTerrainRelief.height(.dirt), 0, "dirt is the ground baseline")
+    expect(TabletopTerrainRelief.height(.forest) > TabletopTerrainRelief.height(.grass),
+           "forest rises above ground")
+    expect(TabletopTerrainRelief.height(.rock) > TabletopTerrainRelief.height(.forest),
+           "rock is higher than forest")
+}
+
+func testTerrainReliefHasVisibleSpread() {
+    // The relief must be large enough (> 1 cm total) to read as depth.
+    let spread = TabletopTerrainRelief.maxHeight - TabletopTerrainRelief.minHeight
+    expect(spread > 0.01, "relief spread \(spread) must be visibly large")
+    expectEq(TabletopTerrainRelief.minHeight, TabletopTerrainRelief.height(.water), "min = water")
+    expectEq(TabletopTerrainRelief.maxHeight, TabletopTerrainRelief.height(.rock), "max = rock")
+}
+
+func testFogFollowsAboveEveryTerrainHeight() {
+    // Fog floats a fixed gap above each tile's own terrain height, so it is
+    // above the tallest terrain and never coplanar with any of it.
+    for kind in TabletopTerrainKind.allCases {
+        let terrainH = TabletopTerrainRelief.height(kind)
+        let fogH = terrainH + TabletopBoardElevation.fogGap
+        expect(fogH > terrainH, "fog above \(kind) terrain")
+    }
 }
 
 // MARK: - Substrate footprint
@@ -172,6 +207,24 @@ func testAtlasCompletionGate() {
            "mismatched generation rejected")
 }
 
+// MARK: - Initial oblique placement
+
+func testInitialPlacementIsBelowEyeLevel() {
+    let t = TabletopInitialPlacement.transform
+    expect(t.position.y < TabletopInitialPlacement.assumedViewerEyeHeight,
+           "board sits below the viewer's eye level (looked down at)")
+    expect(t.position.z < 0, "board is placed in front of the viewer (−Z)")
+}
+
+func testInitialPlacementIsObliqueNotFaceOn() {
+    // A face-on/edge-on board would give a near-zero look-down pitch; an
+    // oblique tabletop needs a clearly positive downward angle.
+    let pitch = TabletopInitialPlacement.viewerLookDownPitch
+    expect(pitch > 0.5, "viewer looks down at the board at an oblique angle (pitch \(pitch) rad)")
+    // Not straight down either (that would hide relief); comfortably < 90°.
+    expect(pitch < 1.4, "board is not viewed straight down")
+}
+
 // MARK: - Run all tests
 
 @main
@@ -180,6 +233,10 @@ struct TabletopLayersTests {
         testElevationOrderingStrictlyIncreasing()
         testTerrainAndFogNotCoplanar()
         testSubstrateBelowTerrain()
+
+        testTerrainReliefOrdering()
+        testTerrainReliefHasVisibleSpread()
+        testFogFollowsAboveEveryTerrainHeight()
 
         testTerrainExtent()
         testSubstrateExtentAddsFrameBorder()
@@ -193,6 +250,9 @@ struct TabletopLayersTests {
         testReadinessFraction()
 
         testAtlasCompletionGate()
+
+        testInitialPlacementIsBelowEyeLevel()
+        testInitialPlacementIsObliqueNotFaceOn()
 
         print("[\(failedChecks == 0 ? "PASS" : "FAIL")] "
             + "\(totalChecks - failedChecks)/\(totalChecks) checks passed "

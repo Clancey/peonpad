@@ -95,6 +95,8 @@ final class TabletopLiveUnit {
     let root: Entity
     let quad: ModelEntity
     let body: ModelEntity
+    /// Bright disc shown on the terrain under a selected unit.
+    let selectionRing: ModelEntity
     let baseMaterial: UnlitMaterial
     let mirroredMaterial: UnlitMaterial
 
@@ -129,9 +131,9 @@ final class TabletopLiveUnit {
         self.currentOwnerTint = spec.tint
 
         // Scale unit body/quad with the fitted tile size so units stay
-        // proportional as the map grows and tiles shrink, with a floor so tiny
-        // maps never produce invisible units.
-        let scale = max(fit.tileSize / TabletopBoardMetrics.referenceTileSize, 0.2)
+        // proportional as the map grows and tiles shrink, with a floor so units
+        // stay readable (not tiny) even on large maps.
+        let scale = max(fit.tileSize / TabletopBoardMetrics.referenceTileSize, 0.34)
         let unitHeight = TabletopBoardMetrics.unitHeight * scale
         let unitRadius = TabletopBoardMetrics.unitRadius * scale
 
@@ -167,9 +169,32 @@ final class TabletopLiveUnit {
         quad.position = [0, unitHeight / 2, 0]
         root.addChild(quad)
 
+        // Contact shadow: a soft dark disc on the terrain directly under the
+        // unit, so the upright billboard reads as standing *on* the board
+        // rather than floating.
+        let shadow = ModelEntity(
+            mesh: .generateCylinder(height: 0.0004, radius: unitRadius * 1.7),
+            materials: [translucentUnlitMaterial(UIColor(white: 0, alpha: 0.33))]
+        )
+        shadow.name = root.name + ".shadow"
+        shadow.position = [0, 0.0007, 0]
+        root.addChild(shadow)
+
+        // Selection ring: a bright disc just under the shadow, enabled only when
+        // the unit is selected, anchored at the unit's feet (terrain height).
+        let ring = ModelEntity(
+            mesh: .generateCylinder(height: 0.0003, radius: unitRadius * 2.4),
+            materials: [translucentUnlitMaterial(UIColor.systemYellow.withAlphaComponent(0.9))]
+        )
+        ring.name = root.name + ".selectionRing"
+        ring.position = [0, 0.0003, 0]
+        ring.isEnabled = false
+        root.addChild(ring)
+
         self.root = root
         self.quad = quad
         self.body = body
+        self.selectionRing = ring
         self.baseMaterial = translucentUnlitMaterial(spec.tint)
         self.mirroredMaterial = translucentUnlitMaterial(spec.tint.withAlphaComponent(0.85))
     }
@@ -181,6 +206,7 @@ final class TabletopLiveUnit {
     /// (re)decide the selection alpha itself.
     func setSelected(_ selected: Bool) {
         isSelected = selected
+        selectionRing.isEnabled = selected
         applyQuadMaterial()
         applyBodyMaterial()
     }

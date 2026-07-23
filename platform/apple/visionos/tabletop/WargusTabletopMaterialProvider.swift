@@ -87,6 +87,99 @@ public final class WargusTabletopMaterialProvider {
         cache.removeAll()
     }
 
+    // MARK: - Atlas material
+
+    /// Asynchronously builds a horizontal-strip atlas `UnlitMaterial` that packs
+    /// all terrain graphicIndices defined in `slotMap` into one texture.
+    ///
+    /// Each slot s (0-based) occupies u ∈ [s/N, (s+1)/N] so the same UV layout
+    /// used by `TabletopTerrainChunkMeshBuilder` applies to both the tiny
+    /// procedural-colour placeholder and this real-art atlas.
+    ///
+    /// Fires `completion` on the main actor with a non-nil material when at least
+    /// one slot decoded successfully; `nil` otherwise (caller keeps procedural).
+    ///
+    /// Atlas width is bounded by `maxAtlasPixelWidth` to stay within Metal's
+    /// maximum 2D texture limit (typically 16 384 px). When the computed width
+    /// would exceed this limit the atlas is not created and `nil` is returned.
+    public static nonisolated let maxAtlasPixelWidth = 8_192   // conservative; Metal allows 16384
+
+    public func buildTerrainAtlas(
+        slotMap:  TabletopAtlasSlotMap,
+        tileset:  TabletopTilesetInfo?,
+        completion: @escaping (UnlitMaterial?) -> Void
+    ) {
+        let root     = dataRoot
+        let resolver = self.resolver
+
+        decodeQueue.async { [weak self] in
+            // Decode each slot's tile image off the main actor.
+            var slotImages: [Int: CGImage] = [:]
+            for entry in slotMap.slotEntries {
+                guard let placement = resolver.terrainPlacement(
+                    graphicIndex: entry.graphicIndex, tileset: tileset) else { continue }
+                guard let img = WargusTabletopMaterialProvider.decode(
+                    root: root, placement: placement) else { continue }
+                slotImages[entry.slotIndex] = img
+            }
+
+            guard !slotImages.isEmpty else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+
+            // Determine atlas cell dimensions from the first decoded image.
+            guard let firstImg = slotImages.values.first else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+            let cellW   = firstImg.width
+            let cellH   = firstImg.height
+            let N       = slotMap.slotCount
+            let atlasW  = N * cellW
+            let atlasH  = cellH
+            // Guard against exceeding Metal's maximum texture dimension.
+            guard atlasW > 0, atlasH > 0,
+                  atlasW <= WargusTabletopMaterialProvider.maxAtlasPixelWidth else {
+                tabletopEngineLog(
+                    "[Tabletop] atlas skipped: \(N) slots × \(cellW)px = \(atlasW)px "
+                    + "(limit \(WargusTabletopMaterialProvider.maxAtlasPixelWidth)px)")
+                Task { @MainActor in completion(nil) }
+                return
+            }
+
+            // Pack all slot images into a single horizontal-strip atlas.
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+            guard let ctx = CGContext(
+                data: nil, width: atlasW, height: atlasH,
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: colorSpace, bitmapInfo: bitmapInfo) else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+            ctx.interpolationQuality = .none
+            // Match the y-flip applied by decode() so atlas tiles are not
+            // inverted relative to tiles decoded by the single-material path.
+            ctx.translateBy(x: 0, y: CGFloat(atlasH))
+            ctx.scaleBy(x: 1, y: -1)
+            for (slot, img) in slotImages {
+                let x = CGFloat(slot * cellW)
+                ctx.draw(img, in: CGRect(x: x, y: 0,
+                                        width: CGFloat(cellW), height: CGFloat(cellH)))
+            }
+            guard let atlasImage = ctx.makeImage() else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+
+            Task { @MainActor [weak self] in
+                guard let self else { completion(nil); return }
+                completion(self.makeMaterial(cgImage: atlasImage))
+            }
+        }
+    }
+
     // MARK: - Core resolve
 
     private func material(
@@ -141,7 +234,7 @@ public final class WargusTabletopMaterialProvider {
     /// Loads, crops, mirrors, and tints a placement into a CGImage entirely off
     /// the main actor. Returns `nil` on any failure (missing/corrupt file,
     /// out-of-bounds frame) so the caller keeps procedural content.
-    nonisolated private static func decode(
+    nonisolated static func decode(
         root: URL, placement: TabletopAssetPlacement
     ) -> CGImage? {
         guard let url = TabletopAssetPath.resolvedURL(

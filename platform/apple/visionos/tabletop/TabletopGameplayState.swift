@@ -140,7 +140,7 @@ public struct TabletopGameplaySelection: Codable, Equatable {
 
 /// The active map's tileset image descriptor, carried on the snapshot so the
 /// render layer can crop real tile art without parsing any tileset script.
-public struct TabletopTilesetInfo: Codable, Equatable {
+public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
     /// Tileset image path relative to the game-data root.
     public var imagePath: String
     public var pixelTileWidth: Int

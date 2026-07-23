@@ -96,6 +96,10 @@ struct TabletopBoardView: View {
         WargusTabletopMaterialProvider.make(
             dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath)
 
+    /// Chunked board entity manager: replaces the 32 768-entity per-tile
+    /// approach with 16 terrain-chunk entities + 1 fog entity for a 128×128 map.
+    @State private var chunkBoard: TabletopChunkBoard?
+
     // MARK: - Body
 
     var body: some View {
@@ -166,6 +170,17 @@ struct TabletopBoardView: View {
             guard let harnessTransport else { return }
             _ = TabletopCommandHarnessDriver.runIfEnabled(transport: harnessTransport)
         }
+        // Opt-in acceptance hold: keeps the app running until manually
+        // terminated so a human or automated checker can inspect the board.
+        // Set PEONPAD_TABLETOP_ACCEPTANCE_HOLD to any non-empty value.
+        // Default (unset): no hold — production timing is unchanged.
+        .task {
+            guard ProcessInfo.processInfo.environment["PEONPAD_TABLETOP_ACCEPTANCE_HOLD"] != nil
+            else { return }
+            tabletopEngineLog("[Tabletop] acceptance hold active "
+                + "(PEONPAD_TABLETOP_ACCEPTANCE_HOLD); app will not exit automatically")
+            try? await Task.sleep(for: .seconds(Double(Int.max)))
+        }
         // Diagnostic overlay: visible when no snapshot has been received
         // (live session with no transport bound).
         .overlay(alignment: .center) {
@@ -215,18 +230,20 @@ struct TabletopBoardView: View {
         }
 
         if previousSnapshot == nil {
-            tileEntities = TabletopBoardBuilder.addSurface(
-                to: boardRoot, snapshot: next, fit: fit, resolver: assetResolver,
-                materialProvider: materialProvider)
-            tabletopEngineLog("[Tabletop] board built from first snapshot: "
-                + "map=\(next.mapSize.width)x\(next.mapSize.height) "
-                + "tiles=\(tileEntities.count) units=\(next.units.count) "
-                + "assets=\(next.assets != nil ? "real" : "procedural")")
+            // First snapshot: build the chunked board surface.
+            let board = TabletopChunkBoard()
+            board.build(snapshot: next, fit: fit, to: boardRoot,
+                        materialProvider: materialProvider)
+            chunkBoard = board
+            // Keep tileEntities empty — the chunk board owns all terrain/fog entities.
+            tileEntities = [:]
         } else {
-            TabletopBoardBuilder.updateTerrainTiles(
-                diff.changedTerrainTiles, in: tileEntities,
-                tileset: next.assets?.tileset, materialProvider: materialProvider)
-            TabletopBoardBuilder.updateFogTiles(diff.changedFogTiles, in: tileEntities)
+            // Incremental terrain and fog updates on the chunk board.
+            chunkBoard?.updateTerrainTiles(
+                diff.changedTerrainTiles,
+                tileset: next.assets?.tileset,
+                materialProvider: materialProvider)
+            chunkBoard?.updateFogTiles(diff.changedFogTiles)
         }
 
         // -- Units added --
@@ -276,6 +293,7 @@ struct TabletopBoardView: View {
 
         previousSnapshot = next
         gameplaySnapshot = next
+        chunkBoard?.updateSnapshot(next)
     }
 
     // MARK: - Gesture bridging

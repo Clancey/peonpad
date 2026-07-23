@@ -128,6 +128,9 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/WargusTabletopMaterialProvider.swift"
   "$TABLETOP_SRC_DIR/EngineStartupPlan.swift"
   "$TABLETOP_SRC_DIR/EngineTabletopTransport.swift"
+  "$TABLETOP_SRC_DIR/TabletopChunkGeometry.swift"
+  "$TABLETOP_SRC_DIR/TabletopFogMap.swift"
+  "$TABLETOP_SRC_DIR/TabletopChunkBoard.swift"
 )
 for source in "${SOURCES[@]}"; do
   [[ -f "$source" ]] || {

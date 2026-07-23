@@ -274,6 +274,7 @@ cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 "$ROOT_DIR/scripts/test-visionos-tabletop-assets.sh" >/dev/null
 "$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" --help >/dev/null
 "$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-chunks.sh" >/dev/null
 if rg -Fq 'assert(' \
     "$ROOT_DIR/tests/tabletop_gameplay_state_test.swift"; then
   print -u2 "tabletop gameplay tests rely on Swift assert instead of" \

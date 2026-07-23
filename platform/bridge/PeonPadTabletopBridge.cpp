@@ -357,7 +357,20 @@ int peonpad_tabletop_publish_synthetic_v3(
         snap->tileset = *tileset;
     }
 
-    PublishSnap(snap);
+    // Re-check initialized under cmd_mutex and publish atomically.  Without
+    // this second check, a concurrent cleanup() could run between the first
+    // check (line ~304) and PublishSnap, setting latest = nullptr and
+    // releasing the bridge's reference — leaving the snapshot we're about to
+    // publish with a refcount of 1 that is never released (memory leak) and
+    // with latest != nullptr while initialized == false (broken invariant).
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        if (!g_bridge.initialized) {
+            delete snap;
+            return -1;
+        }
+        PublishSnap(snap);
+    }
     return 0;
 }
 

@@ -18,7 +18,9 @@
 
 #include "PeonPadTabletopBridge.h"
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -743,7 +745,40 @@ static bool test_concurrent_latest_snapshot()
     return true;
 }
 
-// ── main ──────────────────────────────────────────────────────────────────
+// ── Concurrency: publish_synthetic_v3 vs cleanup race ────────────────────
+// Regression for the TOCTOU where publish_synthetic_v3 checked initialized,
+// released cmd_mutex, then cleanup() ran fully, and then PublishSnap set a
+// non-null latest on a shut-down bridge (memory leak + broken invariant).
+static bool test_concurrent_publish_cleanup()
+{
+    // Run many iterations to exercise the race window.
+    for (int iter = 0; iter < 200; ++iter) {
+        EXPECT(peonpad_tabletop_init() == 0);
+
+        std::atomic<bool> cleanup_done{false};
+
+        // Publisher thread: publish synthetic snapshots until cleanup completes.
+        std::thread publisher([&]() {
+            while (!cleanup_done.load(std::memory_order_acquire)) {
+                peonpad_tabletop_publish_synthetic(1, 0, 0, nullptr, 0, nullptr, 0);
+            }
+        });
+
+        // Small delay to let the publisher thread start, then call cleanup.
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+        peonpad_tabletop_cleanup();
+        cleanup_done.store(true, std::memory_order_release);
+        publisher.join();
+
+        // After cleanup: latest_snapshot must return nullptr — no stale
+        // snapshot leaked from a post-cleanup publish.
+        PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+        EXPECT(s == nullptr);
+    }
+    return true;
+}
+
+
 
 int main()
 {
@@ -785,6 +820,7 @@ int main()
     // Concurrency
     Run("concurrent_retain_release",test_concurrent_retain_release);
     Run("concurrent_latest_snap",   test_concurrent_latest_snapshot);
+    Run("concurrent_publish_cleanup", test_concurrent_publish_cleanup);
 
     return AllPassed ? 0 : 1;
 }

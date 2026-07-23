@@ -97,6 +97,15 @@ func testTerrainReliefHasVisibleSpread() {
     expectEq(TabletopTerrainRelief.maxHeight, TabletopTerrainRelief.height(.rock), "max = rock")
 }
 
+func testForestStandsUp() {
+    // Forest tiles get an upright standing prop; other classes do not.
+    expect(TabletopTerrainRelief.standupHeight(.forest) > 0.02,
+           "forest has a visible standing (tree) prop")
+    for kind in TabletopTerrainKind.allCases where kind != .forest {
+        expectEq(TabletopTerrainRelief.standupHeight(kind), 0, "\(kind) has no standing prop")
+    }
+}
+
 func testFogFollowsAboveEveryTerrainHeight() {
     // Fog floats a fixed gap above each tile's own terrain height, so it is
     // above the tallest terrain and never coplanar with any of it.
@@ -236,6 +245,7 @@ struct TabletopLayersTests {
 
         testTerrainReliefOrdering()
         testTerrainReliefHasVisibleSpread()
+        testForestStandsUp()
         testFogFollowsAboveEveryTerrainHeight()
 
         testTerrainExtent()

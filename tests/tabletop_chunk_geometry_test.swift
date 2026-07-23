@@ -430,7 +430,7 @@ private func dot3(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Float { a.x*b.x + a.y
 private let reliefFit = TabletopMapFit(width: 8, height: 8, boardExtent: 0.8)
 
 func testReliefTopAtTileHeight() {
-    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.01))]
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.01), standupHeight: Float(0))]
     let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
     // Every neighbour equal height ⇒ no skirts, only the raised top quad.
     let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
@@ -442,7 +442,7 @@ func testReliefTopAtTileHeight() {
 }
 
 func testReliefSkirtWhenNeighborLower() {
-    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.02))]
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0.02), standupHeight: Float(0))]
     let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
     // Only the east neighbour is lower; the other three are equal height.
     let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
@@ -456,7 +456,7 @@ func testReliefSkirtWhenNeighborLower() {
 
 func testReliefSkirtsAllFrontFacing() {
     // A lone raised tile with all neighbours off-map: 4 skirts down to the floor.
-    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(2), height: Float(0.015))]
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(2), height: Float(0.015), standupHeight: Float(0))]
     let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
     let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
         tiles: tiles, fit: reliefFit, slotMap: slot,
@@ -482,8 +482,8 @@ func testReliefSkirtsAllFrontFacing() {
 func testReliefBoundedForFlatGround() {
     // A 3×3 all-equal-height patch: interior tile has no skirts; only boundary
     // tiles skirt to the floor. Vertex count stays bounded (no per-tile blowup).
-    var tiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)] = []
-    for z in 0..<3 { for x in 0..<3 { tiles.append((x, z, 1, 0.0)) } }
+    var tiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float, standupHeight: Float)] = []
+    for z in 0..<3 { for x in 0..<3 { tiles.append((x, z, 1, 0.0, 0.0)) } }
     let slot = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
     let inside: Set<Int> = [0,1,2,3,4,5,6,7,8]
     _ = inside
@@ -495,6 +495,40 @@ func testReliefBoundedForFlatGround() {
     // Center tile (1,1) contributes no skirt.
     expect(geo.positions.count >= 36, "at least one top quad per tile")
     expect(geo.positions.count < 9 * 20, "far fewer than every-tile-4-skirts (bounded)")
+}
+
+func testReliefStandupTreeAddsUprightQuads() {
+    // A single flat forest tile (all neighbours equal height ⇒ no skirts) with
+    // a standup height: expect the flat top quad (4 verts) plus two crossed
+    // vertical planes, each double-sided (4 quads × 4 = 16 verts).
+    let sh = Float(0.05)
+    let tiles = [(tileX: 4, tileZ: 4, graphicIndex: Optional(1), height: Float(0), standupHeight: sh)]
+    let slot  = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+    let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
+        tiles: tiles, fit: reliefFit, slotMap: slot,
+        heightAt: { _, _ in 0 }, edgeFloorY: 0)
+    expectEq(geo.positions.count, 4 + 16, "top quad (4) + crossed double-sided standup (16)")
+    // The standup reaches up to the tile height + standupHeight.
+    expect(geo.positions.contains { abs($0.y - sh) < 1e-6 }, "standup rises to the canopy height")
+    // Vertical planes have horizontal (±X or ±Z) normals, not up.
+    let vertical = geo.normals.filter { abs($0.x) > 0.9 || abs($0.z) > 0.9 }
+    expectEq(vertical.count, 16, "16 vertical standup vertices with horizontal normals")
+    // Both facings exist for each plane (double-sided) so it reads from any angle.
+    expect(geo.normals.contains { $0.z > 0.9 } && geo.normals.contains { $0.z < -0.9 },
+           "X-plane is double-sided (±Z normals)")
+    expect(geo.normals.contains { $0.x > 0.9 } && geo.normals.contains { $0.x < -0.9 },
+           "Z-plane is double-sided (±X normals)")
+    // All standup triangles remain front-facing for their stored normal.
+    let idx = geo.triangleIndices
+    var frontFacing = true
+    var t = 0
+    while t < idx.count {
+        let i0 = Int(idx[t]), i1 = Int(idx[t+1]), i2 = Int(idx[t+2])
+        let gn = geoNormal(geo.positions[i0], geo.positions[i1], geo.positions[i2])
+        if dot3(gn, geo.normals[i0]) <= 0 { frontFacing = false }
+        t += 3
+    }
+    expect(frontFacing, "all standup triangles front-facing (winding matches normal)")
 }
 
 // MARK: - Run all tests
@@ -531,6 +565,7 @@ struct TabletopChunkGeometryTests {
         testReliefSkirtWhenNeighborLower()
         testReliefSkirtsAllFrontFacing()
         testReliefBoundedForFlatGround()
+        testReliefStandupTreeAddsUprightQuads()
 
         // MARK: - Summary
 

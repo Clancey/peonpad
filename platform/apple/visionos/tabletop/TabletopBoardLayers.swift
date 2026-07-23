@@ -95,6 +95,16 @@ public enum TabletopTerrainRelief {
         Float(level(kind)) * stepMeters
     }
 
+    /// Height (meters) of an upright "standing" prop drawn on top of a tile —
+    /// e.g. trees on forest tiles that should read as standing vegetation, not a
+    /// flat-topped raised tile. Zero for classes with no standing prop.
+    public static func standupHeight(_ kind: TabletopTerrainKind) -> Float {
+        switch kind {
+        case .forest: return 0.055   // upright tree canopy
+        default:      return 0
+        }
+    }
+
     /// Lowest terrain height across all classes (water).
     public static var minHeight: Float {
         TabletopTerrainKind.allCases.map { height($0) }.min() ?? 0

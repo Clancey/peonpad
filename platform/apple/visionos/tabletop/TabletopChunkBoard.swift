@@ -393,13 +393,16 @@ public final class TabletopChunkBoard {
             return (nil, slotMap, slotToKind)
         }
 
-        // Relief tiles carry a per-tile height; skirts are emitted where a
-        // neighbour (looked up across the whole map) is lower, so elevation
-        // changes show real shaded edges.
-        let reliefTiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float)] =
-            tiles.map { ($0.tileX, $0.tileZ, $0.graphicIndex,
-                         self.heightByKey[TabletopChunkLayout.tileKey($0.tileX, $0.tileZ)]
-                             ?? TabletopBoardElevation.terrainSurfaceY) }
+        // Relief tiles carry a per-tile height and, for forest, an upright tree
+        // standup height; skirts are emitted where a neighbour is lower.
+        let reliefTiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?, height: Float, standupHeight: Float)] =
+            tiles.map { tile in
+                let kind = terrainByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)]?.kind
+                return (tile.tileX, tile.tileZ, tile.graphicIndex,
+                        self.heightByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)]
+                            ?? TabletopBoardElevation.terrainSurfaceY,
+                        kind.map { TabletopTerrainRelief.standupHeight($0) } ?? 0)
+            }
 
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building relief geometry")
         let geo = TabletopTerrainChunkMeshBuilder.buildRelief(

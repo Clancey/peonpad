@@ -138,6 +138,38 @@ func testNoUnitTimeoutFails() {
     expectEqual(harness.phase, .failed, "failed with no units")
 }
 
+// MARK: - Prefers a mobile unit for the move probe
+
+func testPrefersMobileUnitForMoveProbe() {
+    // A base scenario lists a (non-movable) town hall before the workers.
+    // The harness must select a mobile unit so the move probe is meaningful.
+    let building = TabletopGameplayUnit(id: "hall", owner: 0, hp: 1200, maxHP: 1200,
+                                        facingRadians: 0, tileX: 5, tileZ: 5,
+                                        kind: "unit-town-hall")
+    let worker = TabletopGameplayUnit(id: "peon", owner: 0, hp: 30, maxHP: 30,
+                                      facingRadians: 0, tileX: 8, tileZ: 8,
+                                      kind: "unit-peon")
+    let catalog = TabletopAssetCatalog(unitTypes: [
+        "unit-town-hall": TabletopUnitSpriteInfo(
+            spritePath: "b.png", frameWidth: 128, frameHeight: 128,
+            numDirections: 1, flip: false,
+            renderCategory: .building, footprintWidth: 4, footprintHeight: 4),
+        "unit-peon": TabletopUnitSpriteInfo(
+            spritePath: "p.png", frameWidth: 72, frameHeight: 72,
+            numDirections: 5, flip: true, renderCategory: .mobile),
+    ])
+    let snap = TabletopGameplaySnapshot(
+        version: TabletopGameplaySnapshot.currentVersion,
+        mapSize: TabletopMapSize(width: 32, height: 32),
+        terrain: [], fogMask: [], units: [building, worker],
+        selection: TabletopGameplaySelection(), assets: catalog)
+
+    let harness = TabletopCommandHarness()
+    let (cmds, _) = harness.advance(with: snap)
+    expectEqual(cmds, [.selectUnit(id: "peon")],
+                "harness selects the mobile worker, not the building listed first")
+}
+
 // MARK: - Runner
 
 @main
@@ -147,6 +179,7 @@ struct CommandHarnessTests {
         testFullRoundTrip()
         testSelectTimeoutFails()
         testNoUnitTimeoutFails()
+        testPrefersMobileUnitForMoveProbe()
 
         if failures == 0 {
             print("PASSED: \(checks)/\(checks) checks")

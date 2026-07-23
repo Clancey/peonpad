@@ -154,7 +154,18 @@ public final class TabletopCommandHarness {
     /// Prefer a unit owned by the local player (owner 0), else any live unit.
     private func pickUnit(in snapshot: TabletopGameplaySnapshot) -> TabletopGameplayUnit? {
         let live = snapshot.units.filter { $0.isAlive }
-        return live.first(where: { $0.owner == 0 }) ?? live.first
+        // Prefer a *mobile* own unit: buildings/resources can't move, so
+        // selecting one (they are often listed first in a base scenario) would
+        // make the move probe a meaningless no-op. When no asset catalog is
+        // present (procedural/demo snapshots) every unit is treated as mobile.
+        func isMobile(_ u: TabletopGameplayUnit) -> Bool {
+            guard let sprite = snapshot.assets?.sprite(forUnitKind: u.kind) else { return true }
+            return sprite.renderCategory == .mobile
+        }
+        return live.first(where: { $0.owner == 0 && isMobile($0) })
+            ?? live.first(where: { isMobile($0) })
+            ?? live.first(where: { $0.owner == 0 })
+            ?? live.first
     }
 
     /// A deterministic in-bounds neighbor tile to move to (prefers +x, then -x,

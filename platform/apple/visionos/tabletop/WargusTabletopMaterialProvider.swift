@@ -27,8 +27,12 @@ public final class WargusTabletopMaterialProvider {
     private let resolver = WargusStagedAssetResolver()
     /// Bounded decoded-material cache keyed by `TabletopAssetPlacement.cacheKey`.
     private let cache: TabletopLRUCache<String, UnlitMaterial>
-    /// Coalesces duplicate in-flight decodes for the same placement.
-    private var inFlight: Set<String> = []
+    /// Pending completions per in-flight decode, keyed by cache key. Coalesces
+    /// duplicate requests for the same placement (e.g. every grass tile sharing
+    /// one graphic index) so a single decode serves *all* waiting callers rather
+    /// than only the first — otherwise repeated tiles/sprites would stay
+    /// procedural forever.
+    private var pending: [String: [(UnlitMaterial) -> Void]] = [:]
     /// Serial background queue for file I/O + pixel work, off the main actor.
     private let decodeQueue = DispatchQueue(
         label: "org.peonpad.visionos.tabletop.assetdecode", qos: .userInitiated)
@@ -94,20 +98,26 @@ public final class WargusTabletopMaterialProvider {
             completion(cached)
             return
         }
-        guard !inFlight.contains(key) else { return }
-        inFlight.insert(key)
+        // Coalesce: if a decode for this key is already running, just queue this
+        // caller's completion — it will be invoked when the shared decode lands.
+        if pending[key] != nil {
+            pending[key]?.append(completion)
+            return
+        }
+        pending[key] = [completion]
 
         let root = dataRoot
         decodeQueue.async { [weak self] in
             let cgImage = WargusTabletopMaterialProvider.decode(root: root, placement: placement)
             Task { @MainActor in
                 guard let self else { return }
-                self.inFlight.remove(key)
-                // Per-asset fallback: on any decode failure keep procedural.
+                let waiters = self.pending.removeValue(forKey: key) ?? []
+                // Per-asset fallback: on any decode failure every waiter keeps
+                // its procedural content (no completion is invoked).
                 guard let cgImage,
                       let material = self.makeMaterial(cgImage: cgImage) else { return }
                 self.cache.setValue(material, forKey: key)
-                completion(material)
+                for waiter in waiters { waiter(material) }
             }
         }
     }

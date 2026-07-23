@@ -223,7 +223,9 @@ struct TabletopBoardView: View {
                 + "tiles=\(tileEntities.count) units=\(next.units.count) "
                 + "assets=\(next.assets != nil ? "real" : "procedural")")
         } else {
-            TabletopBoardBuilder.updateTerrainTiles(diff.changedTerrainTiles, in: tileEntities)
+            TabletopBoardBuilder.updateTerrainTiles(
+                diff.changedTerrainTiles, in: tileEntities,
+                tileset: next.assets?.tileset, materialProvider: materialProvider)
             TabletopBoardBuilder.updateFogTiles(diff.changedFogTiles, in: tileEntities)
         }
 

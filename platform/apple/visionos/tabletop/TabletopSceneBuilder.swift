@@ -490,14 +490,28 @@ enum TabletopBoardBuilder {
     }
 
     /// Updates terrain tile materials in `tileEntities` for tiles listed in
-    /// `changedTiles`. Tiles not present in the dictionary are silently skipped.
+    /// `changedTiles`. Sets the procedural color immediately, then (when a
+    /// material provider + tileset are available) re-requests the real tile art
+    /// for the tile's new graphic index so an in-place terrain change (e.g. a
+    /// felled tree) reloads real art instead of staying a flat color.
+    /// Tiles not present in the dictionary are silently skipped.
+    @MainActor
     static func updateTerrainTiles(
         _ changedTiles: [TabletopTerrainTile],
-        in tileEntities: [String: ModelEntity]
+        in tileEntities: [String: ModelEntity],
+        tileset: TabletopTilesetInfo? = nil,
+        materialProvider: WargusTabletopMaterialProvider? = nil
     ) {
         for tile in changedTiles {
             guard let entity = tileEntities[tileEntityKey(tileX: tile.tileX, tileZ: tile.tileZ)] else { continue }
             entity.model?.materials = [translucentUnlitMaterial(tile.kind.tileColor)]
+            if let materialProvider {
+                materialProvider.terrainMaterial(
+                    graphicIndex: tile.graphicIndex, tileset: tileset
+                ) { [weak entity] material in
+                    entity?.model?.materials = [material]
+                }
+            }
         }
     }
 

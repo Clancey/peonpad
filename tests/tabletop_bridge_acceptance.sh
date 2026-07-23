@@ -7,16 +7,22 @@
 # ──────────────
 # 1. The bridge library (peonpad_tabletop_bridge) and its contract test
 #    (peonpad_tabletop_bridge_test) build cleanly without PEONPAD_TABLETOP.
-# 2. All 28 bridge contract tests pass.
+# 2. All 31 bridge contract tests pass.
 # 3. The bridge header contains no engine or SDL includes (language-neutrality).
 # 4. The mainloop patch applies and reverses cleanly against a temp copy of
 #    engine/stratagus.
 # 5. If the authorized private data directory is present, validate that the
 #    stratagus binary links the bridge (symbol presence) when built with
 #    PEONPAD_TABLETOP=ON and PEONPAD_ENABLE_SDL3=ON.
+# 6. The SDL3-linked expanded-tileset-PNG exporter regression test
+#    (peonpad_tabletop_tileset_export_test) builds and passes, exercising the
+#    real IMG_SavePNG write + decode path end to end against a synthetic
+#    (non-proprietary) surface — the code path tests 1-4 above never touch,
+#    since they compile the bridge WITHOUT PEONPAD_TABLETOP.
 #
 # The real-data step (5) is skipped when data.Wargus is not found; no
-# proprietary assets are copied, staged, or committed at any point.
+# proprietary assets are copied, staged, or committed at any point. Step 6
+# uses only synthetic pixel data and always runs.
 
 set -eu
 setopt PIPE_FAIL 2>/dev/null || true
@@ -54,8 +60,8 @@ pass "bridge-build"
 
 # ── 2. Run the contract tests ─────────────────────────────────────────────────
 printf "==> Running bridge contract tests...\n"
-"$BUILD_DIR/peonpad_tabletop_bridge_test" | grep -c "^PASS" | grep -q "^28$" \
-  || fail "bridge-test-count" "expected 28 PASS lines"
+"$BUILD_DIR/peonpad_tabletop_bridge_test" | grep -c "^PASS" | grep -q "^31$" \
+  || fail "bridge-test-count" "expected 31 PASS lines"
 "$BUILD_DIR/peonpad_tabletop_bridge_test" | grep "^FAIL" && \
   fail "bridge-test-failures" "one or more FAIL lines in output"
 RESULT=$("$BUILD_DIR/peonpad_tabletop_bridge_test"; echo "EXIT:$?")
@@ -126,5 +132,25 @@ else
   done
   pass "real-data-symbol-check"
 fi
+
+# ── 6. Real SDL3-linked tileset-export exporter test (always runs) ───────────
+printf "==> Building + running peonpad_tabletop_tileset_export_test (SDL3, no engine)...\n"
+EXPORT_TEST_BUILD="$ROOT_DIR/build/tabletop-tileset-export-test"
+"$REAL_CMAKE" -S "$ROOT_DIR" -B "$EXPORT_TEST_BUILD" \
+  -DBUILD_TESTING=ON \
+  -DPEONPAD_ENABLE_SDL3=ON \
+  -DPEONPAD_ENABLE_ENGINE=OFF \
+  -DCMAKE_BUILD_TYPE=Debug \
+  >/dev/null
+
+"$REAL_CMAKE" --build "$EXPORT_TEST_BUILD" \
+  --target peonpad_tabletop_tileset_export_test --parallel >/dev/null
+
+EXPORT_TEST_BIN="$EXPORT_TEST_BUILD/peonpad_tabletop_tileset_export_test"
+[[ -f "$EXPORT_TEST_BIN" ]] \
+  || fail "tileset-export-test-exists" "peonpad_tabletop_tileset_export_test not found"
+
+"$EXPORT_TEST_BIN" || fail "tileset-export-test-failures" "exporter test reported failures"
+pass "tileset-export-test"
 
 printf "\nAll tabletop bridge acceptance checks passed.\n"

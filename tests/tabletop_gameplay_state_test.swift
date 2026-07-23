@@ -60,6 +60,81 @@ func testSnapshotCodableRoundTrip() {
     expectEqual(decoded, original, "snapshot survives a JSON encode/decode round-trip unchanged")
 }
 
+// MARK: - ABI v5 pathRoot backward compatibility
+
+// Regression coverage: TabletopGameplaySnapshot.currentVersion is still 1,
+// and TabletopTilesetInfo.pathRoot (ABI v5) is a new, non-optional stored
+// property. A synthesized Decodable would require the "pathRoot" key to be
+// present, so any snapshot serialized before this field existed (e.g. a
+// persisted save, or simply an older running build's output) would fail to
+// decode with keyNotFound — TabletopTilesetInfo has a custom init(from:)
+// specifically to prevent this.
+
+func testTilesetInfoDirectDecodeMissingPathRoot() {
+    let json = """
+    {"imagePath":"tilesets/summer/terrain/summer.png","pixelTileWidth":32,\
+    "pixelTileHeight":32,"imageWidth":0,"imageHeight":0,"name":"Forest"}
+    """.data(using: .utf8)!
+    guard let decoded = try? JSONDecoder().decode(TabletopTilesetInfo.self, from: json) else {
+        failureCount += 1; checkCount += 1
+        print("FAIL: TabletopTilesetInfo failed to decode without a pathRoot key")
+        return
+    }
+    expectEqual(decoded.pathRoot, .dataRoot, "missing pathRoot key defaults to .dataRoot")
+    expectEqual(decoded.imagePath, "tilesets/summer/terrain/summer.png", "imagePath still decodes correctly")
+    expectEqual(decoded.pixelTileWidth, 32, "pixelTileWidth still decodes correctly")
+}
+
+func testLegacySnapshotMissingTilesetPathRootDecodes() {
+    var original = TabletopGameplaySnapshot.demo()
+    original.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tilesets/summer/terrain/summer.png",
+        pixelTileWidth: 32, pixelTileHeight: 32,
+        imageWidth: 512, imageHeight: 768, name: "Forest",
+        pathRoot: .cacheRoot))
+
+    guard let encoded = try? JSONEncoder().encode(original),
+          let jsonAny = try? JSONSerialization.jsonObject(with: encoded),
+          var json = jsonAny as? [String: Any]
+    else {
+        failureCount += 1; checkCount += 1
+        print("FAIL: could not encode/re-parse snapshot as a JSON object")
+        return
+    }
+
+    // Simulate a legacy payload (persisted/produced before ABI v5 added
+    // pathRoot) by stripping the key from the nested tileset object.
+    guard var assets = json["assets"] as? [String: Any],
+          var tileset = assets["tileset"] as? [String: Any]
+    else {
+        failureCount += 1; checkCount += 1
+        print("FAIL: could not locate assets.tileset in the encoded JSON")
+        return
+    }
+    expect(tileset["pathRoot"] != nil, "precondition: the freshly-encoded tileset carries pathRoot")
+    tileset.removeValue(forKey: "pathRoot")
+    assets["tileset"] = tileset
+    json["assets"] = assets
+
+    guard let strippedData = try? JSONSerialization.data(withJSONObject: json) else {
+        failureCount += 1; checkCount += 1
+        print("FAIL: could not re-serialize the stripped JSON")
+        return
+    }
+
+    guard let decoded = try? JSONDecoder().decode(TabletopGameplaySnapshot.self, from: strippedData) else {
+        failureCount += 1; checkCount += 1
+        print("FAIL: a legacy snapshot missing tileset.pathRoot failed to decode (keyNotFound regression)")
+        return
+    }
+    expectEqual(decoded.version, TabletopGameplaySnapshot.currentVersion,
+                "a legacy snapshot still reports the current schema version — no format migration needed")
+    expectEqual(decoded.assets?.tileset?.pathRoot, .dataRoot,
+                "a missing pathRoot decodes as .dataRoot, matching pre-v5 (data-root-only) semantics")
+    expectEqual(decoded.assets?.tileset?.imagePath, "tilesets/summer/terrain/summer.png",
+                "other tileset fields still decode correctly alongside the defaulted pathRoot")
+}
+
 // MARK: - Demo snapshot structure
 
 func testDemoSnapshotUnitCount() {
@@ -316,6 +391,8 @@ struct TabletopGameplayStateTestRunner {
     static func main() {
         testSnapshotCurrentVersion()
         testSnapshotCodableRoundTrip()
+        testTilesetInfoDirectDecodeMissingPathRoot()
+        testLegacySnapshotMissingTilesetPathRootDecodes()
         testDemoSnapshotUnitCount()
         testDemoUnitsAllAlive()
         testDemoSnapshotTerrainAccessor()

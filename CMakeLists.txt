@@ -53,6 +53,8 @@ endif()
 # dependencies and can be linked into the standalone test binary.
 add_library(peonpad_tabletop_bridge STATIC
   platform/bridge/PeonPadTabletopBridge.cpp
+  platform/bridge/TabletopTilesetPath.cpp
+  platform/bridge/TabletopTilesetExportCache.cpp
 )
 target_include_directories(peonpad_tabletop_bridge PUBLIC
   platform/bridge
@@ -114,6 +116,33 @@ if(BUILD_TESTING AND
   )
   add_test(NAME peonpad_tabletop_bridge
     COMMAND peonpad_tabletop_bridge_test)
+
+  # SDL3-linked regression test for the tabletop's expanded-tileset PNG
+  # exporter (platform/bridge/TabletopTilesetExport.cpp). Unlike
+  # peonpad_tabletop_bridge_test above (which compiles the bridge WITHOUT
+  # PEONPAD_TABLETOP and therefore never touches the exporter), this links
+  # real SDL3 + SDL3_image and exercises the actual IMG_SavePNG write +
+  # decode path end to end against a synthetic (non-proprietary) surface.
+  # Only available when PEONPAD_ENABLE_SDL3 provides the SDL3::SDL3 /
+  # SDL3_image::SDL3_image targets (see cmake/PeonPadSDL3.cmake); does not
+  # require PEONPAD_ENABLE_ENGINE.
+  if(PEONPAD_ENABLE_SDL3)
+    add_executable(peonpad_tabletop_tileset_export_test
+      tests/tabletop_tileset_export_test.cpp
+      platform/bridge/TabletopTilesetPath.cpp
+      platform/bridge/TabletopTilesetExport.cpp
+    )
+    target_include_directories(peonpad_tabletop_tileset_export_test PRIVATE
+      platform/bridge
+    )
+    target_compile_features(peonpad_tabletop_tileset_export_test PRIVATE cxx_std_17)
+    target_link_libraries(peonpad_tabletop_tileset_export_test PRIVATE
+      SDL3::SDL3
+      SDL3_image::SDL3_image
+    )
+    add_test(NAME peonpad_tabletop_tileset_export
+      COMMAND peonpad_tabletop_tileset_export_test)
+  endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -239,6 +268,9 @@ if(PEONPAD_ENABLE_ENGINE)
     if(PEONPAD_ENABLE_TABLETOP)
       target_sources(stratagus_lib PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/PeonPadTabletopBridge.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/TabletopTilesetPath.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/TabletopTilesetExport.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/TabletopTilesetExportCache.cpp"
       )
       target_include_directories(stratagus_lib PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge"

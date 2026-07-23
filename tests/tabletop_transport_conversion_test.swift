@@ -412,6 +412,8 @@ func testConversionBuildsAssetCatalog() {
     expectEqual(assets.tileset?.imagePath, "tilesets/summer/terrain/summer.png",
                 "catalog tileset path")
     expectEqual(assets.tileset?.pixelTileWidth, 32, "catalog tileset tile width")
+    expectEqual(assets.tileset?.pathRoot, .dataRoot,
+                "catalog tileset defaults to the data root (ABI v4-or-earlier / unset pathRoot)")
     let sprite = assets.sprite(forUnitKind: "unit-footman")
     expectEqual(sprite?.spritePath, "human/units/footman.png", "catalog sprite path")
     expectEqual(sprite?.frameWidth, 72, "catalog sprite frame width")
@@ -427,6 +429,53 @@ func testConversionBuildsAssetCatalog() {
     expectEqual(placement?.mirror, true, "resolved unit mirror")
     expect(placement?.teamTint == TabletopTeamPalette.tint(owner: 1),
            "resolved unit team tint for owner 1")
+}
+
+// ABI v5: the path-root discriminator round-trips end to end (engine ABI
+// byte -> EngineTilesetDescriptor -> TabletopSnapshotConverter ->
+// TabletopTilesetInfo -> WargusStagedAssetResolver), and drives the
+// generated-cache placement flag rather than any filename convention.
+func testConversionCarriesTilesetPathRoot() {
+    let generatedTileset = EngineTilesetDescriptor(
+        imagePath: "tabletop-generated/forest-v1-abcdef0123456789.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest",
+        pathRoot: 1) // PEONPAD_TILESET_PATH_ROOT_CACHE
+    let snap = EngineSnapshot(
+        abiVersion: kPeonPadTabletopABIVersion, generation: 6,
+        mapWidth: 1, mapHeight: 1,
+        terrain: [EngineTerrainCell(tileIndex: 1, fogState: EngineFogState.visible.rawValue,
+                                    terrainClass: EngineTerrainClass.grass.rawValue, graphicIndex: 5)],
+        units: [], unitTypes: [], tileset: generatedTileset)
+
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "v5 snapshot with a cache-root tileset converts")
+        return
+    }
+    expectEqual(ui.assets?.tileset?.pathRoot, .cacheRoot,
+                "raw pathRoot byte 1 converts to TabletopTilesetPathRoot.cacheRoot")
+
+    let resolver = WargusStagedAssetResolver()
+    let placement = resolver.terrainPlacement(graphicIndex: 5, tileset: ui.assets?.tileset)
+    expectEqual(placement?.isGeneratedCache, true,
+                "the converted pathRoot — not the filename — drives isGeneratedCache")
+
+    // An unrecognized/future raw pathRoot byte defaults defensively to the
+    // data root rather than being misread as some other placement.
+    let unknownRoot = EngineTilesetDescriptor(
+        imagePath: "tilesets/summer/terrain/summer.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: 200)
+    let snap2 = EngineSnapshot(
+        abiVersion: kPeonPadTabletopABIVersion, generation: 7,
+        mapWidth: 1, mapHeight: 1,
+        terrain: [EngineTerrainCell(tileIndex: 1, fogState: EngineFogState.visible.rawValue,
+                                    terrainClass: EngineTerrainClass.grass.rawValue, graphicIndex: 5)],
+        units: [], unitTypes: [], tileset: unknownRoot)
+    guard let ui2 = try? TabletopSnapshotConverter.convert(snap2) else {
+        expect(false, "v5 snapshot with an unrecognized pathRoot byte still converts")
+        return
+    }
+    expectEqual(ui2.assets?.tileset?.pathRoot, .dataRoot,
+                "an unrecognized pathRoot byte defaults to .dataRoot, never crashes/misreads")
 }
 
 // MARK: - ABI v4 render category + footprint
@@ -522,6 +571,7 @@ struct TransportConversionTests {
         testFullConversionUnitsAndSelection()
         testConversionMapsUnknownTypeToEmptyKind()
         testConversionBuildsAssetCatalog()
+        testConversionCarriesTilesetPathRoot()
         testRenderCategoryMapping()
         testConversionCarriesCategoryAndFootprint()
         testConversionOmitsCatalogForProceduralSnapshot()

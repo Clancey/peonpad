@@ -105,7 +105,8 @@ extension EngineSnapshot {
                 pixelTileHeight: td.pixel_tile_height,
                 imageWidth: td.image_width,
                 imageHeight: td.image_height,
-                name: name)
+                name: name,
+                pathRoot: td.image_path_root)
         }
 
         self.init(

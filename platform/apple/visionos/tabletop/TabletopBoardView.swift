@@ -101,9 +101,13 @@ struct TabletopBoardView: View {
     /// Loads real Wargus terrain/unit textures from the staged read-only data
     /// directory at runtime. `nil` when the staged data is absent, so the board
     /// renders fully procedurally rather than silently faking success.
+    /// Also passes the writable user/cache directory, since engine-generated
+    /// assets (the expanded-tileset PNG cache) live there, never in the
+    /// read-only data directory (see EngineStartupPlan.swift).
     @State private var materialProvider: WargusTabletopMaterialProvider? =
         WargusTabletopMaterialProvider.make(
-            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath)
+            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath,
+            cachePath: PeonPadTabletopLaunch.resolveConfig().userPath)
 
     /// Chunked board entity manager: replaces the 32 768-entity per-tile
     /// approach with 16 terrain-chunk entities + 1 fog entity for a 128×128 map.
@@ -279,11 +283,26 @@ struct TabletopBoardView: View {
             // Keep tileEntities empty — the chunk board owns all terrain/fog entities.
             tileEntities = [:]
         } else {
-            // Incremental terrain and fog updates on the chunk board.
-            chunkBoard?.updateTerrainTiles(
-                diff.changedTerrainTiles,
-                tileset: next.assets?.tileset,
-                materialProvider: materialProvider)
+            // Incremental terrain and fog updates on the chunk board. When
+            // the tileset descriptor's render-relevant identity itself
+            // changed (e.g. the engine's exported-tileset path transitioned
+            // raw->generated or generated v1->v2 — see
+            // TabletopBoardReconciler.tilesetChanged), every chunk and the
+            // shared tree material must re-request their real-art textures
+            // even if no individual terrain tile's value changed —
+            // `updateTerrainTiles(diff.changedTerrainTiles, ...)` alone would
+            // leave every chunk with no changed tile bound to stale art.
+            if diff.tilesetChanged {
+                chunkBoard?.refreshForTilesetChange(
+                    snapshot: next,
+                    tileset: next.assets?.tileset,
+                    materialProvider: materialProvider)
+            } else {
+                chunkBoard?.updateTerrainTiles(
+                    diff.changedTerrainTiles,
+                    tileset: next.assets?.tileset,
+                    materialProvider: materialProvider)
+            }
             chunkBoard?.updateFogTiles(diff.changedFogTiles)
         }
 

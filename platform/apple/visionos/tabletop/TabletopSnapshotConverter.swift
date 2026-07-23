@@ -124,7 +124,8 @@ public enum TabletopSnapshotConverter {
                 pixelTileHeight: Int($0.pixelTileHeight),
                 imageWidth: Int($0.imageWidth),
                 imageHeight: Int($0.imageHeight),
-                name: $0.name)
+                name: $0.name,
+                pathRoot: TabletopTilesetPathRoot(rawValue: $0.pathRoot) ?? .dataRoot)
         }
         let assets: TabletopAssetCatalog?
         if tilesetInfo != nil || !spriteByIdent.isEmpty {

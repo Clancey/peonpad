@@ -49,6 +49,20 @@ public struct TabletopSnapshotDiff: Equatable {
     public let changedTerrainTiles: [TabletopTerrainTile]
     /// Fog tiles whose `visibility` changed — fog overlay to refresh.
     public let changedFogTiles: [TabletopFogTile]
+    /// True when the render-relevant tileset identity itself changed between
+    /// snapshots (the full `TabletopTilesetInfo?` — image path, path root,
+    /// tile pixel dimensions, image dimensions, name — differs), even though
+    /// no individual terrain tile's `kind`/`graphicIndex` changed. This
+    /// happens, for example, when the engine's exported-tileset PNG
+    /// transitions from the raw asset to the generated cache (or from one
+    /// generated version to the next — see PeonPadTabletopBridge.cpp's
+    /// ExportExpandedTilesetPNG) after a transient export failure/retry or a
+    /// tileset reload, while the terrain layout is unchanged. Every existing
+    /// chunk/tree material was decoded against the *old* tileset and must be
+    /// invalidated and re-requested wholesale — `changedTerrainTiles` alone
+    /// (which only lists tiles whose *value* changed) would miss chunks with
+    /// no changed tiles, leaving them bound to stale art forever.
+    public let tilesetChanged: Bool
 
     /// True when the diff carries no changes at all.
     public var isEmpty: Bool {
@@ -56,7 +70,8 @@ public struct TabletopSnapshotDiff: Equatable {
         updatedUnits.isEmpty &&
         removedUnitIDs.isEmpty &&
         changedTerrainTiles.isEmpty &&
-        changedFogTiles.isEmpty
+        changedFogTiles.isEmpty &&
+        !tilesetChanged
     }
 }
 
@@ -85,7 +100,8 @@ public enum TabletopBoardReconciler {
                 updatedUnits: [],
                 removedUnitIDs: [],
                 changedTerrainTiles: next.terrain,
-                changedFogTiles: next.fogMask
+                changedFogTiles: next.fogMask,
+                tilesetChanged: next.assets?.tileset != nil
             )
         }
 
@@ -144,12 +160,19 @@ public enum TabletopBoardReconciler {
             previousFog[tileKey(tile.tileX, tile.tileZ)] != tile.visibility
         }
 
+        // -- Tileset identity -- (compare the *entire* render-relevant
+        // descriptor — image path, path root, tile pixel dimensions, image
+        // dimensions, name — so any field affecting atlas layout, not just
+        // the path, triggers a full re-request).
+        let tilesetChanged = previous.assets?.tileset != next.assets?.tileset
+
         return TabletopSnapshotDiff(
             addedUnits: added,
             updatedUnits: updated,
             removedUnitIDs: removed,
             changedTerrainTiles: changedTerrain,
-            changedFogTiles: changedFog
+            changedFogTiles: changedFog,
+            tilesetChanged: tilesetChanged
         )
     }
 

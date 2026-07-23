@@ -89,7 +89,31 @@ extern "C" {
 ///     while mobile units keep their camera-relative directional sprites.
 /// A v3 consumer must discard a v4 snapshot (the version differs), so the
 /// PeonPadUnitType growth is safe.
-#define PEONPAD_TABLETOP_ABI_VERSION 4u
+///
+/// ABI v5 (tileset path-root discriminator, extension of v4):
+///   • PeonPadTilesetDescriptor: appends `image_path_root`
+///     (PeonPadTilesetPathRoot: which root `image_path` is relative to) plus
+///     a reserved pad.  v4 offsets (through `name`) are unchanged; the
+///     struct grows from 168 to 170 bytes.
+///
+///     Why this exists: the engine can export a fully-expanded tileset PNG
+///     (see PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG) to fix
+///     terrain tiles whose `graphic_index` references a procedurally
+///     generated frame that only exists in the engine's in-memory tile
+///     graphic, never on disk. That exported file lives under the writable
+///     user/cache root (`-u`), not the read-only staged game-data root
+///     (`-d`) that `image_path` was previously *always* relative to (and
+///     that this header, before v5, still documented as the only
+///     possibility). A v4 (or earlier) consumer has no way to know which
+///     root a v5 `image_path` is relative to and would resolve a
+///     cache-relative path against the data root, silently failing to find
+///     the file (or, if a same-named file coincidentally existed there,
+///     resolving the wrong one) — a real behavioral break, not just a
+///     struct-layout one, so the version bump is required even though no
+///     prior field moved.
+/// A v4 consumer must discard a v5 snapshot (the version differs), so the
+/// PeonPadTilesetDescriptor growth is safe.
+#define PEONPAD_TABLETOP_ABI_VERSION 5u
 
 // ── Hard limits ─────────────────────────────────────────────────────────────
 
@@ -104,7 +128,9 @@ extern "C" {
 /// Maximum number of distinct unit types in a snapshot's type registry.
 #define PEONPAD_TABLETOP_MAX_UNIT_TYPES 512u
 /// Maximum length (including the terminating NUL) of a relative asset path
-/// (tileset or unit sprite), expressed relative to the game-data root.  (ABI v3.)
+/// (tileset or unit sprite).  (ABI v3.)  Unit sprite paths are always
+/// relative to the read-only game-data root; a tileset `image_path` is
+/// relative to whichever root `image_path_root` names (ABI v5).
 #define PEONPAD_TABLETOP_MAX_PATH    128u
 
 // ── Fog-of-war cell state ─────────────────────────────────────────────────
@@ -227,14 +253,27 @@ typedef struct PeonPadUnitType {
     uint8_t  _pad4;            ///< Must be zero; reserved for future payload (ABI v4).
 } PeonPadUnitType;
 
-// ── Tileset descriptor (ABI v3) ───────────────────────────────────────────
+// ── Tileset descriptor (ABI v3; path-root discriminator added in v5) ─────
+
+/// Which root `PeonPadTilesetDescriptor.image_path` is relative to (ABI v5).
+/// The engine's expanded-tileset PNG cache (see PeonPadTabletopBridge.cpp's
+/// ExportExpandedTilesetPNG) lives under the writable user/cache root, never
+/// the read-only staged game-data root — this field lets the UI resolve the
+/// path against the correct root explicitly, rather than inferring placement
+/// from a filename convention (e.g. a "tabletop-generated/" prefix), which a
+/// future rename/relocation of that convention could silently break.
+typedef enum PeonPadTilesetPathRoot {
+    PEONPAD_TILESET_PATH_ROOT_DATA  = 0, ///< Relative to the read-only staged game-data root (`-d`).
+    PEONPAD_TILESET_PATH_ROOT_CACHE = 1, ///< Relative to the writable user/cache root (`-u`).
+} PeonPadTilesetPathRoot;
 
 /// Describes the tileset image the snapshot's terrain `graphic_index` values
 /// index into.  One descriptor per snapshot (the active map's tileset).  With
 /// `graphic_index`, `pixel_tile_width/height`, and `image_width` the UI derives
 /// each tile's source rectangle without parsing any tileset Lua.
-/// `image_path` is relative to the game-data root and NUL-terminated; it is
-/// empty for synthetic or terrain-less snapshots.
+/// `image_path` is relative to the root named by `image_path_root` (ABI v5;
+/// always the game-data root in v3/v4) and NUL-terminated; it is empty for
+/// synthetic or terrain-less snapshots.
 typedef struct PeonPadTilesetDescriptor {
     char     image_path[PEONPAD_TABLETOP_MAX_PATH]; ///< Relative tileset PNG path.
     uint16_t pixel_tile_width;  ///< Tile width in pixels within the image.
@@ -242,6 +281,9 @@ typedef struct PeonPadTilesetDescriptor {
     uint16_t image_width;       ///< Tileset image width in pixels (0 if unknown).
     uint16_t image_height;      ///< Tileset image height in pixels (0 if unknown).
     char     name[PEONPAD_TABLETOP_MAX_IDENT]; ///< NUL-terminated tileset name.
+    // ── ABI v5 path-root discriminator ──────────────────────────────────
+    uint8_t  image_path_root;  ///< PeonPadTilesetPathRoot: which root `image_path` is relative to.
+    uint8_t  _pad5;            ///< Must be zero; reserved for future payload (ABI v5).
 } PeonPadTilesetDescriptor;
 
 // ── Snapshot (opaque, reference-counted) ─────────────────────────────────

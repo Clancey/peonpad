@@ -13,6 +13,7 @@
 // peonpad_tabletop_publish_synthetic) is always compiled and testable.
 
 #include "PeonPadTabletopBridge.h"
+#include "TabletopTilesetPath.h"
 
 #include <atomic>
 #include <cassert>
@@ -25,11 +26,14 @@
 // ── Engine state includes (simulation thread only) ───────────────────────
 
 #ifdef PEONPAD_TABLETOP
+#include "TabletopTilesetExport.h"
+#include "TabletopTilesetExportCache.h"
 #include "commands.h"
 #include "fow.h"
 #include "interface.h"
 #include "iolib.h"
 #include "map.h"
+#include "parameters.h"
 #include "player.h"
 #include "stratagus.h"
 #include "tile.h"
@@ -38,6 +42,7 @@
 #include "unit_manager.h"
 #include "unittype.h"
 #include "vec2i.h"
+#include "video.h"
 #endif
 
 // ── Internal snapshot struct ──────────────────────────────────────────────
@@ -427,6 +432,66 @@ static std::string ResolveAssetPath(const std::string &raw) noexcept
     }
 }
 
+// Exports the engine's actual, fully-expanded tile graphic (base tileset PNG
+// frames plus any procedurally-generated extended frames appended by
+// GenerateExtendedTileset — see the file-level comment in
+// TabletopTilesetPath.h) to a PNG under the writable user/cache directory
+// (Parameters::Instance.GetUserDirectory() — the `-u` root; never the
+// read-only `-d` staged data root, which EngineStartupPlan.swift documents
+// as a directory "the engine never writes into"), once per *distinct*
+// tileset load. Returns the cache-root-relative path on success ("" on any
+// failure), in which case the caller falls back to the raw authored asset
+// (correct only for a tileset with no extended/generated frames referenced
+// by the current map).
+//
+// All reload/versioning/backoff *decision* logic lives in the pure,
+// host-testable TabletopTilesetExportCache (see its header for why identity
+// must include the surface dimensions, not just the CGraphic pointer +
+// tileset name); this function only supplies the engine-specific identity
+// (the CGraphic pointer, tileset name/source, and surface) and the actual
+// PNG write (TabletopExportTilesetSurfacePNG).
+static std::string ExportExpandedTilesetPNG(const CTileset &ts,
+                                             uint16_t &out_width,
+                                             uint16_t &out_height) noexcept
+{
+    static TabletopTilesetExportCache s_cache;
+    constexpr uint64_t kRetryBackoffTicks = 300; // ~a few seconds of sim time
+
+    if (!Map.TileGraphic) return {};
+    CGraphic *graphic = Map.TileGraphic.get();
+    SDL_Surface *surface = graphic->getSurface();
+    if (!surface || surface->w <= 0 || surface->h <= 0) return {};
+    if (surface->w > UINT16_MAX || surface->h > UINT16_MAX) return {};
+
+    const TabletopTilesetExportDecision decision = s_cache.Attempt(
+        reinterpret_cast<std::uintptr_t>(graphic), ts.Name,
+        surface->w, surface->h,
+        static_cast<uint64_t>(GameCycle), kRetryBackoffTicks);
+
+    if (decision.action == TabletopTilesetExportAction::UseCached) {
+        out_width  = decision.cachedWidth;
+        out_height = decision.cachedHeight;
+        return decision.cachedRelativePath;
+    }
+    if (decision.action == TabletopTilesetExportAction::Backoff) {
+        return {};
+    }
+
+    const std::string cacheRoot = Parameters::Instance.GetUserDirectory().string();
+    const TabletopTilesetExportResult exported = TabletopExportTilesetSurfacePNG(
+        surface, ts.Name, ts.ImageFile, decision.version, cacheRoot);
+
+    if (!exported.ok) {
+        s_cache.RecordFailure(static_cast<uint64_t>(GameCycle));
+        return {};
+    }
+
+    s_cache.RecordSuccess(exported.relativePath, exported.width, exported.height);
+    out_width  = exported.width;
+    out_height = exported.height;
+    return exported.relativePath;
+}
+
 // Replicate the engine's DrawUnitType() frame resolution (see
 // engine/stratagus/src/unit/unittype.cpp) so the UI receives the exact
 // sprite-sheet frame index and horizontal-mirror flag the engine itself would
@@ -623,23 +688,52 @@ void peonpad_tabletop_publish_snapshot(void)
     {
         const CTileset &ts = Map.Tileset;
         snap->has_tileset = true;
-        // CTileset::ImageFile stores the unresolved Lua path (e.g.
-        // "tilesets/summer/terrain/summer.png") without the "graphics/"
-        // prefix that the engine adds when loading.  Resolve via
-        // LibraryFileName so the UI receives the staged-data-root-relative
-        // path it can actually open (e.g. "graphics/tilesets/summer/…").
-        const std::string resolved_tileset = ResolveAssetPath(ts.ImageFile);
+        // Prefer the fully-expanded tile graphic (base tileset PNG frames +
+        // any procedurally-generated extended frames — see
+        // ExportExpandedTilesetPNG above): every `graphic_index` the engine
+        // can produce has a matching source rectangle in it, unlike the raw
+        // authored PNG on disk. Fall back to the raw asset only if the
+        // export failed (e.g. a write error), which is correct as long as
+        // the current map references no extended/generated tile frames.
+        uint16_t exported_width = 0, exported_height = 0;
+        const std::string exported_tileset =
+            ExportExpandedTilesetPNG(ts, exported_width, exported_height);
+        std::string image_path;
+        uint16_t image_width = 0, image_height = 0;
+        PeonPadTilesetPathRoot path_root = PEONPAD_TILESET_PATH_ROOT_DATA;
+        if (!exported_tileset.empty()) {
+            image_path   = exported_tileset;
+            image_width  = exported_width;
+            image_height = exported_height;
+            // The exported PNG lives under the writable user/cache root
+            // (Parameters::Instance.GetUserDirectory(), the `-u` root — see
+            // ExportExpandedTilesetPNG), not the read-only staged data root.
+            // Set this explicitly (ABI v5) rather than letting the UI infer
+            // placement from the "tabletop-generated/" filename convention.
+            path_root = PEONPAD_TILESET_PATH_ROOT_CACHE;
+        } else {
+            // CTileset::ImageFile stores the unresolved Lua path (e.g.
+            // "tilesets/summer/terrain/summer.png") without the "graphics/"
+            // prefix that the engine adds when loading.  Resolve via
+            // LibraryFileName so the UI receives the staged-data-root-relative
+            // path it can actually open (e.g. "graphics/tilesets/summer/…").
+            image_path = ResolveAssetPath(ts.ImageFile);
+            path_root  = PEONPAD_TILESET_PATH_ROOT_DATA;
+        }
         std::snprintf(snap->tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
-                      "%s", resolved_tileset.c_str());
+                      "%s", image_path.c_str());
         std::snprintf(snap->tileset.name, PEONPAD_TABLETOP_MAX_IDENT,
                       "%s", ts.Name.c_str());
         const PixelSize &pts = ts.getPixelTileSize();
         snap->tileset.pixel_tile_width  = static_cast<uint16_t>(pts.x);
         snap->tileset.pixel_tile_height = static_cast<uint16_t>(pts.y);
-        // Image dimensions are not exposed by CTileset; leave 0 (unknown) and
-        // let the UI derive the column count from the decoded PNG.
-        snap->tileset.image_width  = 0u;
-        snap->tileset.image_height = 0u;
+        // Known exactly when we exported the expanded graphic; otherwise left
+        // 0 (unknown) and the UI derives the column count from the decoded
+        // PNG's own dimensions (unchanged fallback behavior).
+        snap->tileset.image_width  = image_width;
+        snap->tileset.image_height = image_height;
+        snap->tileset.image_path_root = static_cast<uint8_t>(path_root);
+        snap->tileset._pad5 = 0;
     }
 
     // ── Units ────────────────────────────────────────────────────────────

@@ -114,6 +114,21 @@ final class TabletopLiveUnit {
     /// viewer-facing yaw and selection alpha are still applied.
     private var spriteMaterial: UnlitMaterial?
 
+    /// Descriptor + latest engine state for a *directional* real sprite,
+    /// retained so the per-frame billboard pass can recompute the
+    /// camera-relative directional frame (and request the matching texture) as
+    /// the board is orbited, without rescanning the snapshot every frame. `nil`
+    /// for procedural units, non-directional sprites (buildings/resources), or
+    /// before a sprite descriptor has been resolved.
+    struct DirectionalSprite {
+        var sprite: TabletopUnitSpriteInfo
+        var unit: TabletopGameplayUnit
+    }
+    private var directionalSprite: DirectionalSprite?
+    /// The camera-relative frame most recently requested, so an unchanged
+    /// viewer azimuth / animation step does not re-request the same texture.
+    private var lastResolvedDirection: TabletopSpriteDirection.Frame?
+
     /// The unit's current board-space facing (radians, 0 = board north,
     /// increasing clockwise). Starts from `spec.facingRadians` and may be
     /// updated incrementally from engine snapshots without recreating the
@@ -240,6 +255,44 @@ final class TabletopLiveUnit {
         // procedural horizontal flip left on the quad.
         quad.scale.x = abs(quad.scale.x)
         applyQuadMaterial()
+    }
+
+    /// Records the descriptor + latest engine state for a directional real
+    /// sprite so the per-frame billboard pass can pick the camera-relative
+    /// column. Passing `nil` (procedural or non-directional sprite) disables
+    /// camera-relative reselection. Resets the last-resolved cache so the next
+    /// per-frame pass always re-requests the correct frame.
+    func setDirectionalSprite(_ state: DirectionalSprite?) {
+        directionalSprite = state
+        lastResolvedDirection = nil
+    }
+
+    /// Whether this unit has a directional real sprite that should be
+    /// reselected per-frame from the viewer's azimuth.
+    var hasDirectionalSprite: Bool {
+        guard let d = directionalSprite else { return false }
+        return d.sprite.numDirections > 1
+    }
+
+    /// Resolves the camera-relative directional frame for the current viewer
+    /// azimuth, or `nil` when this unit has no directional sprite or the frame
+    /// is unchanged since it was last returned (so the caller skips a redundant
+    /// texture request). Uses `currentFacingRadians` so engine facing updates
+    /// compose with the live camera azimuth.
+    func cameraRelativeSpriteFrame(
+        viewerAzimuthRadians: Double
+    ) -> (unit: TabletopGameplayUnit, sprite: TabletopUnitSpriteInfo, frame: Int, mirror: Bool)? {
+        guard let d = directionalSprite, d.sprite.numDirections > 1 else { return nil }
+        let resolved = TabletopSpriteDirection.resolve(
+            engineFrame: d.unit.spriteFrame ?? 0,
+            engineMirror: d.unit.spriteMirror ?? false,
+            numDirections: d.sprite.numDirections,
+            flip: d.sprite.flip,
+            unitFacingRadians: currentFacingRadians,
+            viewerAzimuthRadians: viewerAzimuthRadians)
+        if resolved == lastResolvedDirection { return nil }
+        lastResolvedDirection = resolved
+        return (d.unit, d.sprite, resolved.frame, resolved.mirror)
     }
 
     /// Applies the current directional hue and the current selection alpha
@@ -501,6 +554,13 @@ enum TabletopBoardBuilder {
     /// frame and applies it when it decodes. Safe to call repeatedly (e.g. on
     /// each animation-frame change); the provider caches decoded textures so an
     /// unchanged frame does not re-read the disk.
+    ///
+    /// For a *directional* sprite the map-relative engine frame is not requested
+    /// here; instead the unit's directional descriptor is recorded so the
+    /// per-frame billboard pass (`refreshDirectionalSprites`) can request the
+    /// camera-relative column as the board is orbited. Non-directional sprites
+    /// (buildings, resources, single-frame units) request the engine frame
+    /// directly since they never re-orient with the camera.
     @MainActor
     static func refreshUnitSprite(
         _ liveUnit: TabletopLiveUnit,
@@ -510,8 +570,40 @@ enum TabletopBoardBuilder {
     ) {
         guard let materialProvider,
               let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return }
+        if sprite.numDirections > 1 {
+            // Directional unit: the per-frame camera-relative pass owns the
+            // quad texture. Record fresh engine state (facing/frame/owner) and
+            // let refreshDirectionalSprites request the matching column.
+            liveUnit.setDirectionalSprite(.init(sprite: sprite, unit: unit))
+            return
+        }
+        liveUnit.setDirectionalSprite(nil)
         materialProvider.unitMaterial(unit: unit, sprite: sprite) { [weak liveUnit] material in
             liveUnit?.setSpriteMaterial(material)
+        }
+    }
+
+    /// Per-frame pass that requests the camera-relative directional sprite for
+    /// each unit whose displayed direction changed as the viewer orbited the
+    /// board. Cheap when nothing changed: `cameraRelativeSpriteFrame` returns
+    /// `nil` for units without a directional sprite or an unchanged frame, and
+    /// the provider caches decoded textures.
+    @MainActor
+    static func refreshDirectionalSprites(
+        _ liveUnits: some Sequence<TabletopLiveUnit>,
+        viewerAzimuthRadians: Double,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        guard let materialProvider else { return }
+        for liveUnit in liveUnits {
+            guard let resolved = liveUnit.cameraRelativeSpriteFrame(
+                viewerAzimuthRadians: viewerAzimuthRadians) else { continue }
+            materialProvider.unitMaterial(
+                unit: resolved.unit, sprite: resolved.sprite,
+                frameOverride: resolved.frame, mirrorOverride: resolved.mirror
+            ) { [weak liveUnit] material in
+                liveUnit?.setSpriteMaterial(material)
+            }
         }
     }
 

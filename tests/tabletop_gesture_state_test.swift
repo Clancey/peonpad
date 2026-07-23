@@ -129,6 +129,85 @@ func testDirectionalFrameResolution() {
     }
 }
 
+// MARK: - Camera-relative directional sprite frame
+
+func testCameraRelativeSpriteDirection() {
+    // A flip sheet (Warcraft II convention): 8 directions stored in 5 columns
+    // (N, NE, E, SE, S) plus mirroring. animStep 1 => base frame 5.
+    let dirs = 8
+    let columns = dirs / 2 + 1        // 5
+
+    // Identity at viewer azimuth 0: a north-facing unit whose engine frame is
+    // the north column of animation step 1 resolves back to that exact frame.
+    let northEngineFrame = 1 * columns + 0   // 5
+    let identity = TabletopSpriteDirection.resolve(
+        engineFrame: northEngineFrame, engineMirror: false,
+        numDirections: dirs, flip: true,
+        unitFacingRadians: 0, viewerAzimuthRadians: 0)
+    expectEqual(identity.frame, northEngineFrame, "azimuth 0 reproduces the engine map-relative frame")
+    expect(!identity.mirror, "north canonical frame is not mirrored")
+
+    // Viewer directly behind the north-facing unit (azimuth pi) sees its back:
+    // the south column of the same animation step, animation preserved.
+    let behind = TabletopSpriteDirection.resolve(
+        engineFrame: northEngineFrame, engineMirror: false,
+        numDirections: dirs, flip: true,
+        unitFacingRadians: 0, viewerAzimuthRadians: .pi)
+    expectEqual(behind.frame, 1 * columns + WarcraftCanonicalFacing.south.rawValue,
+                "viewer behind a north-facing unit sees the south column")
+    expectEqual(behind.frame / columns, 1, "animation step is preserved across camera reselection")
+    expect(!behind.mirror, "south canonical frame is not mirrored")
+
+    // A west-facing view must mirror an eastern column (flip storage). A viewer
+    // at azimuth pi/2 sees a north-facing unit's west side.
+    let mirroredCase = TabletopSpriteDirection.resolve(
+        engineFrame: northEngineFrame, engineMirror: false,
+        numDirections: dirs, flip: true,
+        unitFacingRadians: 0, viewerAzimuthRadians: .pi / 2)  // viewer east of board
+    expect(mirroredCase.mirror, "a west-side view of a flip sheet is drawn mirrored")
+
+    // Non-flip sheet: all 8 directions stored as distinct columns, ordered
+    // N..NW clockwise. Identity at azimuth 0; a half-turn shows the south column.
+    let nfBase = 1 * dirs + 0        // animStep 1, north column
+    let nfIdentity = TabletopSpriteDirection.resolve(
+        engineFrame: nfBase, engineMirror: false,
+        numDirections: dirs, flip: false,
+        unitFacingRadians: 0, viewerAzimuthRadians: 0)
+    expectEqual(nfIdentity.frame, nfBase, "non-flip azimuth 0 reproduces the engine frame")
+    let nfBehind = TabletopSpriteDirection.resolve(
+        engineFrame: nfBase, engineMirror: false,
+        numDirections: dirs, flip: false,
+        unitFacingRadians: 0, viewerAzimuthRadians: .pi)
+    expectEqual(nfBehind.frame, 1 * dirs + WarcraftFacing.south.rawValue,
+                "non-flip viewer behind a north-facing unit sees the south column")
+    expect(!nfBehind.mirror, "non-flip sheets never mirror")
+
+    // Non-directional sprites (buildings, resources, single-frame effects) must
+    // never re-orient with the camera and preserve the engine mirror flag.
+    for azimuth in stride(from: 0.0, to: 2 * .pi, by: .pi / 3) {
+        let building = TabletopSpriteDirection.resolve(
+            engineFrame: 7, engineMirror: true,
+            numDirections: 1, flip: false,
+            unitFacingRadians: 0, viewerAzimuthRadians: azimuth)
+        expectEqual(building.frame, 7, "non-directional sprite frame is camera-invariant")
+        expect(building.mirror, "non-directional sprite preserves its engine mirror flag")
+    }
+
+    // Orbiting the viewer around a fixed unit must actually change the displayed
+    // column (proves camera dependence), and every result is a valid frame.
+    var seenColumns = Set<Int>()
+    for degrees in stride(from: 0, to: 360, by: 45) {
+        let azimuth = Double(degrees) * .pi / 180
+        let r = TabletopSpriteDirection.resolve(
+            engineFrame: northEngineFrame, engineMirror: false,
+            numDirections: dirs, flip: true,
+            unitFacingRadians: 0, viewerAzimuthRadians: azimuth)
+        expect(r.frame >= 0 && r.frame / columns == 1, "orbiting keeps a valid frame in animation step 1")
+        seenColumns.insert(r.frame % columns)
+    }
+    expect(seenColumns.count > 1, "orbiting the viewer changes the displayed sprite column")
+}
+
 // MARK: - Billboard yaw-facing-viewer
 
 func testBillboardOrientationFacesViewer() {
@@ -541,6 +620,7 @@ struct TabletopGestureStateTestRunner {
         testWarcraftFacingNearest()
         testCanonicalFacingMirroring()
         testDirectionalFrameResolution()
+        testCameraRelativeSpriteDirection()
         testBillboardOrientationFacesViewer()
         testOneHandTranslate()
         testOneHandRotateViaWristTwist()

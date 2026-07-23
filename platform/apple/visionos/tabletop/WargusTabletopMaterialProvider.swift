@@ -73,12 +73,20 @@ public final class WargusTabletopMaterialProvider {
 
     /// Requests the real unit sprite material for a snapshot unit's current
     /// engine-resolved frame (mirror baked into the texture).
+    ///
+    /// `frameOverride`/`mirrorOverride` let the caller request a camera-relative
+    /// directional frame (see `TabletopSpriteDirection`) rather than the unit's
+    /// own map-relative one; when `nil` the unit's engine frame/mirror are used.
     public func unitMaterial(
         unit: TabletopGameplayUnit,
         sprite: TabletopUnitSpriteInfo?,
+        frameOverride: Int? = nil,
+        mirrorOverride: Bool? = nil,
         completion: @escaping (UnlitMaterial) -> Void
     ) {
-        guard let placement = resolver.unitPlacement(unit: unit, sprite: sprite) else { return }
+        guard let placement = resolver.unitPlacement(
+            unit: unit, sprite: sprite,
+            frameOverride: frameOverride, mirrorOverride: mirrorOverride) else { return }
         material(for: placement, completion: completion)
     }
 

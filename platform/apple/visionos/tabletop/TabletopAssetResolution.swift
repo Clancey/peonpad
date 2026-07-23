@@ -242,17 +242,24 @@ public final class WargusStagedAssetResolver: @unchecked Sendable {
     /// Placement for a unit's current sprite frame, or `nil` when the unit has
     /// no sprite descriptor / an unconfinable path (procedural billboard
     /// fallback for that unit).
+    ///
+    /// `frameOverride`/`mirrorOverride` let the per-frame billboard pass supply
+    /// a *camera-relative* directional frame (see `TabletopSpriteDirection`)
+    /// instead of the engine's map-relative one; when `nil` the unit's own
+    /// engine-resolved frame/mirror are used.
     public func unitPlacement(
         unit: TabletopGameplayUnit,
-        sprite: TabletopUnitSpriteInfo?
+        sprite: TabletopUnitSpriteInfo?,
+        frameOverride: Int? = nil,
+        mirrorOverride: Bool? = nil
     ) -> TabletopAssetPlacement? {
         guard let sprite,
               sprite.frameWidth > 0,
               sprite.frameHeight > 0,
               let path = TabletopAssetPath.confine(sprite.spritePath)
         else { return nil }
-        let frame = max(0, unit.spriteFrame ?? 0)
-        let mirror = unit.spriteMirror ?? false
+        let frame = max(0, frameOverride ?? unit.spriteFrame ?? 0)
+        let mirror = mirrorOverride ?? unit.spriteMirror ?? false
         let teamTint = sprite.teamColorCount > 0
             ? TabletopTeamPalette.tint(owner: unit.owner)
             : nil

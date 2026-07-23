@@ -453,6 +453,17 @@ struct TabletopBoardView: View {
         for unit in liveUnitsByID.values {
             unit.applyDirectionalFrame(viewerBoardPosition: viewerBoardPosition, boardRoot: boardRoot)
         }
+
+        // Reselect each directional unit's sprite column for the viewer's
+        // current azimuth so units show the correct facing as the board is
+        // orbited (viewer behind a unit sees its back). Cheap: only units whose
+        // displayed direction changed request a new (cached) texture.
+        let viewerAzimuth = TabletopViewerAzimuth.aroundBoardCenter(
+            viewerBoardPosition: viewerBoardPosition)
+        TabletopBoardBuilder.refreshDirectionalSprites(
+            liveUnitsByID.values,
+            viewerAzimuthRadians: viewerAzimuth,
+            materialProvider: materialProvider)
     }
 
     // MARK: - Recenter

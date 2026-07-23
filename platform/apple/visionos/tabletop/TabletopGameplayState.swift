@@ -41,23 +41,59 @@ public struct TabletopTerrainTile: Codable, Equatable {
     public var tileX: Int
     public var tileZ: Int
     public var kind: TabletopTerrainKind
-    public init(tileX: Int, tileZ: Int, kind: TabletopTerrainKind) {
+    /// Pixel-grid frame index of this tile within the tileset image (from the
+    /// engine snapshot, ABI v3). `nil` for procedural/demo content. The render
+    /// layer combines this with the snapshot's `assets.tileset` to crop the
+    /// real tile art, falling back to a solid color when either is missing.
+    public var graphicIndex: Int?
+    public init(tileX: Int, tileZ: Int, kind: TabletopTerrainKind,
+                graphicIndex: Int? = nil) {
         self.tileX = tileX
         self.tileZ = tileZ
         self.kind = kind
+        self.graphicIndex = graphicIndex
     }
 }
 
-/// The fog-of-war state for one board tile. `isRevealed` is true when a unit
-/// with the local player's team has explored that tile.
+/// The three canonical fog-of-war states for one board tile, mirroring the
+/// engine's `EngineFogState` / `PeonPadFogState` (ABI). Ordered by increasing
+/// knowledge so `>=` comparisons read naturally.
+public enum TabletopFogVisibility: UInt8, Codable, Equatable, CaseIterable {
+    /// Never explored — rendered as an opaque dark shroud.
+    case unexplored = 0
+    /// Explored previously but not currently in sight — rendered dim/translucent.
+    case explored = 1
+    /// Currently within line of sight — rendered clear (no veil).
+    case visible = 2
+}
+
+/// The fog-of-war state for one board tile. Carries the full three-state
+/// `visibility`; `isRevealed` remains as a binary convenience (explored OR
+/// visible) so existing binary callers and tests keep working.
 public struct TabletopFogTile: Codable, Equatable {
     public var tileX: Int
     public var tileZ: Int
-    public var isRevealed: Bool
-    public init(tileX: Int, tileZ: Int, isRevealed: Bool) {
+    /// Canonical three-state visibility from the local player's POV.
+    public var visibility: TabletopFogVisibility
+
+    /// Binary reveal state: `true` when the tile is explored or visible. Setting
+    /// it is lossy (maps to `.visible`/`.unexplored`); prefer `visibility`.
+    public var isRevealed: Bool {
+        get { visibility != .unexplored }
+        set { visibility = newValue ? .visible : .unexplored }
+    }
+
+    public init(tileX: Int, tileZ: Int, visibility: TabletopFogVisibility) {
         self.tileX = tileX
         self.tileZ = tileZ
-        self.isRevealed = isRevealed
+        self.visibility = visibility
+    }
+
+    /// Backward-compatible binary initializer: `isRevealed` maps to `.visible`,
+    /// otherwise `.unexplored`.
+    public init(tileX: Int, tileZ: Int, isRevealed: Bool) {
+        self.init(tileX: tileX, tileZ: tileZ,
+                  visibility: isRevealed ? .visible : .unexplored)
     }
 }
 
@@ -76,6 +112,16 @@ public struct TabletopGameplayUnit: Codable, Equatable {
     public var facingRadians: Double
     public var tileX: Int
     public var tileZ: Int
+    /// Engine unit-type identifier (e.g. `"unit-footman"`), used by the render
+    /// layer to resolve real Wargus sprites via `TabletopAssetResolver`. Empty
+    /// for procedural/demo content that has no engine-defined type.
+    public var kind: String
+    /// Engine-resolved sprite-sheet frame index for this unit's current facing
+    /// + animation (from the snapshot, ABI v3). `nil` for procedural content.
+    public var spriteFrame: Int?
+    /// Whether the resolved sprite frame must be drawn horizontally mirrored
+    /// (ABI v3). `nil`/`false` for procedural content.
+    public var spriteMirror: Bool?
 
     public init(
         id: String,
@@ -84,7 +130,10 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         maxHP: Int,
         facingRadians: Double,
         tileX: Int,
-        tileZ: Int
+        tileZ: Int,
+        kind: String = "",
+        spriteFrame: Int? = nil,
+        spriteMirror: Bool? = nil
     ) {
         self.id = id
         self.owner = owner
@@ -93,6 +142,9 @@ public struct TabletopGameplayUnit: Codable, Equatable {
         self.facingRadians = facingRadians
         self.tileX = tileX
         self.tileZ = tileZ
+        self.kind = kind
+        self.spriteFrame = spriteFrame
+        self.spriteMirror = spriteMirror
     }
 
     /// A unit with `hp == 0` is dead. Commands (select, move, stop) that
@@ -113,6 +165,109 @@ public struct TabletopGameplaySelection: Codable, Equatable {
     }
 }
 
+// MARK: - Asset catalog (engine-owned art descriptors, ABI v3)
+
+/// The active map's tileset image descriptor, carried on the snapshot so the
+/// render layer can crop real tile art without parsing any tileset script.
+public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
+    /// Tileset image path relative to the game-data root.
+    public var imagePath: String
+    public var pixelTileWidth: Int
+    public var pixelTileHeight: Int
+    /// Tileset image dimensions in pixels; `0` when the engine did not report
+    /// them (the render layer then derives columns from the decoded image).
+    public var imageWidth: Int
+    public var imageHeight: Int
+    public var name: String
+    public init(
+        imagePath: String, pixelTileWidth: Int, pixelTileHeight: Int,
+        imageWidth: Int = 0, imageHeight: Int = 0, name: String = ""
+    ) {
+        self.imagePath = imagePath
+        self.pixelTileWidth = pixelTileWidth
+        self.pixelTileHeight = pixelTileHeight
+        self.imageWidth = imageWidth
+        self.imageHeight = imageHeight
+        self.name = name
+    }
+}
+
+/// One unit type's sprite-sheet descriptor, carried on the snapshot so the
+/// How the render layer presents a unit type (mirrors `EngineRenderCategory`,
+/// ABI v4). Buildings/resources render at their tile footprint and stay
+/// map-oriented; mobile units get camera-relative directional sprites.
+public enum TabletopRenderCategory: String, Codable, Equatable {
+    case mobile
+    case building
+    case resource
+
+    /// Whether a unit of this category billboards toward the viewer and gets
+    /// camera-relative directional sprites. Only mobile units do; buildings and
+    /// resources stay map-oriented (fixed board orientation) so they do not spin
+    /// as the board is orbited.
+    public var billboardsTowardViewer: Bool { self == .mobile }
+}
+
+/// render layer can locate and tint real sprites keyed by engine ident.
+public struct TabletopUnitSpriteInfo: Codable, Equatable {
+    /// Sprite-sheet path relative to the game-data root.
+    public var spritePath: String
+    public var frameWidth: Int
+    public var frameHeight: Int
+    /// Directions stored in the sheet (e.g. 1, 4, 5, 8).
+    public var numDirections: Int
+    /// Whether the sheet stores five directions and mirrors the other three.
+    public var flip: Bool
+    /// Palette span remapped for team color (`teamColorCount == 0` = none).
+    public var teamColorStart: Int
+    public var teamColorCount: Int
+    /// Render category (ABI v4): mobile / building / resource.
+    public var renderCategory: TabletopRenderCategory
+    /// Tile footprint in map tiles (ABI v4); at least 1×1.
+    public var footprintWidth: Int
+    public var footprintHeight: Int
+    public init(
+        spritePath: String, frameWidth: Int, frameHeight: Int,
+        numDirections: Int, flip: Bool,
+        teamColorStart: Int = 0, teamColorCount: Int = 0,
+        renderCategory: TabletopRenderCategory = .mobile,
+        footprintWidth: Int = 1, footprintHeight: Int = 1
+    ) {
+        self.spritePath = spritePath
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
+        self.numDirections = numDirections
+        self.flip = flip
+        self.teamColorStart = teamColorStart
+        self.teamColorCount = teamColorCount
+        self.renderCategory = renderCategory
+        self.footprintWidth = max(1, footprintWidth)
+        self.footprintHeight = max(1, footprintHeight)
+    }
+}
+
+/// The engine-owned art descriptors for a snapshot: the map tileset plus a
+/// per-unit-type sprite descriptor keyed by engine ident (e.g.
+/// `"unit-footman"`). Absent (`nil`) for procedural/demo snapshots and for
+/// pre-v3 engines, so the render layer falls back to procedural content.
+public struct TabletopAssetCatalog: Codable, Equatable {
+    public var tileset: TabletopTilesetInfo?
+    public var unitTypes: [String: TabletopUnitSpriteInfo]
+    public init(
+        tileset: TabletopTilesetInfo? = nil,
+        unitTypes: [String: TabletopUnitSpriteInfo] = [:]
+    ) {
+        self.tileset = tileset
+        self.unitTypes = unitTypes
+    }
+
+    /// The sprite descriptor for a unit ident, or `nil` when the catalog has
+    /// no entry (missing sprite → procedural billboard fallback for that unit).
+    public func sprite(forUnitKind kind: String) -> TabletopUnitSpriteInfo? {
+        unitTypes[kind]
+    }
+}
+
 // MARK: - Versioned snapshot
 
 /// The complete, serialisable gameplay state. All fields are value types;
@@ -129,6 +284,10 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
     public var fogMask: [TabletopFogTile]
     public var units: [TabletopGameplayUnit]
     public var selection: TabletopGameplaySelection
+    /// Engine-owned art descriptors (tileset + per-unit sprite sheets, ABI v3).
+    /// `nil` for procedural/demo snapshots; the render layer then uses
+    /// procedural terrain colors and billboards.
+    public var assets: TabletopAssetCatalog?
 
     public init(
         version: Int,
@@ -136,7 +295,8 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         terrain: [TabletopTerrainTile],
         fogMask: [TabletopFogTile],
         units: [TabletopGameplayUnit],
-        selection: TabletopGameplaySelection
+        selection: TabletopGameplaySelection,
+        assets: TabletopAssetCatalog? = nil
     ) {
         self.version = version
         self.mapSize = mapSize
@@ -144,6 +304,7 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         self.fogMask = fogMask
         self.units = units
         self.selection = selection
+        self.assets = assets
     }
 
     // MARK: Convenience accessors
@@ -156,6 +317,12 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
     /// Fog state at the given tile. Off-map tiles are treated as unrevealed.
     public func fog(atTileX x: Int, tileZ z: Int) -> Bool {
         fogMask.first(where: { $0.tileX == x && $0.tileZ == z })?.isRevealed ?? false
+    }
+
+    /// Canonical three-state fog visibility at the given tile. Off-map tiles are
+    /// treated as `.unexplored`.
+    public func fogVisibility(atTileX x: Int, tileZ z: Int) -> TabletopFogVisibility {
+        fogMask.first(where: { $0.tileX == x && $0.tileZ == z })?.visibility ?? .unexplored
     }
 
     /// The currently selected unit, but only if it is alive (HP > 0). Dead

@@ -10,13 +10,15 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/build-visionos-tabletop.sh <xrsimulator|xros> [--launch] [--screenshot PATH]
 
-Builds the native visionOS tabletop foundation app: a self-contained
-SwiftUI + RealityKit executable compiled directly with swiftc (no Xcode
-project, no CMake). This is entirely separate from the SDL3 smoke shell
-built by build-visionos-shell.sh -- distinct bundle id, distinct executable,
-distinct app bundle -- and from the Designed-for-iPad Warcraft II app.
---launch and --screenshot are supported only for xrsimulator. There is no
-gameplay here: a procedural placeable board plus test unit billboards only.
+Builds the native visionOS tabletop app: a SwiftUI + RealityKit executable
+compiled directly with swiftc (no Xcode project) and linked against the real
+Stratagus/Wargus SDL3 engine + the tabletop bridge, so it boots a live
+scenario and renders it on the placeable 3D board. This is separate from the
+SDL3 smoke shell built by build-visionos-shell.sh -- distinct bundle id,
+executable, and app bundle -- and from the Designed-for-iPad Warcraft II app.
+--launch and --screenshot are supported only for xrsimulator. The engine
+static libraries are built on demand via build-visionos-engine-libs.sh. No
+proprietary game data or art is bundled; the app reads staged data at runtime.
 EOF
 }
 
@@ -108,11 +110,30 @@ SDK_PATH=$(xcrun --sdk "$TARGET" --show-sdk-path) || {
 TABLETOP_SRC_DIR="$ROOT_DIR/platform/apple/visionos/tabletop"
 SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopGestureState.swift"
+  "$TABLETOP_SRC_DIR/TabletopBoardLayers.swift"
+  "$TABLETOP_SRC_DIR/TabletopIndirectNavigation.swift"
   "$TABLETOP_SRC_DIR/TabletopGameplayState.swift"
+  "$TABLETOP_SRC_DIR/TabletopTransport.swift"
+  "$TABLETOP_SRC_DIR/TabletopGameplaySource.swift"
+  "$TABLETOP_SRC_DIR/TabletopBoardReconciler.swift"
+  "$TABLETOP_SRC_DIR/TabletopCommandHarness.swift"
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
-  "$TABLETOP_SRC_DIR/TabletopPaletteView.swift"
+  "$TABLETOP_SRC_DIR/TabletopActionPanel.swift"
+  "$TABLETOP_SRC_DIR/TabletopActionPanelView.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"
   "$TABLETOP_SRC_DIR/TabletopApp.swift"
+  "$TABLETOP_SRC_DIR/EngineTabletopModel.swift"
+  "$TABLETOP_SRC_DIR/TabletopSnapshotConverter.swift"
+  "$TABLETOP_SRC_DIR/EngineCommandEncoder.swift"
+  "$TABLETOP_SRC_DIR/TabletopMapFit.swift"
+  "$TABLETOP_SRC_DIR/WargusTabletopAssetResolver.swift"
+  "$TABLETOP_SRC_DIR/TabletopAssetResolution.swift"
+  "$TABLETOP_SRC_DIR/WargusTabletopMaterialProvider.swift"
+  "$TABLETOP_SRC_DIR/EngineStartupPlan.swift"
+  "$TABLETOP_SRC_DIR/EngineTabletopTransport.swift"
+  "$TABLETOP_SRC_DIR/TabletopChunkGeometry.swift"
+  "$TABLETOP_SRC_DIR/TabletopFogMap.swift"
+  "$TABLETOP_SRC_DIR/TabletopChunkBoard.swift"
 )
 for source in "${SOURCES[@]}"; do
   [[ -f "$source" ]] || {
@@ -121,19 +142,103 @@ for source in "${SOURCES[@]}"; do
   }
 done
 
+# ── Engine linkage ─────────────────────────────────────────────────────────
+# The production tabletop app links the real Stratagus/Wargus engine + SDL3 so
+# it can boot a live scenario and drive the board from published snapshots. The
+# Objective-C++ engine host bridges Swift to the engine entry point and the
+# bridge C ABI. Build the engine static libraries first (with the tabletop
+# bridge compiled in) if they are not already present.
+ENGINE_BUILD=${PEONPAD_VISIONOS_ENGINE_BUILD_DIR:-$ROOT_DIR/build/visionos-$TARGET-engine}
+ENGINE_BUILD=${ENGINE_BUILD:A}
+ENGINE_ARCHIVE="$ENGINE_BUILD/engine/libstratagus_lib.a"
+if [[ ! -f "$ENGINE_ARCHIVE" ]]; then
+  print "engine libraries not found; building them for $TARGET…"
+  PEONPAD_VISIONOS_ENGINE_BUILD_DIR="$ENGINE_BUILD" \
+    "$SCRIPT_DIR/build-visionos-engine-libs.sh" "$TARGET"
+fi
+[[ -f "$ENGINE_ARCHIVE" ]] || {
+  print -u2 "engine archive missing after build: $ENGINE_ARCHIVE"
+  exit 1
+}
+
+BRIDGE_DIR="$TABLETOP_SRC_DIR/bridge"
+BRIDGE_HEADER="$BRIDGE_DIR/PeonPadTabletop-Bridging-Header.h"
+ENGINE_HOST_SRC="$BRIDGE_DIR/PeonPadEngineHost.mm"
+for f in "$BRIDGE_HEADER" "$ENGINE_HOST_SRC"; do
+  [[ -f "$f" ]] || { print -u2 "missing bridge file: $f"; exit 1; }
+done
+
+# The full set of engine + SDL3 + vendored-media static libraries produced by
+# build-visionos-engine-libs.sh. Order is not significant to the Apple linker.
+ENGINE_LIBS=(
+  "$ENGINE_BUILD/engine/libstratagus_lib.a"
+  "$ENGINE_BUILD/engine/libguisan_lib.a"
+  "$ENGINE_BUILD/libpeonpad_sdl3_input_adapter.a"
+  "$ENGINE_BUILD/libpeonpad_sdl3_mixer_adapter.a"
+  "$ENGINE_BUILD/_deps/peonpad_sdl3_image-build/libSDL3_image.a"
+  "$ENGINE_BUILD/_deps/peonpad_sdl3_mixer-build/libSDL3_mixer.a"
+  "$ENGINE_BUILD/_deps/peonpad_sdl3-build/libSDL3.a"
+  "$ENGINE_BUILD/engine/lua/src/lua-build/liblua51.a"
+  "$ENGINE_BUILD/engine/lua/src/lua-build/libtoluapp51.a"
+  "$ENGINE_BUILD/engine/png/src/png-build/libpng16.a"
+  "$ENGINE_BUILD/engine/jpeg/src/jpeg-build/libjpeg.a"
+  "$ENGINE_BUILD/engine/lcms/src/lcms-build/liblcms.a"
+  "$ENGINE_BUILD/engine/mng/src/mng-build/libmng.a"
+  "$ENGINE_BUILD/engine/libtheora.a"
+  "$ENGINE_BUILD/engine/vorbis/src/vorbis-build/lib/libvorbisfile.a"
+  "$ENGINE_BUILD/engine/vorbis/src/vorbis-build/lib/libvorbisenc.a"
+  "$ENGINE_BUILD/engine/vorbis/src/vorbis-build/lib/libvorbis.a"
+  "$ENGINE_BUILD/engine/ogg/src/ogg-build/libogg.a"
+  "$ENGINE_BUILD/engine/bzip2/src/bzip2-build/libbz2.a"
+  "$ENGINE_BUILD/engine/zlib/src/zlib-build/libz.a"
+)
+for lib in "${ENGINE_LIBS[@]}"; do
+  [[ -f "$lib" ]] || { print -u2 "missing engine library: $lib"; exit 1; }
+done
+
+ENGINE_FRAMEWORKS=(
+  -framework Foundation -framework UIKit -framework Metal -framework QuartzCore
+  -framework CoreGraphics -framework AVFoundation -framework AudioToolbox
+  -framework CoreAudio -framework CoreMedia -framework CoreVideo
+  -framework CoreMotion -framework GameController -framework CoreHaptics
+  -framework ImageIO -framework Security -framework UniformTypeIdentifiers
+)
+
 cmake -E remove_directory "$BUILD_DIR"
 cmake -E make_directory "$BUILD_DIR"
 
 APP="$BUILD_DIR/$APP_NAME"
 cmake -E make_directory "$APP"
 
+# Compile the Objective-C++ engine host (boots the engine on a dedicated
+# thread and drives the bridge C ABI) for the target.
+ENGINE_HOST_OBJ="$BUILD_DIR/PeonPadEngineHost.o"
+xcrun -sdk "$TARGET" clang++ \
+  -target "$SWIFT_TARGET_TRIPLE" \
+  -isysroot "$SDK_PATH" \
+  -std=c++17 -fobjc-arc -O \
+  -I "$ROOT_DIR/platform/bridge" \
+  -I "$BRIDGE_DIR" \
+  -c "$ENGINE_HOST_SRC" \
+  -o "$ENGINE_HOST_OBJ"
+
+# Compile the Swift app and link it against the engine host object, the engine
+# + SDL3 static libraries, and the required system frameworks. The bridging
+# header exposes the bridge C ABI and the engine host to Swift.
 xcrun -sdk "$TARGET" swiftc \
   -target "$SWIFT_TARGET_TRIPLE" \
   -sdk "$SDK_PATH" \
   -parse-as-library \
   -O \
   -emit-executable \
+  -import-objc-header "$BRIDGE_HEADER" \
+  -I "$ROOT_DIR/platform/bridge" \
+  -I "$BRIDGE_DIR" \
   "${SOURCES[@]}" \
+  "$ENGINE_HOST_OBJ" \
+  "${ENGINE_LIBS[@]}" \
+  "${ENGINE_FRAMEWORKS[@]}" \
+  -lc++ -liconv \
   -o "$APP/$EXECUTABLE_NAME"
 
 sed \
@@ -161,7 +266,7 @@ print
 print "PeonPad native visionOS tabletop app built:"
 print "  app:       $APP"
 print "  target:    arm64 $TARGET, visionOS 2.0+"
-print "  payload:   procedural placeable board + test unit billboards; no gameplay, no proprietary data"
+print "  payload:   live Stratagus/Wargus engine on the placeable board; reads staged data at runtime; no proprietary data or art bundled"
 
 if [[ "$TARGET" == xros ]]; then
   print "  signing:   unsigned"

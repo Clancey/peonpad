@@ -30,6 +30,10 @@ option(PEONPAD_ENABLE_SDL3
   "Build the direct SDL3 lane (SDL2 remains the default)"
   OFF
 )
+option(PEONPAD_ENABLE_TABLETOP
+  "Compile the visionOS live-tabletop bridge hooks into the engine (defines PEONPAD_TABLETOP for stratagus_lib so the sim thread publishes snapshots)"
+  OFF
+)
 
 set(PEONPAD_VISIONOS OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
@@ -43,6 +47,17 @@ include(CTest)
 if(PEONPAD_ENABLE_SDL3)
   include(cmake/PeonPadSDL3.cmake)
 endif()
+
+# ── Tabletop bridge library (pure infrastructure, no Stratagus globals) ─────
+# This target compiles without PEONPAD_TABLETOP so it carries no engine
+# dependencies and can be linked into the standalone test binary.
+add_library(peonpad_tabletop_bridge STATIC
+  platform/bridge/PeonPadTabletopBridge.cpp
+)
+target_include_directories(peonpad_tabletop_bridge PUBLIC
+  platform/bridge
+)
+target_compile_features(peonpad_tabletop_bridge PUBLIC cxx_std_17)
 
 if(BUILD_TESTING AND
     NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND
@@ -89,6 +104,16 @@ if(BUILD_TESTING AND
     NAME peonpad_script_guardrails
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tests/script-guardrails.sh"
   )
+
+  add_executable(peonpad_tabletop_bridge_test
+    tests/tabletop_bridge_test.cpp
+  )
+  target_compile_features(peonpad_tabletop_bridge_test PRIVATE cxx_std_17)
+  target_link_libraries(peonpad_tabletop_bridge_test PRIVATE
+    peonpad_tabletop_bridge
+  )
+  add_test(NAME peonpad_tabletop_bridge
+    COMMAND peonpad_tabletop_bridge_test)
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -196,6 +221,32 @@ if(PEONPAD_ENABLE_ENGINE)
     add_subdirectory(engine/stratagus "${PEONPAD_ENGINE_BINARY_DIR}")
     if(TARGET peonpad_stratagus_host_tolua)
       add_dependencies(stratagus_lib peonpad_stratagus_host_tolua)
+    endif()
+
+    # Engine-side tabletop bridge.
+    #
+    # The capture functions (peonpad_tabletop_publish_snapshot /
+    # _drain_commands) read Stratagus globals (UnitManager, Map, Selected,
+    # GameCycle…) and therefore need the engine's full include tree (SDL3, Lua,
+    # third-party). Rather than re-derive that tree on a standalone target, the
+    # bridge source is compiled directly into stratagus_lib so it inherits the
+    # engine's directory-scoped include paths, and the extern "C" symbols the
+    # mainloop.cpp #ifdef PEONPAD_TABLETOP block references resolve at link time.
+    #
+    # This is gated on PEONPAD_ENABLE_TABLETOP so other lanes (macOS baseline,
+    # Designed-for-iPad) are unaffected: with the option OFF the engine neither
+    # compiles the hooks nor the bridge capture.
+    if(PEONPAD_ENABLE_TABLETOP)
+      target_sources(stratagus_lib PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge/PeonPadTabletopBridge.cpp"
+      )
+      target_include_directories(stratagus_lib PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/platform/bridge"
+      )
+      # PEONPAD_TABLETOP on the whole library makes mainloop.cpp emit the
+      # drain/publish hook calls and compiles the bridge's engine-capture path
+      # (rather than the standalone stubs).
+      target_compile_definitions(stratagus_lib PRIVATE PEONPAD_TABLETOP=1)
     endif()
   else()
     ExternalProject_Add(peonpad_stratagus

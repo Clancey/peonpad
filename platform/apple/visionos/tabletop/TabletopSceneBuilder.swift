@@ -33,22 +33,45 @@ struct TabletopUnitSpec {
     var tileZ: Int
     var facingRadians: Double
     var tint: UIColor
+    /// Engine unit-type ident (e.g. "unit-footman") for asset resolution.
+    var unitKind: String = ""
+    /// Render category (ABI v4). Buildings/resources render at their footprint
+    /// and stay map-oriented; mobile units keep camera-relative directional art.
+    var renderCategory: TabletopRenderCategory = .mobile
+    /// Tile footprint (ABI v4); at least 1×1. Buildings/resources scale their
+    /// billboard to span this many tiles.
+    var footprintWidth: Int = 1
+    var footprintHeight: Int = 1
 }
 
 enum TabletopBoardMetrics {
-    /// Board is a square grid of tiles, in meters.
-    static let tileSize: Float = 0.12
-    static let tileCountPerSide = 7
-    static var boardExtent: Float { tileSize * Float(tileCountPerSide) }
-    static var halfExtent: Float { boardExtent / 2 }
+    /// Fixed physical footprint of the board (meters). An arbitrary engine map
+    /// is scaled to fit this square via `TabletopMapFit`, so the user always
+    /// manipulates the same-size board regardless of scenario dimensions.
+    static let physicalExtent: Float = 0.84
+    static var halfExtent: Float { physicalExtent / 2 }
+
+    /// Reference tile size (the original 7×7 demo board's tile). Unit body
+    /// dimensions scale relative to this so units stay proportional as the map
+    /// grows and tiles shrink.
+    static let referenceTileSize: Float = 0.12
 
     static let unitHeight: Float = 0.16
     static let unitRadius: Float = 0.03
 
-    /// World-space position (relative to the board root) of the center of
-    /// tile (tileX, tileZ), with (0, 0) at the board's own center.
-    static func tileCenter(tileX: Int, tileZ: Int) -> SIMD3<Float> {
-        SIMD3<Float>(Float(tileX) * tileSize, 0, Float(tileZ) * tileSize)
+    /// The fit that scales the given snapshot's map onto the physical board.
+    static func fit(for snapshot: TabletopGameplaySnapshot) -> TabletopMapFit {
+        TabletopMapFit(
+            width: snapshot.mapSize.width,
+            height: snapshot.mapSize.height,
+            boardExtent: physicalExtent)
+    }
+
+    /// Board-local position (relative to the board root) of the center of tile
+    /// (tileX, tileZ) under the given fit, with (0,0) at the board center.
+    static func tileCenter(_ fit: TabletopMapFit, tileX: Int, tileZ: Int) -> SIMD3<Float> {
+        let c = fit.tileCenter(tileX: tileX, tileZ: tileZ)
+        return SIMD3<Float>(c.x, 0, c.z)
     }
 }
 
@@ -79,6 +102,8 @@ final class TabletopLiveUnit {
     let root: Entity
     let quad: ModelEntity
     let body: ModelEntity
+    /// Bright disc shown on the terrain under a selected unit.
+    let selectionRing: ModelEntity
     let baseMaterial: UnlitMaterial
     let mirroredMaterial: UnlitMaterial
 
@@ -89,46 +114,129 @@ final class TabletopLiveUnit {
     /// update instead of independently overwriting each other's alpha.
     private(set) var isSelected = false
     private var currentHue: UIColor
+    /// When a real Wargus sprite material has been resolved for this unit, it
+    /// is stored here and drawn on the quad instead of the procedural canonical
+    /// hue. The engine already baked facing + animation + mirror into the
+    /// texture, so the per-frame directional re-tint/mirror is skipped; only the
+    /// viewer-facing yaw and selection alpha are still applied.
+    private var spriteMaterial: UnlitMaterial?
 
-    init(spec: TabletopUnitSpec) {
+    /// Descriptor + latest engine state for a *directional* real sprite,
+    /// retained so the per-frame billboard pass can recompute the
+    /// camera-relative directional frame (and request the matching texture) as
+    /// the board is orbited, without rescanning the snapshot every frame. `nil`
+    /// for procedural units, non-directional sprites (buildings/resources), or
+    /// before a sprite descriptor has been resolved.
+    struct DirectionalSprite {
+        var sprite: TabletopUnitSpriteInfo
+        var unit: TabletopGameplayUnit
+    }
+    private var directionalSprite: DirectionalSprite?
+    /// The camera-relative frame most recently requested, so an unchanged
+    /// viewer azimuth / animation step does not re-request the same texture.
+    private var lastResolvedDirection: TabletopSpriteDirection.Frame?
+
+    /// The unit's current board-space facing (radians, 0 = board north,
+    /// increasing clockwise). Starts from `spec.facingRadians` and may be
+    /// updated incrementally from engine snapshots without recreating the
+    /// entity. Read by `applyDirectionalFrame` every SceneEvents.Update tick.
+    var currentFacingRadians: Double
+
+    /// The unit's current owner/team tint. Updated when an engine snapshot
+    /// reports an ownership change; drives both body and quad materials.
+    private var currentOwnerTint: UIColor
+
+    init(spec: TabletopUnitSpec, fit: TabletopMapFit) {
         self.spec = spec
         self.currentHue = spec.tint
+        self.currentFacingRadians = spec.facingRadians
+        self.currentOwnerTint = spec.tint
+
+        // Scale unit body/quad with the fitted tile size so units stay
+        // proportional as the map grows and tiles shrink, with a floor so units
+        // stay readable (not tiny) even on large maps. Buildings/resources are
+        // sized to span their tile footprint instead, so a 4×4 town hall reads
+        // as much larger than a 1×1 footman and covers the tiles it occupies.
+        let scale = max(fit.tileSize / TabletopBoardMetrics.referenceTileSize, 0.34)
+        let isStructure = spec.renderCategory != .mobile
+        let footTiles = Float(max(spec.footprintWidth, spec.footprintHeight))
+        let unitHeight: Float
+        let unitRadius: Float
+        let quadWidth:  Float
+        let quadHeight: Float
+        if isStructure {
+            // Footprint span in board units; the billboard fills its footprint
+            // and stands roughly as tall as its larger tile dimension.
+            let span = fit.tileSize * footTiles
+            unitRadius = span * 0.5
+            unitHeight = span * 1.05
+            quadWidth  = fit.tileSize * Float(max(1, spec.footprintWidth)) * 0.98
+            quadHeight = unitHeight
+        } else {
+            unitHeight = TabletopBoardMetrics.unitHeight * scale
+            unitRadius = TabletopBoardMetrics.unitRadius * scale
+            quadWidth  = unitRadius * 1.7
+            quadHeight = unitHeight * 0.85
+        }
 
         let root = Entity()
         root.name = "unit.\(spec.id)"
-        root.position = TabletopBoardMetrics.tileCenter(tileX: spec.tileX, tileZ: spec.tileZ)
+        root.position = TabletopBoardMetrics.tileCenter(fit, tileX: spec.tileX, tileZ: spec.tileZ)
         root.components.set(InputTargetComponent())
         root.components.set(
             CollisionComponent(shapes: [
                 .generateBox(size: SIMD3<Float>(
-                    TabletopBoardMetrics.unitRadius * 2.2,
-                    TabletopBoardMetrics.unitHeight,
-                    TabletopBoardMetrics.unitRadius * 2.2
+                    unitRadius * 2.2,
+                    unitHeight,
+                    unitRadius * 2.2
                 ))
-                .offsetBy(translation: [0, TabletopBoardMetrics.unitHeight / 2, 0])
+                .offsetBy(translation: [0, unitHeight / 2, 0])
             ])
         )
         root.components.set(HoverEffectComponent())
 
         let body = ModelEntity(
-            mesh: .generateCylinder(height: TabletopBoardMetrics.unitHeight, radius: TabletopBoardMetrics.unitRadius),
+            mesh: .generateCylinder(height: unitHeight, radius: unitRadius),
             materials: [translucentUnlitMaterial(spec.tint.withAlphaComponent(0.22))]
         )
         body.name = root.name + ".body"
-        body.position = [0, TabletopBoardMetrics.unitHeight / 2, 0]
+        body.position = [0, unitHeight / 2, 0]
         root.addChild(body)
 
         let quad = ModelEntity(
-            mesh: .generatePlane(width: TabletopBoardMetrics.unitRadius * 1.7, height: TabletopBoardMetrics.unitHeight * 0.85),
+            mesh: .generatePlane(width: quadWidth, height: quadHeight),
             materials: [translucentUnlitMaterial(spec.tint)]
         )
         quad.name = root.name + ".quad"
-        quad.position = [0, TabletopBoardMetrics.unitHeight / 2, 0]
+        quad.position = [0, unitHeight / 2, 0]
         root.addChild(quad)
+
+        // Contact shadow: a soft dark disc on the terrain directly under the
+        // unit, so the upright billboard reads as standing *on* the board
+        // rather than floating.
+        let shadow = ModelEntity(
+            mesh: .generateCylinder(height: 0.0004, radius: unitRadius * 1.7),
+            materials: [translucentUnlitMaterial(UIColor(white: 0, alpha: 0.33))]
+        )
+        shadow.name = root.name + ".shadow"
+        shadow.position = [0, 0.0007, 0]
+        root.addChild(shadow)
+
+        // Selection ring: a bright disc just under the shadow, enabled only when
+        // the unit is selected, anchored at the unit's feet (terrain height).
+        let ring = ModelEntity(
+            mesh: .generateCylinder(height: 0.0003, radius: unitRadius * 2.4),
+            materials: [translucentUnlitMaterial(UIColor.systemYellow.withAlphaComponent(0.9))]
+        )
+        ring.name = root.name + ".selectionRing"
+        ring.position = [0, 0.0003, 0]
+        ring.isEnabled = false
+        root.addChild(ring)
 
         self.root = root
         self.quad = quad
         self.body = body
+        self.selectionRing = ring
         self.baseMaterial = translucentUnlitMaterial(spec.tint)
         self.mirroredMaterial = translucentUnlitMaterial(spec.tint.withAlphaComponent(0.85))
     }
@@ -140,8 +248,78 @@ final class TabletopLiveUnit {
     /// (re)decide the selection alpha itself.
     func setSelected(_ selected: Bool) {
         isSelected = selected
+        selectionRing.isEnabled = selected
         applyQuadMaterial()
         applyBodyMaterial()
+    }
+
+    /// Shows or hides this unit to reflect its alive/dead state. A dead unit
+    /// (hp == 0) is disabled so it neither renders nor receives input.
+    func setAlive(_ alive: Bool) {
+        root.isEnabled = alive
+    }
+
+    /// Updates the owner/team tint (e.g. after a capture or engine-driven
+    /// ownership change) and refreshes all materials immediately.
+    func updateOwnerTint(_ tint: UIColor) {
+        currentOwnerTint = tint
+        // Reset the directional hue to the new base tint so the next
+        // applyDirectionalFrame uses the correct colour for canonical-
+        // direction shading.
+        currentHue = tint
+        applyQuadMaterial()
+        applyBodyMaterial()
+    }
+
+    /// Applies a real Wargus sprite material to the quad (from the material
+    /// provider). Composes with the current selection alpha. Passing a new
+    /// material for a changed engine frame swaps the texture without recreating
+    /// the entity; passing repeatedly with the same frame is cheap (the
+    /// provider caches the decoded texture).
+    func setSpriteMaterial(_ material: UnlitMaterial) {
+        spriteMaterial = material
+        // A real sprite bakes its own mirror into the texture, so clear any
+        // procedural horizontal flip left on the quad.
+        quad.scale.x = abs(quad.scale.x)
+        applyQuadMaterial()
+    }
+
+    /// Records the descriptor + latest engine state for a directional real
+    /// sprite so the per-frame billboard pass can pick the camera-relative
+    /// column. Passing `nil` (procedural or non-directional sprite) disables
+    /// camera-relative reselection. Resets the last-resolved cache so the next
+    /// per-frame pass always re-requests the correct frame.
+    func setDirectionalSprite(_ state: DirectionalSprite?) {
+        directionalSprite = state
+        lastResolvedDirection = nil
+    }
+
+    /// Whether this unit has a directional real sprite that should be
+    /// reselected per-frame from the viewer's azimuth.
+    var hasDirectionalSprite: Bool {
+        guard let d = directionalSprite else { return false }
+        return d.sprite.numDirections > 1
+    }
+
+    /// Resolves the camera-relative directional frame for the current viewer
+    /// azimuth, or `nil` when this unit has no directional sprite or the frame
+    /// is unchanged since it was last returned (so the caller skips a redundant
+    /// texture request). Uses `currentFacingRadians` so engine facing updates
+    /// compose with the live camera azimuth.
+    func cameraRelativeSpriteFrame(
+        viewerAzimuthRadians: Double
+    ) -> (unit: TabletopGameplayUnit, sprite: TabletopUnitSpriteInfo, frame: Int, mirror: Bool)? {
+        guard let d = directionalSprite, d.sprite.numDirections > 1 else { return nil }
+        let resolved = TabletopSpriteDirection.resolve(
+            engineFrame: d.unit.spriteFrame ?? 0,
+            engineMirror: d.unit.spriteMirror ?? false,
+            numDirections: d.sprite.numDirections,
+            flip: d.sprite.flip,
+            unitFacingRadians: currentFacingRadians,
+            viewerAzimuthRadians: viewerAzimuthRadians)
+        if resolved == lastResolvedDirection { return nil }
+        lastResolvedDirection = resolved
+        return (d.unit, d.sprite, resolved.frame, resolved.mirror)
     }
 
     /// Applies the current directional hue and the current selection alpha
@@ -149,23 +327,38 @@ final class TabletopLiveUnit {
     /// `applyDirectionalFrame` ever clobbers the other's contribution.
     private func applyQuadMaterial() {
         let alpha = TabletopUnitAppearance.quadAlpha(selected: isSelected)
+        if let spriteMaterial {
+            var material = spriteMaterial
+            material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+            quad.model?.materials = [material]
+            return
+        }
         quad.model?.materials = [translucentUnlitMaterial(currentHue.withAlphaComponent(CGFloat(alpha)))]
     }
 
-    /// Applies the current selection alpha to the cylindrical body. The
-    /// body has no directional hue of its own (it always uses the unit's
-    /// base tint), so this only needs the selection state.
+    /// Applies the current selection alpha to the cylindrical body using the
+    /// current owner tint. The body has no directional hue of its own, so
+    /// this only needs selection state and the current owner colour.
     private func applyBodyMaterial() {
         let alpha = TabletopUnitAppearance.bodyAlpha(selected: isSelected)
-        body.model?.materials = [translucentUnlitMaterial(spec.tint.withAlphaComponent(CGFloat(alpha)))]
+        body.model?.materials = [translucentUnlitMaterial(currentOwnerTint.withAlphaComponent(CGFloat(alpha)))]
     }
 
     /// Applies this frame's directional-frame resolution: rotates the quad
     /// to face the viewer around the board's vertical normal, mirrors it
     /// horizontally when the resolved canonical facing requires it, and
     /// tints it to make the selected canonical direction legible even
-    /// without real sprite art.
+    /// without real sprite art. Uses `currentFacingRadians` rather than
+    /// the immutable `spec.facingRadians` so engine-driven facing updates
+    /// take effect on the next frame without recreating the entity.
     func applyDirectionalFrame(viewerBoardPosition: TabletopPoint3D, boardRoot: Entity) {
+        // Buildings and resources are map-oriented: they keep the fixed
+        // board-space orientation set at build time (their quad's neutral
+        // +Z/viewer-facing normal) and are never re-yawed toward the viewer, so
+        // they do not spin as the board is orbited. Only mobile units billboard
+        // toward the camera and reselect their directional sprite.
+        guard spec.renderCategory.billboardsTowardViewer else { return }
+
         let unitBoardPosition = TabletopPoint3D(
             x: Double(root.position(relativeTo: boardRoot).x),
             y: 0,
@@ -173,7 +366,7 @@ final class TabletopLiveUnit {
         )
         let viewerAzimuth = TabletopViewerAzimuth.aroundBoardCenter(viewerBoardPosition: viewerBoardPosition)
         let resolution = TabletopDirectionalFrame.resolve(
-            unitFacingRadians: spec.facingRadians,
+            unitFacingRadians: currentFacingRadians,
             viewerAzimuthRadians: viewerAzimuth
         )
 
@@ -187,6 +380,13 @@ final class TabletopLiveUnit {
             viewerBoardPosition: viewerBoardPosition
         )
         quad.orientation = simd_quatf(angle: Float(yaw), axis: [0, 1, 0])
+
+        // With a real Wargus sprite, the engine already resolved the facing +
+        // animation frame and mirror into the texture, so the quad only needs
+        // to yaw toward the viewer — skip the procedural canonical re-tint and
+        // horizontal flip (and don't reassign the material every frame, which
+        // would churn the texture).
+        if spriteMaterial != nil { return }
 
         // Mirroring is represented procedurally (no sprite art is embedded):
         // a horizontally-flipped scale plus a dimmer tint stands in for
@@ -235,12 +435,13 @@ extension TabletopUnitSpec {
         self.tileZ = gameplayUnit.tileZ
         self.facingRadians = gameplayUnit.facingRadians
         self.tint = TabletopBoardBuilder.ownerTint(owner: gameplayUnit.owner)
+        self.unitKind = gameplayUnit.kind
     }
 }
 
 // MARK: - Terrain color mapping
 
-private extension TabletopTerrainKind {
+extension TabletopTerrainKind {
     /// A representative `UIColor` for each terrain kind, used to tint board
     /// tiles when the board is built from a `TabletopGameplaySnapshot`.
     var tileColor: UIColor {
@@ -265,48 +466,232 @@ enum TabletopBoardBuilder {
         }
     }
 
-    /// Builds the board surface from a gameplay snapshot: one tile quad per
-    /// map cell (terrain-coloured) plus a translucent fog-of-war plane just
-    /// above it. Both are parented to `boardRoot` so any board
-    /// translate/rotate/scale carries them together.
-    static func addSurface(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) {
-        let half = TabletopBoardMetrics.tileCountPerSide / 2
-        for tileZ in -half...half {
-            for tileX in -half...half {
-                let color = snapshot.terrain(atTileX: tileX, tileZ: tileZ).tileColor
-                let tile = ModelEntity(
-                    mesh: .generatePlane(
-                        width: TabletopBoardMetrics.tileSize * 0.96,
-                        depth: TabletopBoardMetrics.tileSize * 0.96
-                    ),
-                    materials: [translucentUnlitMaterial(color)]
-                )
-                tile.name = "board.tile.\(tileX).\(tileZ)"
-                tile.position = TabletopBoardMetrics.tileCenter(tileX: tileX, tileZ: tileZ)
-                boardRoot.addChild(tile)
+    /// Builds the board surface from a gameplay snapshot: one terrain quad per
+    /// map cell plus a per-tile fog-of-war quad above it (hidden when the tile
+    /// is revealed, shown as a dark overlay when not). A very faint global
+    /// haze plane sits above everything for aesthetic continuity.
+    ///
+    /// Returns a dictionary from tile key to `ModelEntity`. Keys use two
+    /// namespaces so both categories can live in one dictionary:
+    ///   `tileEntityKey(tileX:tileZ:)`  — terrain quads ("tileX.tileZ")
+    ///   `fogEntityKey(tileX:tileZ:)`   — per-tile fog quads ("fog.tileX.tileZ")
+    @discardableResult
+    @MainActor
+    static func addSurface(
+        to boardRoot: Entity,
+        snapshot: TabletopGameplaySnapshot,
+        fit: TabletopMapFit,
+        resolver: TabletopAssetResolver = NullTabletopAssetResolver(),
+        materialProvider: WargusTabletopMaterialProvider? = nil
+    ) -> [String: ModelEntity] {
+        var tileEntities: [String: ModelEntity] = [:]
+        let quadSize = fit.tileQuadSize
+        let tileset = snapshot.assets?.tileset
+        // Iterate the snapshot's actual terrain so any map size (32×32, 64×64,
+        // 96×96, …) is laid out; the fit scales each tile onto the fixed board.
+        for terrainTile in snapshot.terrain {
+            let tileX = terrainTile.tileX
+            let tileZ = terrainTile.tileZ
+
+            // Terrain quad: real texture via the resolver when available,
+            // otherwise a color derived from the engine's terrain class.
+            let tile = ModelEntity(
+                mesh: .generatePlane(width: quadSize, depth: quadSize),
+                materials: [terrainMaterial(kind: terrainTile.kind, resolver: resolver)]
+            )
+            tile.name = "board.tile.\(tileX).\(tileZ)"
+            tile.position = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+            boardRoot.addChild(tile)
+            tileEntities[tileEntityKey(tileX: tileX, tileZ: tileZ)] = tile
+
+            // Real Wargus tile art from the staged data dir, when available.
+            // The procedural color shows until (and only if) the decode
+            // succeeds — a per-tile progressive enhancement, not a silent
+            // whole-app fallback.
+            if let materialProvider {
+                materialProvider.terrainMaterial(
+                    graphicIndex: terrainTile.graphicIndex, tileset: tileset
+                ) { [weak tile] material in
+                    tile?.model?.materials = [material]
+                }
+            }
+
+            // Per-tile fog overlay quad, slightly above the terrain. Enabled
+            // (dark) when unrevealed; disabled (invisible) when revealed.
+            let fogQuad = ModelEntity(
+                mesh: .generatePlane(width: quadSize, depth: quadSize),
+                materials: [translucentUnlitMaterial(UIColor(white: 0.06, alpha: 0.88))]
+            )
+            fogQuad.name = "board.fog.\(tileX).\(tileZ)"
+            var fogPos = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+            fogPos.y = 0.005  // just above the terrain quad
+            fogQuad.position = fogPos
+            fogQuad.isEnabled = !snapshot.fog(atTileX: tileX, tileZ: tileZ)
+            boardRoot.addChild(fogQuad)
+            tileEntities[fogEntityKey(tileX: tileX, tileZ: tileZ)] = fogQuad
+        }
+
+        // Subtle global haze plane for aesthetic continuity (very low alpha).
+        let haze = ModelEntity(
+            mesh: .generatePlane(
+                width: TabletopBoardMetrics.physicalExtent * 1.02,
+                depth: TabletopBoardMetrics.physicalExtent * 1.02
+            ),
+            materials: [translucentUnlitMaterial(UIColor(white: 0.85, alpha: 0.06))]
+        )
+        haze.name = "board.haze"
+        haze.position = [0, 0.01, 0]
+        boardRoot.addChild(haze)
+        return tileEntities
+    }
+
+    /// Resolves a terrain tile's material: a real texture from the asset
+    /// resolver when the running app actually has it, otherwise the procedural
+    /// color derived from the engine terrain class. No proprietary art is
+    /// bundled, so this is the procedural fallback until a catalog is injected.
+    static func terrainMaterial(
+        kind: TabletopTerrainKind,
+        resolver: TabletopAssetResolver
+    ) -> UnlitMaterial {
+        if let name = resolver.terrainTexture(for: kind),
+           let texture = try? TextureResource.load(named: name) {
+            var material = UnlitMaterial()
+            material.color = .init(tint: .white, texture: .init(texture))
+            return material
+        }
+        return translucentUnlitMaterial(kind.tileColor)
+    }
+
+    /// Builds a single live RealityKit unit from a gameplay snapshot unit and
+    /// parents it to `boardRoot`. Returns the live unit for tracking. When a
+    /// material provider and sprite descriptor are available, the unit's real
+    /// Wargus sprite is requested and applied progressively.
+    @MainActor
+    static func addUnit(
+        _ gameplayUnit: TabletopGameplayUnit,
+        to boardRoot: Entity,
+        snapshot: TabletopGameplaySnapshot,
+        fit: TabletopMapFit,
+        materialProvider: WargusTabletopMaterialProvider? = nil
+    ) -> TabletopLiveUnit {
+        var spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
+        // Carry the engine-owned render category + tile footprint (ABI v4) from
+        // the sprite descriptor so buildings/resources are sized to their
+        // footprint and stay map-oriented.
+        if let sprite = snapshot.assets?.sprite(forUnitKind: gameplayUnit.kind) {
+            spec.renderCategory = sprite.renderCategory
+            spec.footprintWidth = sprite.footprintWidth
+            spec.footprintHeight = sprite.footprintHeight
+        }
+        let liveUnit = TabletopLiveUnit(spec: spec, fit: fit)
+        liveUnit.setAlive(gameplayUnit.isAlive)
+        liveUnit.setSelected(snapshot.selection.selectedUnitID == gameplayUnit.id)
+        boardRoot.addChild(liveUnit.root)
+        refreshUnitSprite(liveUnit, unit: gameplayUnit, snapshot: snapshot,
+                          materialProvider: materialProvider)
+        return liveUnit
+    }
+
+    /// Requests the real Wargus sprite material for a unit's current engine
+    /// frame and applies it when it decodes. Safe to call repeatedly (e.g. on
+    /// each animation-frame change); the provider caches decoded textures so an
+    /// unchanged frame does not re-read the disk.
+    ///
+    /// For a *directional* sprite the map-relative engine frame is not requested
+    /// here; instead the unit's directional descriptor is recorded so the
+    /// per-frame billboard pass (`refreshDirectionalSprites`) can request the
+    /// camera-relative column as the board is orbited. Non-directional sprites
+    /// (buildings, resources, single-frame units) request the engine frame
+    /// directly since they never re-orient with the camera.
+    @MainActor
+    static func refreshUnitSprite(
+        _ liveUnit: TabletopLiveUnit,
+        unit: TabletopGameplayUnit,
+        snapshot: TabletopGameplaySnapshot,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        guard let materialProvider,
+              let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return }
+        if sprite.numDirections > 1 {
+            // Directional unit: the per-frame camera-relative pass owns the
+            // quad texture. Record fresh engine state (facing/frame/owner) and
+            // let refreshDirectionalSprites request the matching column.
+            liveUnit.setDirectionalSprite(.init(sprite: sprite, unit: unit))
+            return
+        }
+        liveUnit.setDirectionalSprite(nil)
+        materialProvider.unitMaterial(unit: unit, sprite: sprite) { [weak liveUnit] material in
+            liveUnit?.setSpriteMaterial(material)
+        }
+    }
+
+    /// Per-frame pass that requests the camera-relative directional sprite for
+    /// each unit whose displayed direction changed as the viewer orbited the
+    /// board. Cheap when nothing changed: `cameraRelativeSpriteFrame` returns
+    /// `nil` for units without a directional sprite or an unchanged frame, and
+    /// the provider caches decoded textures.
+    @MainActor
+    static func refreshDirectionalSprites(
+        _ liveUnits: some Sequence<TabletopLiveUnit>,
+        viewerAzimuthRadians: Double,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        guard let materialProvider else { return }
+        for liveUnit in liveUnits {
+            guard let resolved = liveUnit.cameraRelativeSpriteFrame(
+                viewerAzimuthRadians: viewerAzimuthRadians) else { continue }
+            materialProvider.unitMaterial(
+                unit: resolved.unit, sprite: resolved.sprite,
+                frameOverride: resolved.frame, mirrorOverride: resolved.mirror
+            ) { [weak liveUnit] material in
+                liveUnit?.setSpriteMaterial(material)
             }
         }
-
-        let fog = ModelEntity(
-            mesh: .generatePlane(
-                width: TabletopBoardMetrics.boardExtent * 1.02,
-                depth: TabletopBoardMetrics.boardExtent * 1.02
-            ),
-            materials: [translucentUnlitMaterial(UIColor(white: 0.85, alpha: 0.12))]
-        )
-        fog.name = "board.fog"
-        fog.position = [0, 0.01, 0]
-        boardRoot.addChild(fog)
     }
 
-    /// Builds live RealityKit units from the snapshot's unit roster and
-    /// parents them all to `boardRoot`.
-    static func addUnits(to boardRoot: Entity, snapshot: TabletopGameplaySnapshot) -> [TabletopLiveUnit] {
-        snapshot.units.map { gameplayUnit in
-            let spec = TabletopUnitSpec(gameplayUnit: gameplayUnit)
-            let liveUnit = TabletopLiveUnit(spec: spec)
-            boardRoot.addChild(liveUnit.root)
-            return liveUnit
+    /// Updates terrain tile materials in `tileEntities` for tiles listed in
+    /// `changedTiles`. Sets the procedural color immediately, then (when a
+    /// material provider + tileset are available) re-requests the real tile art
+    /// for the tile's new graphic index so an in-place terrain change (e.g. a
+    /// felled tree) reloads real art instead of staying a flat color.
+    /// Tiles not present in the dictionary are silently skipped.
+    @MainActor
+    static func updateTerrainTiles(
+        _ changedTiles: [TabletopTerrainTile],
+        in tileEntities: [String: ModelEntity],
+        tileset: TabletopTilesetInfo? = nil,
+        materialProvider: WargusTabletopMaterialProvider? = nil
+    ) {
+        for tile in changedTiles {
+            guard let entity = tileEntities[tileEntityKey(tileX: tile.tileX, tileZ: tile.tileZ)] else { continue }
+            entity.model?.materials = [translucentUnlitMaterial(tile.kind.tileColor)]
+            if let materialProvider {
+                materialProvider.terrainMaterial(
+                    graphicIndex: tile.graphicIndex, tileset: tileset
+                ) { [weak entity] material in
+                    entity?.model?.materials = [material]
+                }
+            }
         }
     }
+
+    /// Reveals or conceals per-tile fog entities for the tiles listed in
+    /// `changedTiles`. The fog quad is disabled (invisible) when a tile is
+    /// revealed and enabled (dark overlay) when it becomes hidden again.
+    static func updateFogTiles(
+        _ changedTiles: [TabletopFogTile],
+        in tileEntities: [String: ModelEntity]
+    ) {
+        for tile in changedTiles {
+            guard let entity = tileEntities[fogEntityKey(tileX: tile.tileX, tileZ: tile.tileZ)] else { continue }
+            entity.isEnabled = !tile.isRevealed
+        }
+    }
+
+    /// Stable dictionary key for a terrain `ModelEntity`.
+    static func tileEntityKey(tileX: Int, tileZ: Int) -> String { "\(tileX).\(tileZ)" }
+
+    /// Stable dictionary key for a per-tile fog overlay `ModelEntity`.
+    static func fogEntityKey(tileX: Int, tileZ: Int) -> String { "fog.\(tileX).\(tileZ)" }
 }
+

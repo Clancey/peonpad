@@ -146,6 +146,18 @@ public struct TabletopBoardManipulator: Equatable {
         transformAtGestureStart = initial
     }
 
+    /// Replaces the board transform (e.g. after indirect-pointer navigation in
+    /// the simulator, or a recenter) and re-anchors gesture tracking so the
+    /// next hand-gesture frame resumes from the new transform instead of a
+    /// stale start sample. Physical hand manipulation is unaffected: the very
+    /// next active sample re-anchors itself via the zero-hand → one-hand path.
+    public mutating func setTransform(_ transform: TabletopBoardTransform) {
+        self.transform = transform
+        self.transformAtGestureStart = transform
+        self.leftStart = nil
+        self.rightStart = nil
+    }
+
     /// Feed this frame's latest left/right-hand sample. Pass `nil` for a
     /// hand that has no active direct pinch this frame. Returns the updated
     /// transform. Deterministic: the same ordered sequence of calls always
@@ -416,6 +428,103 @@ public enum TabletopDirectionalFrame {
         let facing = WarcraftFacing.nearest(toRadians: relative)
         let (canonical, mirrored) = WarcraftCanonicalFacing.resolve(facing)
         return Resolution(canonical: canonical, mirrored: mirrored, facing: facing)
+    }
+}
+
+/// Selects the sprite-sheet frame (and horizontal-mirror flag) a directional
+/// unit should display *as seen from the current viewer azimuth* around the
+/// board.  On a rotatable 2.5D board the same unit must show a different
+/// directional sprite depending on where the viewer stands: walk behind a
+/// footman and you should see his back, not his face.
+///
+/// The engine resolves one frame per unit for the unit's *map* facing
+/// (`PeonPadUnitRecord.sprite_frame`, folding animation + direction with the
+/// engine's own draw formula).  That frame is map-relative, so it never changes
+/// as the camera orbits.  This helper decomposes that frame into its
+/// direction-independent *animation step* and re-selects the *direction column*
+/// for the camera-relative facing (`unitFacing − viewerAzimuth`), then
+/// recombines them using the sprite sheet's documented num-directions / flip
+/// layout (the same `WarcraftCanonicalFacing` convention the procedural
+/// billboard already uses).  It never re-derives the engine's animation
+/// formula — the animation step it preserves is exactly the engine's — so the
+/// UI stays a consumer of engine-owned frame identifiers while still honouring
+/// the viewer's vantage point.
+///
+/// At `viewerAzimuth == 0` (viewer at board north) the result is identical to
+/// the engine's map-relative frame, so a static/head-on view is unchanged.
+public enum TabletopSpriteDirection {
+    public struct Frame: Equatable {
+        public var frame: Int
+        public var mirror: Bool
+        public init(frame: Int, mirror: Bool) {
+            self.frame = frame
+            self.mirror = mirror
+        }
+    }
+
+    /// - Parameters:
+    ///   - engineFrame: engine-resolved sheet frame for the unit's *map* facing
+    ///     (already folds animation + map direction).  Negative/absent frames
+    ///     are treated as non-directional and passed through.
+    ///   - engineMirror: engine-resolved mirror flag for the map facing.
+    ///   - numDirections: directions stored in the sheet (1, 4, 5, 8, …).  A
+    ///     value ≤ 1 marks a non-directional sprite (buildings, resources,
+    ///     single-frame effects) that must never rotate with the camera.
+    ///   - flip: the sheet stores `numDirections/2 + 1` columns and mirrors the
+    ///     remaining directions (Warcraft II convention).
+    ///   - unitFacingRadians: the unit's board/map facing (0 = board north,
+    ///     increasing clockwise).
+    ///   - viewerAzimuthRadians: the viewer's azimuth around the board centre
+    ///     (same convention), i.e. `TabletopViewerAzimuth.aroundBoardCenter`.
+    public static func resolve(
+        engineFrame: Int,
+        engineMirror: Bool,
+        numDirections: Int,
+        flip: Bool,
+        unitFacingRadians: Double,
+        viewerAzimuthRadians: Double
+    ) -> Frame {
+        // Non-directional sprites (a single stored direction, or a
+        // non-croppable/absent frame) never re-orient with the camera.
+        guard numDirections > 1, engineFrame >= 0 else {
+            return Frame(frame: max(0, engineFrame), mirror: engineMirror)
+        }
+
+        // Counter-rotate the unit's own facing by the viewer's azimuth so the
+        // column we pick is the one the viewer actually faces.
+        let relative = unitFacingRadians - viewerAzimuthRadians
+
+        if flip {
+            // Five-column (for 8 directions) storage: N, NE, E, SE, S; the
+            // western directions reuse the eastern columns, mirrored.
+            let columns = numDirections / 2 + 1
+            guard columns > 0 else {
+                return Frame(frame: engineFrame, mirror: engineMirror)
+            }
+            let animStep = engineFrame / columns
+            let facing = WarcraftFacing.nearest(toRadians: relative)
+            let (canonical, mirrored) = WarcraftCanonicalFacing.resolve(facing)
+            return Frame(frame: animStep * columns + canonical.rawValue,
+                         mirror: mirrored)
+        }
+
+        // All directions stored as distinct columns, ordered 0 = north and
+        // increasing clockwise (matches the engine's non-flip folding).
+        let animStep = engineFrame / numDirections
+        let column = directionIndex(radians: relative, count: numDirections)
+        return Frame(frame: animStep * numDirections + column, mirror: false)
+    }
+
+    /// Nearest of `count` evenly-spaced directions to `radians` (0 = north,
+    /// increasing clockwise), wrapping correctly for negative / multi-turn
+    /// angles.
+    static func directionIndex(radians: Double, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        let twoPi = Double.pi * 2
+        var normalized = radians.truncatingRemainder(dividingBy: twoPi)
+        if normalized < 0 { normalized += twoPi }
+        let step = twoPi / Double(count)
+        return Int((normalized / step).rounded()) % count
     }
 }
 

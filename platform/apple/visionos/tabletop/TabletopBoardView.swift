@@ -1,95 +1,386 @@
 // TabletopBoardView.swift
 //
-// The immersive-space RealityView: builds the board once, wires the
-// right-hand command / left-hand board-manipulation gestures through the
-// pure logic in TabletopGestureState.swift, and re-orients every unit's
-// billboard each frame so it always faces the viewer while preserving the
-// unit's true world-space facing.
+// The immersive-space RealityView: wires the right-hand command / left-hand
+// board-manipulation gestures through the pure logic in TabletopGestureState,
+// subscribes to a TabletopGameplaySource for live/demo state, dispatches
+// player intents through a TabletopCommandSink, and applies incremental
+// RealityKit diffs from TabletopBoardReconciler without rebuilding the board
+// root or breaking active gestures.
+//
+// Production launch uses LiveTabletopSession (which warns when no transport
+// is bound and delivers an empty stream). Tests and previews pass a
+// DemoTabletopSession via the designated init.
 import RealityKit
 import SwiftUI
 import Spatial
 import UIKit
 
 /// Where the board first appears, and how far in front of the viewer
-/// "Recenter" places it again.
+/// "Recenter" places it again. The board is placed at table height (well below
+/// eye level) and close in front, so a standing/seated viewer looks *down* at
+/// it at an oblique angle — the relief and the board's thickness read as 3D
+/// immediately, instead of the near edge-on view a chest-height board gave.
 private enum TabletopPlacement {
-    static let initialTransform = TabletopBoardTransform(
-        position: TabletopPoint3D(x: 0, y: 1.1, z: -1.15),
-        yawRadians: 0,
-        scale: 1
-    )
-    static let recenterDistance: Double = 1.15
-    static let recenterHeight: Double = 1.1
+    static let initialTransform = TabletopInitialPlacement.transform
+    static let recenterDistance: Double = TabletopInitialPlacement.distance
+    static let recenterHeight: Double = TabletopInitialPlacement.height
 }
 
 struct TabletopBoardView: View {
+    // MARK: - Session injection
+
+    /// The combined source/sink. @State ensures the session object persists
+    /// across SwiftUI re-renders; `_session = State(initialValue:)` in the
+    /// designated init lets tests inject a DemoTabletopSession.
+    @State private var session: AnyTabletopSession
+
+    /// Production default: LiveTabletopSession with no transport bound.
+    /// Logs an error and delivers an empty stream; the board shows a
+    /// diagnostic overlay until a transport is connected.
+    init() {
+        _session = State(initialValue: AnyTabletopSession(LiveTabletopSession(transport: nil)))
+    }
+
+    /// Designated init for tests and SwiftUI previews.
+    init<S: TabletopGameplaySource & TabletopCommandSink>(
+        session: S,
+        harnessTransport: TabletopTransport? = nil
+    ) where S: Sendable {
+        _session = State(initialValue: AnyTabletopSession(session))
+        self.harnessTransport = harnessTransport
+    }
+
+    /// The production transport, passed through only so the opt-in command
+    /// integration harness can submit probes through the exact production
+    /// `send(_:)` and observe the results on the same live stream the board
+    /// reconciles. `nil` in tests/previews and when no transport is bound.
+    private var harnessTransport: TabletopTransport?
+
+    // MARK: - Gesture / board state
+
     @State private var manipulator = TabletopBoardManipulator(initial: TabletopPlacement.initialTransform)
     @State private var commandReducer = TabletopCommandReducer()
-    @State private var gameplaySnapshot = TabletopGameplaySnapshot.demo()
-    @State private var subscriptions: [EventSubscription] = []
 
-    // Populated once in `make` and reused by the gesture handlers and the
-    // per-frame update closure; RealityKit entities are reference types, so
-    // capturing them here is safe and avoids rebuilding the board every time
-    // SwiftUI re-evaluates the view body.
+    /// Board transform captured at the start of an in-progress indirect
+    /// (mouse/trackpad) gesture, so the cumulative SwiftUI drag/magnify/rotate
+    /// values are all folded against one stable base — pan, zoom and rotate
+    /// compose in a single update instead of clobbering one another.
+    @State private var indirectStartTransform: TabletopBoardTransform?
+
+    // MARK: - Snapshot tracking
+
+    /// Most-recently received snapshot. `nil` until the first snapshot arrives
+    /// from the source (indicates "no transport" in the live session case).
+    @State private var gameplaySnapshot: TabletopGameplaySnapshot? = nil
+    @State private var previousSnapshot: TabletopGameplaySnapshot? = nil
+
+    // MARK: - Live entity tracking
+
+    /// RealityKit entities are reference types; capturing them in @State is
+    /// safe and avoids rebuilding the board root on every SwiftUI re-render.
     @State private var boardRoot: Entity?
     @State private var headAnchor: Entity?
-    @State private var liveUnits: [TabletopLiveUnit] = []
+    /// The floating action panel's anchor, posed once from the board's initial
+    /// placement and added directly to the scene content (never under
+    /// `boardRoot`), so it does not inherit the live board pan/rotate/scale.
+    @State private var floatingPanelAnchor: Entity?
+    /// Unit entities keyed by stable unit ID for O(1) incremental updates.
+    @State private var liveUnitsByID: [String: TabletopLiveUnit] = [:]
+    /// Terrain tile entities keyed by "tileX.tileZ" for O(1) material updates.
+    @State private var tileEntities: [String: ModelEntity] = [:]
+    @State private var subscriptions: [EventSubscription] = []
+
+    /// The map→board fit derived from the first snapshot's map size. Scales an
+    /// arbitrary engine map onto the fixed physical board.
+    @State private var mapFit: TabletopMapFit?
+
+    /// Resolves real Wargus terrain/unit art when a catalog is present;
+    /// otherwise the board uses procedural coloring (no proprietary art).
+    private let assetResolver: TabletopAssetResolver = WargusTabletopAssetResolver()
+
+    /// Loads real Wargus terrain/unit textures from the staged read-only data
+    /// directory at runtime. `nil` when the staged data is absent, so the board
+    /// renders fully procedurally rather than silently faking success.
+    @State private var materialProvider: WargusTabletopMaterialProvider? =
+        WargusTabletopMaterialProvider.make(
+            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath)
+
+    /// Chunked board entity manager: replaces the 32 768-entity per-tile
+    /// approach with 16 terrain-chunk entities + 1 fog entity for a 128×128 map.
+    @State private var chunkBoard: TabletopChunkBoard?
+
+    // MARK: - Body
 
     var body: some View {
         RealityView { content, attachments in
-            let boardRoot = Entity()
-            boardRoot.name = "board"
-            applyTransform(manipulator.transform, to: boardRoot)
-            content.add(boardRoot)
+            // -- Board root --
+            let root = Entity()
+            root.name = "board"
+            applyTransform(manipulator.transform, to: root)
+            content.add(root)
 
-            TabletopBoardBuilder.addSurface(to: boardRoot, snapshot: gameplaySnapshot)
-            let units = TabletopBoardBuilder.addUnits(to: boardRoot, snapshot: gameplaySnapshot)
-
-            if let paletteEntity = attachments.entity(for: TabletopPaletteView.attachmentID) {
-                paletteEntity.name = "palette"
-                paletteEntity.position = [
-                    0,
+            // -- Floating action panel (NOT parented under the board root) --
+            // Mounted on a dedicated anchor added directly to `content` and
+            // posed once from the board's *initial* placement, so it never
+            // inherits the live board pan/rotate/scale from `manipulator`. This
+            // keeps it fixed, readable, and tappable while the board moves
+            // beneath it, and lets it act on the current selection.
+            let panelAnchor = Entity()
+            panelAnchor.name = "floatingActionPanel"
+            let initial = TabletopPlacement.initialTransform
+            panelAnchor.position = SIMD3<Float>(
+                Float(initial.position.x),
+                Float(initial.position.y),
+                Float(initial.position.z))
+            panelAnchor.orientation = simd_quatf(
+                angle: Float(initial.yawRadians), axis: [0, 1, 0])
+            content.add(panelAnchor)
+            if let panelEntity = attachments.entity(for: TabletopActionPanelView.attachmentID) {
+                panelEntity.name = "actionPanel"
+                // Beside the near/viewer edge of the board, upright, facing the
+                // viewer (same +Z orientation the old board palette used).
+                panelEntity.position = [
+                    TabletopBoardMetrics.halfExtent + 0.14,
                     TabletopBoardMetrics.unitHeight * 1.6,
-                    TabletopBoardMetrics.halfExtent + 0.08,
+                    TabletopBoardMetrics.halfExtent + 0.06,
                 ]
-                boardRoot.addChild(paletteEntity)
+                panelAnchor.addChild(panelEntity)
             }
+            self.floatingPanelAnchor = panelAnchor
 
+            // -- Head anchor for billboard orientation --
             let head = AnchorEntity(.head)
             head.name = "headAnchor"
             content.add(head)
 
-            self.boardRoot = boardRoot
+            self.boardRoot = root
             self.headAnchor = head
-            self.liveUnits = units
 
+            // -- Per-frame billboard update --
             let subscription = content.subscribe(to: SceneEvents.Update.self) { _ in
                 refreshBillboards()
             }
             subscriptions.append(subscription)
+
+            // Note: terrain surface and unit entities are NOT built here.
+            // They are built incrementally when the first snapshot arrives
+            // in the .task below, so the same incremental path handles
+            // both the initial build and subsequent updates.
         } update: { _, _ in
-            // Gesture handlers below mutate entities directly (RealityKit's
-            // recommended pattern for continuous manipulation), so this
-            // closure intentionally has nothing to reconcile per SwiftUI
-            // state change.
+            // Gesture handlers mutate entities directly (RealityKit's
+            // recommended pattern for continuous manipulation). Snapshot-
+            // driven changes are applied from the .task subscriber below.
         } attachments: {
-            Attachment(id: TabletopPaletteView.attachmentID) {
-                TabletopPaletteView(onRecenter: recenter)
+            Attachment(id: TabletopActionPanelView.attachmentID) {
+                TabletopActionPanelView(
+                    context: TabletopActionPanel.context(for: gameplaySnapshot),
+                    onCommand: { session.send($0) },
+                    onRecenter: recenter)
             }
         }
         .gesture(
             SpatialEventGesture()
-                .onChanged { events in
-                    handle(events: events)
-                }
-                .onEnded { events in
-                    handle(events: events)
-                }
+                .onChanged { events in handle(events: events) }
+                .onEnded   { events in handle(events: events) }
         )
+        // Indirect pointer navigation (mouse/trackpad), the only way to
+        // manipulate the board in the visionOS Simulator, which has no hand
+        // tracking. A single simultaneous gesture folds pan + zoom + rotate
+        // against one shared base so a trackpad pinch-rotate composes cleanly,
+        // and it never suppresses the physical-hand SpatialEventGesture above.
+        .simultaneousGesture(indirectNavigationGesture)
+        // Subscribe to the gameplay source and apply incremental diffs.
+        .task {
+            for await snapshot in session.snapshots {
+                applySnapshotDiff(snapshot)
+            }
+            // Stream finished without delivering any snapshot: no transport
+            // is bound. `gameplaySnapshot` remains nil; the overlay below
+            // surfaces the diagnostic to the developer.
+        }
+        // Opt-in command integration harness (disabled unless
+        // PEONPAD_TABLETOP_COMMAND_HARNESS is set): submits select→move→stop
+        // through the production transport and logs whether the engine changed
+        // state, as observed on the same live stream the board reconciles.
+        .task {
+            guard let harnessTransport else { return }
+            _ = TabletopCommandHarnessDriver.runIfEnabled(transport: harnessTransport)
+        }
+        // Opt-in acceptance hold: keeps the app running until manually
+        // terminated so a human or automated checker can inspect the board.
+        // Set PEONPAD_TABLETOP_ACCEPTANCE_HOLD to any non-empty value.
+        // Default (unset): no hold — production timing is unchanged.
+        .task {
+            guard ProcessInfo.processInfo.environment["PEONPAD_TABLETOP_ACCEPTANCE_HOLD"] != nil
+            else { return }
+            tabletopEngineLog("[Tabletop] acceptance hold active "
+                + "(PEONPAD_TABLETOP_ACCEPTANCE_HOLD); app will not exit automatically")
+            // Sleep in cancellable 1-hour slices. Avoid passing Double(Int.max) to
+            // Duration.seconds() — the Double rounds to 2^63 which overflows Int64
+            // inside Duration's initializer (Swift/Integers.swift fatal error).
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3_600))
+            }
+        }
+        // Diagnostic overlay: visible when no snapshot has been received
+        // (live session with no transport bound).
+        .overlay(alignment: .center) {
+            if gameplaySnapshot == nil {
+                noTransportOverlay
+            }
+        }
     }
 
-    // MARK: - Gesture bridging (SwiftUI SpatialEventCollection -> pure logic)
+    // MARK: - No-transport diagnostic
+
+    private var noTransportOverlay: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.largeTitle)
+                .foregroundStyle(.orange)
+            Text("No engine transport connected")
+                .font(.headline)
+            Text("Bind a TabletopTransport before launching the production board.")
+                .font(.caption)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+        }
+        .padding(24)
+        .glassBackgroundEffect()
+    }
+
+    // MARK: - Incremental snapshot reconciliation
+
+    /// Computes the diff from the previous snapshot and applies the minimal
+    /// set of RealityKit mutations needed to bring the board up to date.
+    /// Does not rebuild `boardRoot` or discard active gesture state.
+    @MainActor
+    private func applySnapshotDiff(_ next: TabletopGameplaySnapshot) {
+        guard let boardRoot else { return }
+
+        let diff = TabletopBoardReconciler.diff(from: previousSnapshot, to: next)
+
+        // -- Terrain surface (first snapshot builds the surface fitted to the
+        //    real map size; subsequent snapshots only update changed tiles) --
+        let fit: TabletopMapFit
+        if let existing = mapFit, previousSnapshot != nil {
+            fit = existing
+        } else {
+            fit = TabletopBoardMetrics.fit(for: next)
+            mapFit = fit
+        }
+
+        if previousSnapshot == nil {
+            // First snapshot: build the chunked board surface.
+            let board = TabletopChunkBoard()
+            board.build(snapshot: next, fit: fit, to: boardRoot,
+                        materialProvider: materialProvider)
+            chunkBoard = board
+            // Keep tileEntities empty — the chunk board owns all terrain/fog entities.
+            tileEntities = [:]
+        } else {
+            // Incremental terrain and fog updates on the chunk board.
+            chunkBoard?.updateTerrainTiles(
+                diff.changedTerrainTiles,
+                tileset: next.assets?.tileset,
+                materialProvider: materialProvider)
+            chunkBoard?.updateFogTiles(diff.changedFogTiles)
+        }
+
+        // -- Units added --
+        for unit in diff.addedUnits {
+            let live = TabletopBoardBuilder.addUnit(
+                unit, to: boardRoot, snapshot: next, fit: fit,
+                materialProvider: materialProvider)
+            let fp = footprint(for: unit, in: next)
+            live.root.position = unitPosition(
+                fit: fit, tileX: unit.tileX, tileZ: unit.tileZ,
+                footprintWidth: fp.w, footprintHeight: fp.h)
+            liveUnitsByID[unit.id] = live
+        }
+
+        // -- Units updated --
+        for unitDiff in diff.updatedUnits {
+            guard let live = liveUnitsByID[unitDiff.id],
+                  let unit = next.units.first(where: { $0.id == unitDiff.id }) else { continue }
+
+            if unitDiff.positionChanged {
+                let fp = footprint(for: unit, in: next)
+                live.root.position = unitPosition(
+                    fit: fit, tileX: unit.tileX, tileZ: unit.tileZ,
+                    footprintWidth: fp.w, footprintHeight: fp.h)
+            }
+            if unitDiff.facingChanged {
+                live.currentFacingRadians = unit.facingRadians
+            }
+            if unitDiff.ownerChanged {
+                live.updateOwnerTint(TabletopBoardBuilder.ownerTint(owner: unit.owner))
+            }
+            // Re-crop the real sprite when the engine advanced the animation
+            // frame or mirror (or ownership changed the team tint).
+            if unitDiff.frameChanged || unitDiff.ownerChanged {
+                TabletopBoardBuilder.refreshUnitSprite(
+                    live, unit: unit, snapshot: next, materialProvider: materialProvider)
+            }
+            if unitDiff.hpChanged {
+                live.setAlive(unit.isAlive)
+            }
+            if unitDiff.selectionChanged {
+                live.setSelected(next.selection.selectedUnitID == unit.id)
+            }
+        }
+
+        // -- Units removed --
+        for id in diff.removedUnitIDs {
+            if let live = liveUnitsByID.removeValue(forKey: id) {
+                live.root.removeFromParent()
+            }
+        }
+
+        previousSnapshot = next
+        gameplaySnapshot = next
+        chunkBoard?.updateSnapshot(next)
+    }
+
+    // MARK: - Indirect pointer navigation (Simulator)
+
+    /// One gesture that folds a mouse/trackpad pan (drag), zoom (magnify) and
+    /// rotate against a single shared base transform, so overlapping channels
+    /// (e.g. a trackpad pinch-rotate) compose instead of clobbering each other.
+    /// Any channel that is not currently active contributes its identity
+    /// (translation 0 / magnification 1 / rotation 0).
+    private var indirectNavigationGesture: some Gesture {
+        DragGesture()
+            .simultaneously(with: MagnifyGesture())
+            .simultaneously(with: RotateGesture())
+            .onChanged { value in
+                let base = indirectStartTransform ?? manipulator.transform
+                if indirectStartTransform == nil { indirectStartTransform = base }
+
+                let drag = value.first?.first
+                let zoom = value.first?.second
+                let turn = value.second
+
+                applyIndirect(TabletopIndirectNavigationReducer.apply(
+                    base: base,
+                    translationWidth: Double(drag?.translation.width ?? 0),
+                    translationHeight: Double(drag?.translation.height ?? 0),
+                    magnification: Double(zoom?.magnification ?? 1),
+                    rotationRadians: turn?.rotation.radians ?? 0))
+            }
+            .onEnded { _ in indirectStartTransform = nil }
+    }
+
+    /// Applies an indirect-navigation transform to both the hand manipulator
+    /// (so subsequent hand gestures resume from here) and the live board root.
+    private func applyIndirect(_ transform: TabletopBoardTransform) {
+        manipulator.setTransform(transform)
+        if let boardRoot {
+            applyTransform(transform, to: boardRoot)
+        }
+    }
+
+    // MARK: - Gesture bridging
 
     private func handle(events: SpatialEventCollection) {
         var leftSample: TabletopGestureSample?
@@ -98,16 +389,13 @@ struct TabletopBoardView: View {
         for event in events {
             guard let sample = makeSample(from: event) else { continue }
             switch sample.chirality {
-            case .left: leftSample = sample
+            case .left:  leftSample = sample
             case .right: rightSample = sample
             }
         }
 
-        // When both hands are simultaneously active, the right hand is part
-        // of a two-hand board-manipulation gesture. Mark its event ID for
-        // suppression so that a staggered release (left hand drops first,
-        // right hand ends later) cannot accidentally dispatch a gameplay
-        // command from what was never a selection intent.
+        // Suppress the right hand from dispatching a gameplay command when
+        // both hands are simultaneously active (two-hand board manipulation).
         if let leftSample, let rightSample,
            leftSample.phase == .active, rightSample.phase == .active {
             commandReducer.suppressRightHandID(rightSample.id)
@@ -119,19 +407,17 @@ struct TabletopBoardView: View {
         }
 
         let commandEvent = commandReducer.update(right: rightSample)
-        apply(commandEvent: commandEvent)
+        dispatch(commandEvent: commandEvent)
     }
 
     private func makeSample(from event: SpatialEventCollection.Event) -> TabletopGestureSample? {
-        guard event.kind == .directPinch, let chirality = event.chirality else {
-            return nil
-        }
+        guard event.kind == .directPinch, let chirality = event.chirality else { return nil }
 
         let mappedChirality: TabletopChirality = (chirality == .left) ? .left : .right
         let mappedPhase: TabletopGesturePhase
         switch event.phase {
-        case .active: mappedPhase = .active
-        case .ended: mappedPhase = .ended
+        case .active:    mappedPhase = .active
+        case .ended:     mappedPhase = .ended
         case .cancelled: mappedPhase = .cancelled
         @unknown default: mappedPhase = .cancelled
         }
@@ -151,75 +437,64 @@ struct TabletopBoardView: View {
         )
     }
 
-    private func apply(commandEvent: TabletopRightHandEvent) {
+    /// Translates a completed right-hand gesture event into a gameplay
+    /// command and forwards it to the session sink (rather than mutating
+    /// local demo state directly).
+    private func dispatch(commandEvent: TabletopRightHandEvent) {
         switch commandEvent {
         case .none:
             return
+
         case let .tappedEntity(name, _):
-            // Entity names follow the "unit.<id>" convention where <id> is
-            // the full unit ID (e.g. "unit.sentry.north"). Strip the prefix
-            // to recover the stable unit ID used by the gameplay snapshot.
             guard name.hasPrefix("unit.") else { return }
             let unitID = String(name.dropFirst("unit.".count))
-            applyGameplayCommand(.selectUnit(id: unitID))
+            session.send(.selectUnit(id: unitID))
+
         case let .tappedEmpty(boardPoint):
-            if let selected = gameplaySnapshot.validatedSelectedUnit,
-               let boardRoot {
-                // `boardPoint` is in world space (the RealityView's coordinate
-                // space); tile indices are board-local. Convert before dividing
-                // so the move lands on the tile the user actually tapped even
-                // after the board has been translated, rotated, or scaled.
-                let worldPos = SIMD3<Float>(
-                    Float(boardPoint.x),
-                    Float(boardPoint.y),
-                    Float(boardPoint.z)
-                )
-                let localPos = boardRoot.convert(position: worldPos, from: nil)
-                let tileX = Int((Double(localPos.x) / Double(TabletopBoardMetrics.tileSize)).rounded())
-                let tileZ = Int((Double(localPos.z) / Double(TabletopBoardMetrics.tileSize)).rounded())
-                applyGameplayCommand(.moveUnit(id: selected.id, toTileX: tileX, toTileZ: tileZ))
-            } else {
-                applyGameplayCommand(.deselectAll)
+            guard let snapshot = gameplaySnapshot,
+                  let selected = snapshot.validatedSelectedUnit,
+                  let boardRoot,
+                  let fit = mapFit else {
+                // Nothing selected and no valid board root: tapping empty space
+                // with no unit selected is a no-op (deselectAll with nothing to
+                // deselect would redundantly publish an identical snapshot).
+                return
             }
-        }
-    }
-
-    /// Applies a gameplay command to the snapshot and reconciles live unit
-    /// entities to reflect the new state.
-    private func applyGameplayCommand(_ command: TabletopGameplayCommand) {
-        let newSnapshot = TabletopGameplayCommandReducer.reduce(gameplaySnapshot, command: command)
-        guard newSnapshot != gameplaySnapshot else { return }
-        gameplaySnapshot = newSnapshot
-        reconcileSnapshot()
-    }
-
-    /// Synchronises live RealityKit entities to the current gameplay snapshot:
-    /// updates unit board positions and highlights the selected unit.
-    private func reconcileSnapshot() {
-        for liveUnit in liveUnits {
-            let unitID = liveUnit.spec.id
-            if let snapUnit = gameplaySnapshot.units.first(where: { $0.id == unitID }) {
-                liveUnit.root.position = TabletopBoardMetrics.tileCenter(
-                    tileX: snapUnit.tileX, tileZ: snapUnit.tileZ
-                )
-            }
-            liveUnit.setSelected(gameplaySnapshot.selection.selectedUnitID == unitID)
+            let worldPos = SIMD3<Float>(Float(boardPoint.x), Float(boardPoint.y), Float(boardPoint.z))
+            let localPos = boardRoot.convert(position: worldPos, from: nil)
+            let target = fit.tile(atX: localPos.x, z: localPos.z)
+            // Ignore taps outside the real map bounds.
+            guard fit.contains(tileX: target.tileX, tileZ: target.tileZ) else { return }
+            session.send(.moveUnit(id: selected.id, toTileX: target.tileX, toTileZ: target.tileZ))
         }
     }
 
     // MARK: - Per-frame billboard orientation
 
     private func refreshBillboards() {
-        guard let boardRoot, let headAnchor, !liveUnits.isEmpty else { return }
+        guard let boardRoot, let headAnchor, !liveUnitsByID.isEmpty else { return }
         let headBoardPosition = headAnchor.position(relativeTo: boardRoot)
         let viewerBoardPosition = TabletopPoint3D(
             x: Double(headBoardPosition.x),
             y: 0,
             z: Double(headBoardPosition.z)
         )
-        for unit in liveUnits {
+        // Trees face the camera via RealityKit's BillboardComponent (no manual
+        // refresh needed here).
+        for unit in liveUnitsByID.values {
             unit.applyDirectionalFrame(viewerBoardPosition: viewerBoardPosition, boardRoot: boardRoot)
         }
+
+        // Reselect each directional unit's sprite column for the viewer's
+        // current azimuth so units show the correct facing as the board is
+        // orbited (viewer behind a unit sees its back). Cheap: only units whose
+        // displayed direction changed request a new (cached) texture.
+        let viewerAzimuth = TabletopViewerAzimuth.aroundBoardCenter(
+            viewerBoardPosition: viewerBoardPosition)
+        TabletopBoardBuilder.refreshDirectionalSprites(
+            liveUnitsByID.values,
+            viewerAzimuthRadians: viewerAzimuth,
+            materialProvider: materialProvider)
     }
 
     // MARK: - Recenter
@@ -237,8 +512,6 @@ struct TabletopBoardView: View {
             y: TabletopPlacement.recenterHeight,
             z: Double(headWorldPosition.z + forwardNormalized.y * Float(TabletopPlacement.recenterDistance))
         )
-        // Board's front edge should face back toward the viewer, i.e. the
-        // yaw is the opposite of the direction the viewer is facing.
         let newTransform = TabletopBoardTransform(
             position: newPosition,
             yawRadians: atan2(Double(-forwardNormalized.x), Double(-forwardNormalized.y)),
@@ -246,6 +519,34 @@ struct TabletopBoardView: View {
         )
         manipulator = TabletopBoardManipulator(initial: newTransform)
         applyTransform(newTransform, to: boardRoot)
+    }
+
+    /// Board-local position of a unit occupying a `footprintWidth`×
+    /// `footprintHeight` footprint whose NW corner is tile (tileX, tileZ). The
+    /// position is the footprint centre (so multi-tile buildings sit centred on
+    /// the tiles they cover, not on their corner), with its feet at the centre
+    /// tile's terrain relief height so it sits *on* the surface.
+    private func unitPosition(
+        fit: TabletopMapFit, tileX: Int, tileZ: Int,
+        footprintWidth: Int = 1, footprintHeight: Int = 1
+    ) -> SIMD3<Float> {
+        let w = max(1, footprintWidth), h = max(1, footprintHeight)
+        let nw = TabletopBoardMetrics.tileCenter(fit, tileX: tileX, tileZ: tileZ)
+        let se = TabletopBoardMetrics.tileCenter(fit, tileX: tileX + w - 1, tileZ: tileZ + h - 1)
+        var p = SIMD3<Float>((nw.x + se.x) / 2, 0, (nw.z + se.z) / 2)
+        let (dx, dz) = TabletopFootprint.centerOffsetTiles(width: w, height: h)
+        let cx = tileX + Int(dx.rounded()), cz = tileZ + Int(dz.rounded())
+        p.y = chunkBoard?.terrainHeight(tileX: cx, tileZ: cz)
+            ?? TabletopBoardElevation.terrainSurfaceY
+        return p
+    }
+
+    /// The tile footprint of a unit, from its type's ABI v4 descriptor (1×1 when
+    /// unknown / a mobile unit).
+    private func footprint(for unit: TabletopGameplayUnit,
+                           in snapshot: TabletopGameplaySnapshot) -> (w: Int, h: Int) {
+        guard let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return (1, 1) }
+        return (sprite.footprintWidth, sprite.footprintHeight)
     }
 
     private func applyTransform(_ transform: TabletopBoardTransform, to entity: Entity) {
@@ -262,3 +563,4 @@ struct TabletopBoardView: View {
 private extension SIMD2 where Scalar == Float {
     var length: Float { (x * x + y * y).squareRoot() }
 }
+

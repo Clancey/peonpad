@@ -18,6 +18,20 @@ struct PeonPadTabletopApp: App {
     // dismiss it programmatically once it opens successfully.
     private static let launcherWindowID = "org.peonpad.visionos.tabletop.launcher"
 
+    // Production session: a LiveTabletopSession backed by the real engine
+    // transport. The transport boots the Stratagus/Wargus engine against the
+    // staged data (Documents/wargus-data) and a separate writable user
+    // directory; a nil transport (paths not ready) is surfaced by the board's
+    // diagnostic overlay rather than a silent demo fallback.
+    @State private var engineTransport: EngineTabletopTransport?
+    @State private var gameplaySession: LiveTabletopSession
+
+    init() {
+        let transport = PeonPadTabletopLaunch.makeEngineTransport()
+        _engineTransport = State(initialValue: transport)
+        _gameplaySession = State(initialValue: LiveTabletopSession(transport: transport))
+    }
+
     var body: some SwiftUI.Scene {
         WindowGroup(id: Self.launcherWindowID) {
             TabletopLauncherView(
@@ -27,7 +41,7 @@ struct PeonPadTabletopApp: App {
         }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
-            TabletopBoardView()
+            TabletopBoardView(session: gameplaySession, harnessTransport: engineTransport)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }

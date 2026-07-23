@@ -3633,7 +3633,7 @@ index 39dedbc..304a7ee 100644
  	if (TheWindow == nullptr) {
  		ErrorPrint("Couldn't set %dx%dx%d video mode: %s\n",
  		           Video.Width,
-@@ -478,30 +486,35 @@ void InitVideoSdl()
+@@ -478,30 +486,47 @@ void InitVideoSdl()
  #else
  	SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
  #endif
@@ -3647,10 +3647,26 @@ index 39dedbc..304a7ee 100644
 +		TheRenderer = SdlCompatCreateRenderer(
 +			TheWindow, !Parameters::Instance.benchmark);
  	}
- 	if (!TheRenderer) {
- 		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
- 		exit(1);
- 	}
+-	if (!TheRenderer) {
+-		ErrorPrint("Couldn't create accelerated renderer: %s\n", SDL_GetError());
+-		exit(1);
+-	}
++	if (!TheRenderer) {
++		// The accelerated backend is unavailable â€” e.g. the SDL "offscreen"
++		// video driver used for headless/embedded runs such as the visionOS
++		// tabletop host, which has no GPU renderer. Fall back to the software
++		// renderer (no vsync) rather than aborting so the simulation loop can
++		// still run and publish snapshots.
++		fprintf(stderr,
++		        "InitVideoSdl: accelerated renderer unavailable (%s); "
++		        "falling back to software\n", SDL_GetError());
++		SDL_SetHint(SDL_HINT_RENDER_DRIVER, "software");
++		TheRenderer = SdlCompatCreateRenderer(TheWindow, false);
++	}
++	if (!TheRenderer) {
++		ErrorPrint("Couldn't create renderer: %s\n", SDL_GetError());
++		exit(1);
++	}
 -	SDL_RendererInfo rendererInfo;
 -	if (!SDL_GetRendererInfo(TheRenderer, &rendererInfo)) {
 -		printf("[Renderer] %s\n", rendererInfo.name);
@@ -5132,12 +5148,12 @@ index 2e3da8f..a1eea5f 100644
   * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
   * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
   *
-- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
 + * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
   *
   *                                                         Js_./
   * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
-- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+- * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
 + * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
   *                                                 _Qhm`] _f "'c  1!5m
   * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
@@ -5238,12 +5254,12 @@ index 20b28b5..93d99b6 100644
   * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
   * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
   *
-- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
 + * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
   * Copyright (c) 2016, 2018, 2019 Gwilherm Baudic
   *                                                         Js_./
   * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
-- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+- * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
 + * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
   *                                                 _Qhm`] _f "'c  1!5m
   * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
@@ -5335,12 +5351,12 @@ index cfae933..0efa4a1 100644
   * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
   * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
   *
-- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
 + * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
   *
   *                                                         Js_./
   * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
-- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+- * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
 + * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
   *                                                 _Qhm`] _f "'c  1!5m
   * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
@@ -5402,12 +5418,12 @@ index 23cc97b..3b3bf7b 100644
   * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
   * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
   *
-- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
 + * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
   *
   *                                                         Js_./
   * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
-- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+- * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
 + * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
   *                                                 _Qhm`] _f "'c  1!5m
   * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[
@@ -5466,12 +5482,12 @@ index 21587b6..9b468f6 100644
   * /______/ //______/ //_/ //_____/\ /_/ //_/ //_/ //_/ //_/ /|_/ /
   * \______\/ \______\/ \_\/ \_____\/ \_\/ \_\/ \_\/ \_\/ \_\/ \_\/
   *
-- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessén and Per Larsson
+- * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
 + * Copyright (c) 2004, 2005, 2006, 2007 Olof Naessï¿½n and Per Larsson
   *
   *                                                         Js_./
   * Per Larsson a.k.a finalman                          _RqZ{a<^_aa
-- * Olof Naessén a.k.a jansem/yakslem                _asww7!uY`>  )\a//
+- * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
 + * Olof Naessï¿½n a.k.a jansem/yakslem                _asww7!uY`>  )\a//
   *                                                 _Qhm`] _f "'c  1!5m
   * Visit: http://guichan.darkbits.org             )Qk<P ` _: :+' .'  "{[

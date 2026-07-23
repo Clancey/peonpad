@@ -263,6 +263,18 @@ cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 # the host Mac; no Simulator needed.
 "$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" --help >/dev/null
 "$ROOT_DIR/scripts/test-visionos-tabletop-gameplay.sh" >/dev/null
+
+# Live-state transport source + reconciler diffs, snapshot conversion + ABI v3
+# asset-catalog conversion, the framework-free asset-resolution layer (path
+# confinement, atlas math, team color, bounded LRU), and the opt-in command
+# integration harness (gating + select/move/stop sequencing). All host-only.
+"$ROOT_DIR/scripts/test-visionos-tabletop-live-state.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-transport.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-assets.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-assets.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-harness.sh" >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-chunks.sh" >/dev/null
 if rg -Fq 'assert(' \
     "$ROOT_DIR/tests/tabletop_gameplay_state_test.swift"; then
   print -u2 "tabletop gameplay tests rely on Swift assert instead of" \
@@ -398,6 +410,7 @@ cp -cR "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE"
 # The patches form an ordered series, so validate composition by reversing the
 # complete staged series and then applying it again in the stage-script order.
 for patch_file in \
+  0012-tabletop-bridge-gamehook.patch \
   0011-visionos-indirect-controls.patch \
   0010-direct-sdl3-engine.patch \
   0009-game-controller-input.patch \
@@ -432,6 +445,8 @@ patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
 patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
   < "$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
+patch --no-backup-if-mismatch -s -d "$PATCH_CHAIN_ENGINE" -p1 \
+  < "$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
 diff --no-dereference -qr \
   "$ROOT_DIR/engine/stratagus" "$PATCH_CHAIN_ENGINE" >/dev/null
 EXPECTED_STRATAGUS_TREE_SHA=$(awk -F ' *= *' '
@@ -463,5 +478,164 @@ if [[ "$MODE" == maintainer ]]; then
     exit 1
   }
 fi
+
+# Tabletop bridge: verify the ABI header and engine hook exist and are
+# structurally consistent (no proprietary assets; pure C interface).
+BRIDGE_HEADER="$ROOT_DIR/platform/bridge/PeonPadTabletopBridge.h"
+BRIDGE_IMPL="$ROOT_DIR/platform/bridge/PeonPadTabletopBridge.cpp"
+BRIDGE_PATCH="$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
+[[ -f "$BRIDGE_HEADER" ]] || { print -u2 "bridge header missing"; exit 1; }
+[[ -f "$BRIDGE_IMPL" ]]   || { print -u2 "bridge impl missing"; exit 1; }
+[[ -f "$BRIDGE_PATCH" ]]  || { print -u2 "bridge patch missing"; exit 1; }
+rg -q 'PEONPAD_TABLETOP_ABI_VERSION' "$BRIDGE_HEADER"
+rg -q 'PeonPadSnapshot' "$BRIDGE_HEADER"
+rg -q 'PeonPadTerrainCell' "$BRIDGE_HEADER"
+rg -q 'PeonPadUnitRecord' "$BRIDGE_HEADER"
+rg -q 'PeonPadCommand' "$BRIDGE_HEADER"
+rg -q 'peonpad_tabletop_publish_synthetic' "$BRIDGE_HEADER"
+rg -q 'extern "C"' "$BRIDGE_HEADER"
+# The bridge header must not include any C++ or SDL or Stratagus headers.
+if rg -q '#include <SDL|#include "SDL|#include "stratagus|#include "unit' \
+    "$BRIDGE_HEADER"; then
+  print -u2 "bridge public header contains engine or SDL includes"
+  exit 1
+fi
+# The game loop hook must guard with PEONPAD_TABLETOP.
+rg -q 'PEONPAD_TABLETOP' "$BRIDGE_PATCH"
+rg -q 'peonpad_tabletop_publish_snapshot' "$BRIDGE_PATCH"
+rg -q 'peonpad_tabletop_drain_commands' "$BRIDGE_PATCH"
+# Verify no proprietary assets were committed alongside the bridge.
+if find "$ROOT_DIR/platform/bridge" -name '*.wav' -o -name '*.mpq' \
+    -o -name '*.pud' | grep -q .; then
+  print -u2 "proprietary assets found in platform/bridge"
+  exit 1
+fi
+
+# ── visionOS Wargus data staging guardrails ────────────────────────────────────
+
+VISIONOS_STAGE_SCRIPT="$ROOT_DIR/scripts/stage-visionos-wargus-data.sh"
+VISIONOS_INJECT_SCRIPT="$ROOT_DIR/scripts/inject-visionos-wargus-data.sh"
+
+# Both scripts must advertise --help without side effects.
+"$VISIONOS_STAGE_SCRIPT" --help >/dev/null
+"$VISIONOS_INJECT_SCRIPT" --help >/dev/null
+
+# The staging script must exclude proprietary archives and macOS metadata.
+rg -Fq -- "--exclude '*.[Mm][Pp][Qq]'" "$VISIONOS_STAGE_SCRIPT"
+rg -Fq -- "--exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]'" \
+  "$VISIONOS_STAGE_SCRIPT"
+rg -Fq -- "--exclude .DS_Store" "$VISIONOS_STAGE_SCRIPT"
+
+# The staging script must refuse a source inside the repository.
+rg -q 'source must be outside the repository' "$VISIONOS_STAGE_SCRIPT"
+
+# The staging script must verify the destination is git-ignored.
+rg -q 'git.*check-ignore' "$VISIONOS_STAGE_SCRIPT"
+
+# The inject script must use the data container (not the app bundle).
+rg -q 'get_app_container' "$VISIONOS_INJECT_SCRIPT"
+rg -Fq -- 'data 2>/dev/null' "$VISIONOS_INJECT_SCRIPT"
+
+# The inject script must reject a missing staged directory with a clear message.
+rg -q 'staged game data not found' "$VISIONOS_INJECT_SCRIPT"
+
+# Staging to a missing source must fail with a meaningful error.
+WARGUS_STAGE_ROOT="$TEST_RUNTIME/wargus-stage"
+cmake -E remove_directory "$WARGUS_STAGE_ROOT"
+cmake -E make_directory "$WARGUS_STAGE_ROOT"
+
+if PEONPAD_WARGUS_DATA_DIR="$WARGUS_STAGE_ROOT/nonexistent" \
+    "$VISIONOS_STAGE_SCRIPT" >/dev/null 2>&1; then
+  print -u2 "staging script accepted a non-existent data directory"
+  exit 1
+fi
+
+# Staging from an incomplete directory (missing required files) must fail.
+FAKE_WARGUS_INCOMPLETE="$WARGUS_STAGE_ROOT/incomplete.Wargus"
+cmake -E make_directory "$FAKE_WARGUS_INCOMPLETE"
+if PEONPAD_WARGUS_DATA_DIR="$FAKE_WARGUS_INCOMPLETE" \
+    "$VISIONOS_STAGE_SCRIPT" >/dev/null 2>&1; then
+  print -u2 "staging script accepted a directory missing required wargus files"
+  exit 1
+fi
+
+# Staging from a valid synthetic directory must succeed and land in build/.
+# The source must be outside the repository; use a tmpdir for the fixture.
+FAKE_WARGUS=$(mktemp -d "${TMPDIR:-/tmp}/peonpad-fake-wargus.XXXXXX")
+STAGED_TEST_DIR="$ROOT_DIR/build/visionos-wargus-data"
+STAGED_TEST_BACKUP=""
+cleanup_wargus_staging_test() {
+  rm -rf "$FAKE_WARGUS"
+  cmake -E remove_directory "$STAGED_TEST_DIR"
+  if [[ -n "$STAGED_TEST_BACKUP" && -d "$STAGED_TEST_BACKUP" ]]; then
+    mv "$STAGED_TEST_BACKUP" "$STAGED_TEST_DIR"
+    STAGED_TEST_BACKUP=""
+  fi
+}
+trap cleanup_wargus_staging_test EXIT
+
+# If the developer already has staged real data, preserve it across the test.
+if [[ -d "$STAGED_TEST_DIR" ]]; then
+  STAGED_TEST_BACKUP=$(mktemp -d "${TMPDIR:-/tmp}/peonpad-staged-backup.XXXXXX")
+  cp -R "$STAGED_TEST_DIR/." "$STAGED_TEST_BACKUP/"
+fi
+
+cmake -E make_directory "$FAKE_WARGUS/scripts"
+cmake -E make_directory "$FAKE_WARGUS/graphics"
+cmake -E make_directory "$FAKE_WARGUS/maps"
+cmake -E make_directory "$FAKE_WARGUS/sounds"
+printf 'AddTrigger("GameStarted")' > "$FAKE_WARGUS/scripts/stratagus.lua"
+printf 'extracted' > "$FAKE_WARGUS/extracted"
+# Include a fake proprietary archive to confirm it is excluded.
+printf '\x4d\x5a' > "$FAKE_WARGUS/maindat.MPQ"
+
+PEONPAD_WARGUS_DATA_DIR="$FAKE_WARGUS" \
+  "$VISIONOS_STAGE_SCRIPT" >/dev/null
+
+[[ -s "$STAGED_TEST_DIR/scripts/stratagus.lua" ]] || {
+  print -u2 "staging script did not produce scripts/stratagus.lua"
+  exit 1
+}
+# Confirm the fake proprietary archive was excluded.
+if [[ -e "$STAGED_TEST_DIR/maindat.MPQ" ]]; then
+  print -u2 "staging script allowed a .MPQ archive into the staged directory"
+  exit 1
+fi
+
+# Confirm the staged destination is still git-ignored after the staging run.
+git -C "$ROOT_DIR" check-ignore -q "$STAGED_TEST_DIR" || {
+  print -u2 "staged visionOS wargus data directory is not git-ignored"
+  exit 1
+}
+
+# Confirm git status is clean (staged data must not appear as untracked).
+UNTRACKED=$(git -C "$ROOT_DIR" status --porcelain \
+  -- "$STAGED_TEST_DIR" 2>/dev/null)
+[[ -z "$UNTRACKED" ]] || {
+  print -u2 "staged visionOS wargus data appeared in git status output"
+  exit 1
+}
+
+# Staging must refuse a source path inside the repository root.
+if PEONPAD_WARGUS_DATA_DIR="$ROOT_DIR/data.Wargus" \
+    "$VISIONOS_STAGE_SCRIPT" >/dev/null 2>&1; then
+  print -u2 "staging script accepted a source path inside the repository"
+  exit 1
+fi
+
+# Inject script must fail clearly when staged data is absent.
+cmake -E remove_directory "$STAGED_TEST_DIR"
+# The inject script checks staged data before any xcrun calls, so no fake
+# simulator environment is needed for this particular negative test.
+if "$VISIONOS_INJECT_SCRIPT" >/dev/null 2>&1; then
+  print -u2 "inject script accepted missing staged data"
+  exit 1
+fi
+
+cmake -E remove_directory "$WARGUS_STAGE_ROOT"
+# Restore any real staged data the developer had before the test ran.
+# The EXIT trap (cleanup_wargus_staging_test) handles this automatically.
+trap - EXIT
+cleanup_wargus_staging_test
 
 print "script guardrails passed"

@@ -83,7 +83,9 @@ struct TabletopBridgeState {
     uint32_t                    seen_map_width  = 0;
     uint32_t                    seen_map_height = 0;
     std::vector<uint16_t>       seen_tile_indices;
+    std::vector<uint16_t>       seen_graphic_indices;
     std::vector<uint8_t>        seen_terrain_classes;
+    std::vector<uint8_t>        seen_metadata_valid;
 };
 
 TabletopBridgeState g_bridge;
@@ -235,7 +237,9 @@ void peonpad_tabletop_cleanup(void)
         g_bridge.seen_map_width = 0;
         g_bridge.seen_map_height = 0;
         g_bridge.seen_tile_indices.clear();
+        g_bridge.seen_graphic_indices.clear();
         g_bridge.seen_terrain_classes.clear();
+        g_bridge.seen_metadata_valid.clear();
     }
     // Drop the latest snapshot.
     PeonPadSnapshot *old = nullptr;
@@ -678,12 +682,17 @@ void peonpad_tabletop_publish_snapshot(void)
     const uint32_t cell_count = mw * mh;
     snap->terrain.resize(cell_count);
     if (g_bridge.seen_map_width != mw || g_bridge.seen_map_height != mh
-        || g_bridge.seen_tile_indices.size() != cell_count) {
+        || g_bridge.seen_tile_indices.size() != cell_count
+        || g_bridge.seen_graphic_indices.size() != cell_count
+        || g_bridge.seen_terrain_classes.size() != cell_count
+        || g_bridge.seen_metadata_valid.size() != cell_count) {
         g_bridge.seen_map_width = mw;
         g_bridge.seen_map_height = mh;
         g_bridge.seen_tile_indices.assign(cell_count, 0x100u);
+        g_bridge.seen_graphic_indices.assign(cell_count, 0u);
         g_bridge.seen_terrain_classes.assign(
             cell_count, static_cast<uint8_t>(PEONPAD_TERRAIN_UNKNOWN));
+        g_bridge.seen_metadata_valid.assign(cell_count, 0u);
     }
 
     for (uint32_t y = 0; y < mh; ++y) {
@@ -699,14 +708,20 @@ void peonpad_tabletop_publish_snapshot(void)
                 out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
                 out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
                 g_bridge.seen_tile_indices[cell_index] = out.tile_index;
+                g_bridge.seen_graphic_indices[cell_index] =
+                    out.graphic_index;
                 g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
+                g_bridge.seen_metadata_valid[cell_index] = 1u;
             } else {
                 const CMapFieldPlayerInfo &info = field->playerInfo;
                 if (info.IsTeamVisible(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
                     out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
                     g_bridge.seen_tile_indices[cell_index] = out.tile_index;
+                    g_bridge.seen_graphic_indices[cell_index] =
+                        out.graphic_index;
                     g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
+                    g_bridge.seen_metadata_valid[cell_index] = 1u;
                 } else if (info.IsExplored(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_EXPLORED);
                     // Match the canonical map renderer: explored tiles retain
@@ -716,6 +731,32 @@ void peonpad_tabletop_publish_snapshot(void)
                     // The engine stores no last-seen logical tile or flags.
                     // Use the bridge's matching last-visible metadata so hidden
                     // current state cannot alter relief beneath retained art.
+                    if (g_bridge.seen_metadata_valid[cell_index] == 0u
+                        || g_bridge.seen_graphic_indices[cell_index]
+                            != out.graphic_index) {
+                        const int32_t seen_tile_index =
+                            Map.Tileset.findTileIndexByTile(info.SeenTile);
+                        if (seen_tile_index >= 0
+                            && static_cast<size_t>(seen_tile_index)
+                                < Map.Tileset.getTileCount()) {
+                            const auto idx =
+                                static_cast<tile_index>(seen_tile_index);
+                            g_bridge.seen_tile_indices[cell_index] =
+                                static_cast<uint16_t>(idx);
+                            g_bridge.seen_graphic_indices[cell_index] =
+                                out.graphic_index;
+                            g_bridge.seen_terrain_classes[cell_index] =
+                                ClassifyTerrain(Map.Tileset.getTile(idx).flag);
+                            g_bridge.seen_metadata_valid[cell_index] = 1u;
+                        } else {
+                            g_bridge.seen_tile_indices[cell_index] = 0x100u;
+                            g_bridge.seen_graphic_indices[cell_index] =
+                                out.graphic_index;
+                            g_bridge.seen_terrain_classes[cell_index] =
+                                static_cast<uint8_t>(PEONPAD_TERRAIN_UNKNOWN);
+                            g_bridge.seen_metadata_valid[cell_index] = 0u;
+                        }
+                    }
                     out.tile_index = g_bridge.seen_tile_indices[cell_index];
                     out.terrain_class =
                         g_bridge.seen_terrain_classes[cell_index];

@@ -43,9 +43,19 @@ struct TabletopBoardView: View {
     }
 
     /// Designated init for tests and SwiftUI previews.
-    init<S: TabletopGameplaySource & TabletopCommandSink>(session: S) where S: Sendable {
+    init<S: TabletopGameplaySource & TabletopCommandSink>(
+        session: S,
+        harnessTransport: TabletopTransport? = nil
+    ) where S: Sendable {
         _session = State(initialValue: AnyTabletopSession(session))
+        self.harnessTransport = harnessTransport
     }
+
+    /// The production transport, passed through only so the opt-in command
+    /// integration harness can submit probes through the exact production
+    /// `send(_:)` and observe the results on the same live stream the board
+    /// reconciles. `nil` in tests/previews and when no transport is bound.
+    private var harnessTransport: TabletopTransport?
 
     // MARK: - Gesture / board state
 
@@ -148,6 +158,14 @@ struct TabletopBoardView: View {
             // is bound. `gameplaySnapshot` remains nil; the overlay below
             // surfaces the diagnostic to the developer.
         }
+        // Opt-in command integration harness (disabled unless
+        // PEONPAD_TABLETOP_COMMAND_HARNESS is set): submits select→move→stop
+        // through the production transport and logs whether the engine changed
+        // state, as observed on the same live stream the board reconciles.
+        .task {
+            guard let harnessTransport else { return }
+            _ = TabletopCommandHarnessDriver.runIfEnabled(transport: harnessTransport)
+        }
         // Diagnostic overlay: visible when no snapshot has been received
         // (live session with no transport bound).
         .overlay(alignment: .center) {
@@ -180,6 +198,7 @@ struct TabletopBoardView: View {
     /// Computes the diff from the previous snapshot and applies the minimal
     /// set of RealityKit mutations needed to bring the board up to date.
     /// Does not rebuild `boardRoot` or discard active gesture state.
+    @MainActor
     private func applySnapshotDiff(_ next: TabletopGameplaySnapshot) {
         guard let boardRoot else { return }
 

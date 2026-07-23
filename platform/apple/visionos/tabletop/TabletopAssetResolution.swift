@@ -20,7 +20,7 @@ import Foundation
 
 /// A pixel rectangle within a decoded image, used to crop a single tile or
 /// sprite frame out of an atlas/sheet.
-public struct TabletopSourceRect: Equatable {
+public struct TabletopSourceRect: Equatable, Sendable {
     public var x: Int
     public var y: Int
     public var width: Int
@@ -39,7 +39,7 @@ public struct TabletopSourceRect: Equatable {
 /// player/owner index. Applied by the material provider to the team-colored
 /// region of a sprite (an approximation of the engine's palette remap when the
 /// provider cannot recover the sprite's original palette indices).
-public struct TabletopTeamTint: Equatable {
+public struct TabletopTeamTint: Equatable, Sendable {
     public var red: Double
     public var green: Double
     public var blue: Double
@@ -156,7 +156,7 @@ public enum TabletopAssetPath {
 /// A concrete instruction for the material provider: crop `sourceRect` (or the
 /// whole image when `sourceRect == nil`) out of the staged image at
 /// `relativePath`, optionally mirror it horizontally, and tint its team region.
-public struct TabletopAssetPlacement: Equatable {
+public struct TabletopAssetPlacement: Equatable, Sendable {
     /// Confined path relative to the staged game-data root.
     public var relativePath: String
     /// The frame/graphic index within the atlas (informational; the provider

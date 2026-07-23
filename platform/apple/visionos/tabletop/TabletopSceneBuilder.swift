@@ -363,6 +363,7 @@ enum TabletopBoardBuilder {
     ///   `tileEntityKey(tileX:tileZ:)`  — terrain quads ("tileX.tileZ")
     ///   `fogEntityKey(tileX:tileZ:)`   — per-tile fog quads ("fog.tileX.tileZ")
     @discardableResult
+    @MainActor
     static func addSurface(
         to boardRoot: Entity,
         snapshot: TabletopGameplaySnapshot,
@@ -452,6 +453,7 @@ enum TabletopBoardBuilder {
     /// parents it to `boardRoot`. Returns the live unit for tracking. When a
     /// material provider and sprite descriptor are available, the unit's real
     /// Wargus sprite is requested and applied progressively.
+    @MainActor
     static func addUnit(
         _ gameplayUnit: TabletopGameplayUnit,
         to boardRoot: Entity,
@@ -473,6 +475,7 @@ enum TabletopBoardBuilder {
     /// frame and applies it when it decodes. Safe to call repeatedly (e.g. on
     /// each animation-frame change); the provider caches decoded textures so an
     /// unchanged frame does not re-read the disk.
+    @MainActor
     static func refreshUnitSprite(
         _ liveUnit: TabletopLiveUnit,
         unit: TabletopGameplayUnit,

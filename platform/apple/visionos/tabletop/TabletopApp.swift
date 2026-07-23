@@ -23,8 +23,14 @@ struct PeonPadTabletopApp: App {
     // staged data (Documents/wargus-data) and a separate writable user
     // directory; a nil transport (paths not ready) is surfaced by the board's
     // diagnostic overlay rather than a silent demo fallback.
-    @State private var gameplaySession =
-        LiveTabletopSession(transport: PeonPadTabletopLaunch.makeEngineTransport())
+    @State private var engineTransport: EngineTabletopTransport?
+    @State private var gameplaySession: LiveTabletopSession
+
+    init() {
+        let transport = PeonPadTabletopLaunch.makeEngineTransport()
+        _engineTransport = State(initialValue: transport)
+        _gameplaySession = State(initialValue: LiveTabletopSession(transport: transport))
+    }
 
     var body: some SwiftUI.Scene {
         WindowGroup(id: Self.launcherWindowID) {
@@ -35,7 +41,7 @@ struct PeonPadTabletopApp: App {
         }
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
-            TabletopBoardView(session: gameplaySession)
+            TabletopBoardView(session: gameplaySession, harnessTransport: engineTransport)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }

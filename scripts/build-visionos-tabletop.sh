@@ -114,6 +114,7 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopTransport.swift"
   "$TABLETOP_SRC_DIR/TabletopGameplaySource.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardReconciler.swift"
+  "$TABLETOP_SRC_DIR/TabletopCommandHarness.swift"
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
   "$TABLETOP_SRC_DIR/TabletopPaletteView.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"

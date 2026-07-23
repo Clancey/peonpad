@@ -80,6 +80,10 @@ struct TabletopBoardView: View {
     /// safe and avoids rebuilding the board root on every SwiftUI re-render.
     @State private var boardRoot: Entity?
     @State private var headAnchor: Entity?
+    /// The floating action panel's anchor, posed once from the board's initial
+    /// placement and added directly to the scene content (never under
+    /// `boardRoot`), so it does not inherit the live board pan/rotate/scale.
+    @State private var floatingPanelAnchor: Entity?
     /// Unit entities keyed by stable unit ID for O(1) incremental updates.
     @State private var liveUnitsByID: [String: TabletopLiveUnit] = [:]
     /// Terrain tile entities keyed by "tileX.tileZ" for O(1) material updates.
@@ -115,16 +119,34 @@ struct TabletopBoardView: View {
             applyTransform(manipulator.transform, to: root)
             content.add(root)
 
-            // -- Palette attachment (board-relative, not head-locked) --
-            if let paletteEntity = attachments.entity(for: TabletopPaletteView.attachmentID) {
-                paletteEntity.name = "palette"
-                paletteEntity.position = [
-                    0,
+            // -- Floating action panel (NOT parented under the board root) --
+            // Mounted on a dedicated anchor added directly to `content` and
+            // posed once from the board's *initial* placement, so it never
+            // inherits the live board pan/rotate/scale from `manipulator`. This
+            // keeps it fixed, readable, and tappable while the board moves
+            // beneath it, and lets it act on the current selection.
+            let panelAnchor = Entity()
+            panelAnchor.name = "floatingActionPanel"
+            let initial = TabletopPlacement.initialTransform
+            panelAnchor.position = SIMD3<Float>(
+                Float(initial.position.x),
+                Float(initial.position.y),
+                Float(initial.position.z))
+            panelAnchor.orientation = simd_quatf(
+                angle: Float(initial.yawRadians), axis: [0, 1, 0])
+            content.add(panelAnchor)
+            if let panelEntity = attachments.entity(for: TabletopActionPanelView.attachmentID) {
+                panelEntity.name = "actionPanel"
+                // Beside the near/viewer edge of the board, upright, facing the
+                // viewer (same +Z orientation the old board palette used).
+                panelEntity.position = [
+                    TabletopBoardMetrics.halfExtent + 0.14,
                     TabletopBoardMetrics.unitHeight * 1.6,
-                    TabletopBoardMetrics.halfExtent + 0.08,
+                    TabletopBoardMetrics.halfExtent + 0.06,
                 ]
-                root.addChild(paletteEntity)
+                panelAnchor.addChild(panelEntity)
             }
+            self.floatingPanelAnchor = panelAnchor
 
             // -- Head anchor for billboard orientation --
             let head = AnchorEntity(.head)
@@ -149,8 +171,11 @@ struct TabletopBoardView: View {
             // recommended pattern for continuous manipulation). Snapshot-
             // driven changes are applied from the .task subscriber below.
         } attachments: {
-            Attachment(id: TabletopPaletteView.attachmentID) {
-                TabletopPaletteView(onRecenter: recenter)
+            Attachment(id: TabletopActionPanelView.attachmentID) {
+                TabletopActionPanelView(
+                    context: TabletopActionPanel.context(for: gameplaySnapshot),
+                    onCommand: { session.send($0) },
+                    onRecenter: recenter)
             }
         }
         .gesture(

@@ -80,6 +80,23 @@ extern "C" void SDL_SetMainReady(void);
         setenv("SDL_VIDEODRIVER", "offscreen", 1);
     }
 
+    // On the visionOS simulator CoreAudio's AudioQueue back-end contacts the
+    // spatial-audio XPC service, which is absent in the simulator environment.
+    // The XPC failure propagates as a fatal error (error -66671) that kills the
+    // process before the engine publishes snapshots, even though SDL3 would
+    // otherwise handle a non-zero AudioQueueNewOutput return gracefully.
+    // On physical devices the spatial-audio pipeline is fully available, so we
+    // do not suppress it there.  Callers may still override via the environment.
+    //
+    // This mirrors the SDL_VIDEODRIVER=offscreen guard above: we redirect a
+    // simulator-only subsystem that has no headless equivalent to its null/dummy
+    // back-end rather than letting the XPC layer abort the process.
+#if TARGET_OS_SIMULATOR
+    if (getenv("SDL_AUDIODRIVER") == nullptr) {
+        setenv("SDL_AUDIODRIVER", "dummy", 1);
+    }
+#endif
+
     // Copy the Swift argv into a C-owned, NUL-terminated argv that outlives the
     // engine thread. The engine keeps pointers into argv, so it must remain
     // valid for the process lifetime; we intentionally leak it (engine runs

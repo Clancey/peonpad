@@ -15,7 +15,7 @@ import Foundation
 /// `PEONPAD_TABLETOP_ABI_VERSION` in PeonPadTabletopBridge.h. The transport
 /// rejects any engine snapshot whose embedded version differs, rather than
 /// misreading struct fields at a stale layout.
-public let kPeonPadTabletopABIVersion: UInt32 = 4
+public let kPeonPadTabletopABIVersion: UInt32 = 5
 
 /// Fog-of-war state of a single tile (mirrors `PeonPadFogState`).
 public enum EngineFogState: UInt8, Equatable {
@@ -148,8 +148,9 @@ public struct EngineUnitType: Equatable {
 }
 
 /// The active map's tileset descriptor (mirrors `PeonPadTilesetDescriptor`,
-/// ABI v3). Combined with a terrain cell's `graphicIndex`, `pixelTileWidth`,
-/// and `imageWidth` it yields a tile's source rectangle in the tileset image.
+/// ABI v3; `pathRoot` added in v5). Combined with a terrain cell's
+/// `graphicIndex`, `pixelTileWidth`, and `imageWidth` it yields a tile's
+/// source rectangle in the tileset image.
 public struct EngineTilesetDescriptor: Equatable {
     public var imagePath: String
     public var pixelTileWidth: UInt16
@@ -157,9 +158,14 @@ public struct EngineTilesetDescriptor: Equatable {
     public var imageWidth: UInt16
     public var imageHeight: UInt16
     public var name: String
+    /// Raw `PeonPadTilesetPathRoot` byte (ABI v5): which root `imagePath` is
+    /// relative to. `0` (data root) for snapshots from an ABI v4-or-earlier
+    /// engine build.
+    public var pathRoot: UInt8
     public init(
         imagePath: String, pixelTileWidth: UInt16, pixelTileHeight: UInt16,
-        imageWidth: UInt16 = 0, imageHeight: UInt16 = 0, name: String = ""
+        imageWidth: UInt16 = 0, imageHeight: UInt16 = 0, name: String = "",
+        pathRoot: UInt8 = 0
     ) {
         self.imagePath = imagePath
         self.pixelTileWidth = pixelTileWidth
@@ -167,6 +173,7 @@ public struct EngineTilesetDescriptor: Equatable {
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
         self.name = name
+        self.pathRoot = pathRoot
     }
 }
 

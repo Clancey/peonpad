@@ -64,7 +64,7 @@ static void Run(const char *name, bool (*test_fn)())
 
 static bool test_abi_version_constant()
 {
-    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 4u);
+    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 5u);
     return true;
 }
 
@@ -88,10 +88,11 @@ static bool test_struct_sizes()
     //   + tile_height(1) + _pad4(1) = 176 bytes
     EXPECT(sizeof(PeonPadUnitType) == 176u);
 
-    // PeonPadTilesetDescriptor (ABI v3): image_path(128)
+    // PeonPadTilesetDescriptor (ABI v3; path_root added in v5): image_path(128)
     //   + pixel_tile_width(2) + pixel_tile_height(2)
-    //   + image_width(2) + image_height(2) + name(32) = 168 bytes
-    EXPECT(sizeof(PeonPadTilesetDescriptor) == 168u);
+    //   + image_width(2) + image_height(2) + name(32)
+    //   + image_path_root(1) + _pad5(1) = 170 bytes
+    EXPECT(sizeof(PeonPadTilesetDescriptor) == 170u);
 
     // PeonPadCommand:
     //   type(4) + abi_ver(4) + unit_id(4) + tile_x(4) + tile_y(4)
@@ -143,6 +144,7 @@ static bool test_struct_field_offsets()
     EXPECT(offsetof(PeonPadTilesetDescriptor, image_width)       == 132u);
     EXPECT(offsetof(PeonPadTilesetDescriptor, image_height)      == 134u);
     EXPECT(offsetof(PeonPadTilesetDescriptor, name)              == 136u);
+    EXPECT(offsetof(PeonPadTilesetDescriptor, image_path_root)   == 168u);
 
     EXPECT(offsetof(PeonPadCommand, type)     ==  0u);
     EXPECT(offsetof(PeonPadCommand, abi_ver)  ==  4u);
@@ -174,6 +176,10 @@ static bool test_enum_values()
     EXPECT(static_cast<int>(PEONPAD_CMD_MOVE)         == 3);
     EXPECT(static_cast<int>(PEONPAD_CMD_STOP)         == 4);
     EXPECT(static_cast<int>(PEONPAD_CMD_DESELECT_ALL) == 5);
+
+    // ABI v5: tileset image_path root discriminator.
+    EXPECT(static_cast<int>(PEONPAD_TILESET_PATH_ROOT_DATA)  == 0);
+    EXPECT(static_cast<int>(PEONPAD_TILESET_PATH_ROOT_CACHE) == 1);
 
     return true;
 }
@@ -585,6 +591,8 @@ static bool test_synthetic_v3_asset_descriptors()
     std::snprintf(tileset.name, PEONPAD_TABLETOP_MAX_IDENT, "Forest");
     tileset.pixel_tile_width  = 32u;
     tileset.pixel_tile_height = 32u;
+    // ABI v5: the writable-cache-root discriminator.
+    tileset.image_path_root   = PEONPAD_TILESET_PATH_ROOT_CACHE;
 
     EXPECT(peonpad_tabletop_publish_synthetic_v3(
         9, 1, 1, &cell, 1, units, 1, types, 1, &tileset) == 0);
@@ -626,6 +634,8 @@ static bool test_synthetic_v3_asset_descriptors()
     EXPECT(std::strcmp(td->name, "Forest") == 0);
     EXPECT(td->pixel_tile_width == 32u);
     EXPECT(td->pixel_tile_height == 32u);
+    // ABI v5 round-trip.
+    EXPECT(td->image_path_root == PEONPAD_TILESET_PATH_ROOT_CACHE);
 
     peonpad_snapshot_release(s);
 

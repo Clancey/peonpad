@@ -167,10 +167,25 @@ public struct TabletopGameplaySelection: Codable, Equatable {
 
 // MARK: - Asset catalog (engine-owned art descriptors, ABI v3)
 
+/// Which root `TabletopTilesetInfo.imagePath` is relative to (mirrors the
+/// engine's `PeonPadTilesetPathRoot`, ABI v5). The engine's expanded-tileset
+/// PNG cache (see PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG)
+/// lives under the writable user/cache root, never the read-only staged
+/// game-data root that every path was relative to before v5 — this
+/// discriminator lets the material provider resolve `imagePath` against the
+/// correct root explicitly, rather than inferring placement from a filename
+/// convention.
+public enum TabletopTilesetPathRoot: UInt8, Codable, Equatable, Sendable {
+    /// Relative to the read-only staged game-data root (the engine's `-d`).
+    case dataRoot = 0
+    /// Relative to the writable user/cache root (the engine's `-u`).
+    case cacheRoot = 1
+}
+
 /// The active map's tileset image descriptor, carried on the snapshot so the
 /// render layer can crop real tile art without parsing any tileset script.
 public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
-    /// Tileset image path relative to the game-data root.
+    /// Tileset image path relative to the root named by `pathRoot`.
     public var imagePath: String
     public var pixelTileWidth: Int
     public var pixelTileHeight: Int
@@ -179,9 +194,14 @@ public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
     public var imageWidth: Int
     public var imageHeight: Int
     public var name: String
+    /// Which root `imagePath` is relative to (ABI v5; always `.dataRoot` for
+    /// snapshots from an ABI v4-or-earlier engine build, which only ever
+    /// referenced authored assets on the read-only data root).
+    public var pathRoot: TabletopTilesetPathRoot
     public init(
         imagePath: String, pixelTileWidth: Int, pixelTileHeight: Int,
-        imageWidth: Int = 0, imageHeight: Int = 0, name: String = ""
+        imageWidth: Int = 0, imageHeight: Int = 0, name: String = "",
+        pathRoot: TabletopTilesetPathRoot = .dataRoot
     ) {
         self.imagePath = imagePath
         self.pixelTileWidth = pixelTileWidth
@@ -189,6 +209,7 @@ public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
         self.imageWidth = imageWidth
         self.imageHeight = imageHeight
         self.name = name
+        self.pathRoot = pathRoot
     }
 }
 

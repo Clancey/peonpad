@@ -182,17 +182,32 @@ func testTerrainPlacement() {
     expect(p?.teamTint == nil, "terrain has no team tint")
     expectEqual(p?.isGeneratedCache, false, "an authored asset path is not a generated-cache placement")
 
-    // A tileset image path under the engine's generated-cache prefix (the
-    // expanded tileset PNG the engine writes to the writable user/cache
-    // root — see PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG) is
-    // flagged so the material provider resolves it against the writable
-    // cache root instead of the read-only staged data root.
+    // A tileset descriptor whose ABI v5 `pathRoot` discriminator says
+    // "writable cache root" (regardless of its filename) is flagged so the
+    // material provider resolves it against the writable cache root instead
+    // of the read-only staged data root. This is the *authoritative* signal
+    // (not the "tabletop-generated/" filename convention, which is engine-side
+    // documentation only — see TabletopAssetPath.generatedCachePrefix).
     let generated = TabletopTilesetInfo(
         imagePath: "tabletop-generated/forest-v1-abcdef0123456789.png",
-        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest")
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest",
+        pathRoot: .cacheRoot)
     let gp = resolver.terrainPlacement(graphicIndex: 329, tileset: generated)
     expect(gp != nil, "terrain placement resolved for a generated-cache tileset")
-    expectEqual(gp?.isGeneratedCache, true, "a tabletop-generated/ path is flagged as generated-cache")
+    expectEqual(gp?.isGeneratedCache, true, "pathRoot == .cacheRoot is flagged as generated-cache")
+
+    // The filename convention alone is NOT authoritative: a descriptor whose
+    // path happens to start with "tabletop-generated/" but whose pathRoot
+    // still says .dataRoot (e.g. an older/misbehaving engine build, or any
+    // future rename of the convention) must resolve against the data root,
+    // not be silently treated as generated-cache by name-sniffing.
+    let lookalike = TabletopTilesetInfo(
+        imagePath: "tabletop-generated/forest-v1-abcdef0123456789.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest",
+        pathRoot: .dataRoot)
+    let lp = resolver.terrainPlacement(graphicIndex: 329, tileset: lookalike)
+    expectEqual(lp?.isGeneratedCache, false,
+                "pathRoot is authoritative even when the filename looks generated")
 
     // Missing / corrupt descriptors → nil (per-tile procedural fallback).
     expect(resolver.terrainPlacement(graphicIndex: 5, tileset: nil) == nil,

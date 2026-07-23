@@ -336,6 +336,75 @@ func testReconcilerDetectsUnitAddition() {
            "newly added unit does not appear in removedUnitIDs")
 }
 
+// MARK: - TabletopBoardReconciler: tileset identity change detected
+//
+// Regression coverage for the "stale atlas after tileset transition" bug:
+// the engine's tileset descriptor can transition raw->generated (a delayed
+// export retry succeeding after an initial failure) or generated v1->v2 (a
+// same-process tileset reload — see PeonPadTabletopBridge.cpp's
+// ExportExpandedTilesetPNG / TabletopTilesetExportCache) while every terrain
+// tile's kind/graphicIndex stays exactly the same. `changedTerrainTiles`
+// alone must not be the only signal driving atlas invalidation.
+
+func testReconcilerDetectsTilesetPathChangeWithUnchangedTerrain() {
+    let before = TabletopGameplaySnapshot.demo()
+    var after = before
+    // Terrain is byte-for-byte identical...
+    precondition(after.terrain == before.terrain, "precondition: terrain unchanged")
+
+    // ...but the tileset transitioned from the raw asset to the engine's
+    // generated-cache export (a delayed retry succeeding).
+    after.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tilesets/summer/terrain/summer.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: .dataRoot))
+    let diff1 = TabletopBoardReconciler.diff(from: before, to: after)
+    expect(diff1.changedTerrainTiles.isEmpty, "precondition: no terrain tile value changed")
+    expect(diff1.tilesetChanged, "raw tileset appearing (nil -> Set) is flagged as a tileset change")
+    expect(!diff1.isEmpty, "a tileset-only change must not be reported as an empty diff")
+
+    var afterGenerated = after
+    afterGenerated.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tabletop-generated/forest-v1-aaaa.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: .cacheRoot))
+    let diff2 = TabletopBoardReconciler.diff(from: after, to: afterGenerated)
+    expect(diff2.changedTerrainTiles.isEmpty, "precondition: no terrain tile value changed")
+    expect(diff2.tilesetChanged, "raw -> generated-cache transition is flagged as a tileset change")
+}
+
+func testReconcilerDetectsTilesetVersionChangeWithUnchangedTerrain() {
+    let before = TabletopGameplaySnapshot.demo()
+    var v1 = before
+    v1.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tabletop-generated/forest-v1-aaaa.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: .cacheRoot))
+    var v2 = v1
+    // Same tileset *name*, same terrain, but a new generated version (e.g. a
+    // same-process reload regenerated a taller expanded surface) — the path
+    // (and therefore the exported image content) differs.
+    v2.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tabletop-generated/forest-v2-bbbb.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: .cacheRoot))
+    precondition(v1.terrain == v2.terrain, "precondition: terrain unchanged")
+
+    let diff = TabletopBoardReconciler.diff(from: v1, to: v2)
+    expect(diff.changedTerrainTiles.isEmpty, "precondition: no terrain tile value changed")
+    expect(diff.tilesetChanged, "generated v1 -> v2 transition is flagged as a tileset change")
+    expect(!diff.isEmpty, "a v1->v2-only change must not be reported as an empty diff")
+}
+
+func testReconcilerNoTilesetChangeWhenIdentical() {
+    var before = TabletopGameplaySnapshot.demo()
+    var after = before
+    after.assets = TabletopAssetCatalog(tileset: TabletopTilesetInfo(
+        imagePath: "tilesets/summer/terrain/summer.png",
+        pixelTileWidth: 32, pixelTileHeight: 32, name: "Forest", pathRoot: .dataRoot))
+    before.assets = after.assets
+
+    let diff = TabletopBoardReconciler.diff(from: before, to: after)
+    expect(!diff.tilesetChanged, "identical tileset descriptors are not flagged as changed")
+    expect(diff.isEmpty, "no changes anywhere => empty diff")
+}
+
 // MARK: - TabletopBoardReconciler: terrain change detected
 
 func testReconcilerDetectsTerrainChange() {
@@ -494,6 +563,9 @@ struct TabletopLiveStateTestRunner {
         testReconcilerDetectsDeselection()
         testReconcilerDetectsUnitRemoval()
         testReconcilerDetectsUnitAddition()
+        testReconcilerDetectsTilesetPathChangeWithUnchangedTerrain()
+        testReconcilerDetectsTilesetVersionChangeWithUnchangedTerrain()
+        testReconcilerNoTilesetChangeWhenIdentical()
         testReconcilerDetectsTerrainChange()
         testReconcilerDetectsFogChange()
         testReconcilerDetectsExploredToVisibleTransition()

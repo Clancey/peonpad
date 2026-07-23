@@ -148,10 +148,9 @@ public final class WargusTabletopMaterialProvider {
     ) {
         // All slots share the same tileset, so its generated-cache-ness (and
         // therefore which root applies) is determined once up front rather
-        // than per placement.
-        let isGeneratedCache = tileset.map {
-            TabletopAssetPath.confine($0.imagePath)?.hasPrefix(TabletopAssetPath.generatedCachePrefix) ?? false
-        } ?? false
+        // than per placement — from the explicit ABI v5 `pathRoot`
+        // discriminator, never inferred from the filename.
+        let isGeneratedCache = tileset?.pathRoot == .cacheRoot
         let root     = isGeneratedCache ? (cacheRoot ?? dataRoot) : dataRoot
         let resolver = self.resolver
 

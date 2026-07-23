@@ -124,11 +124,13 @@ public enum TabletopAssetPath {
     /// fixed subdirectory (see PeonPadTabletopBridge.cpp's
     /// ExportExpandedTilesetPNG / TabletopTilesetExportRelativePath), always
     /// under the writable user/cache root — never the read-only staged data
-    /// root. A relative path with this prefix is resolved against the
-    /// material provider's `cacheRoot` instead of its `dataRoot` (see
-    /// WargusTabletopMaterialProvider); everything else is an authored asset
-    /// resolved against `dataRoot` as before. Confinement (below) applies to
-    /// both cases identically — only the root differs.
+    /// root. This constant documents that engine-side filename convention
+    /// for reference only; which root a placement resolves against is
+    /// decided from the explicit `TabletopTilesetInfo.pathRoot` /
+    /// `PeonPadTilesetPathRoot` ABI v5 discriminator (see
+    /// `WargusStagedAssetResolver.terrainPlacement`), never by sniffing this
+    /// prefix — a future rename/relocation of the engine's convention would
+    /// otherwise silently break placement resolution.
     public static let generatedCachePrefix = "tabletop-generated/"
 
     public static func confine(_ raw: String) -> String? {
@@ -261,7 +263,7 @@ public final class WargusStagedAssetResolver: @unchecked Sendable {
             cellHeight: tileset.pixelTileHeight,
             mirror: false,
             teamTint: nil,
-            isGeneratedCache: path.hasPrefix(TabletopAssetPath.generatedCachePrefix))
+            isGeneratedCache: tileset.pathRoot == .cacheRoot)
     }
 
     /// Placement for a unit's current sprite frame, or `nil` when the unit has

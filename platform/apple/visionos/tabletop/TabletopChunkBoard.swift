@@ -100,6 +100,11 @@ public final class TabletopChunkBoard {
     /// compare their captured generation to the current value and abort if
     /// a newer rebuild has superseded them.
     private var chunkGeneration:  [TabletopChunkKey: Int] = [:]
+    /// Incremented each time the shared tree material is (re)requested;
+    /// mirrors `chunkGeneration`'s per-chunk stale-completion guard so a
+    /// superseded in-flight tree-material decode (from a tileset that has
+    /// since changed again) cannot overwrite a newer one.
+    private var treeGeneration = 0
 
     // MARK: State
 
@@ -307,6 +312,33 @@ public final class TabletopChunkBoard {
                 }
             }
         }
+    }
+
+    /// Forces every terrain chunk and the shared tree material to re-request
+    /// their real-art textures against `tileset`, even though no individual
+    /// terrain tile's value changed. Call when the tileset descriptor's
+    /// render-relevant identity itself changed between snapshots (see
+    /// `TabletopBoardReconciler.tilesetChanged`) — e.g. the engine's
+    /// exported-tileset path transitioned from the raw asset to the
+    /// generated cache, or from one generated version to the next (see
+    /// PeonPadTabletopBridge.cpp's ExportExpandedTilesetPNG /
+    /// TabletopTilesetExportCache) — since existing chunk/tree materials
+    /// otherwise stay bound to the old tileset forever: `updateTerrainTiles`
+    /// alone only rebuilds chunks containing a tile whose *value* changed,
+    /// leaving every chunk with no changed tile silently stale.
+    ///
+    /// Passing every terrain tile (not just ones whose value changed) marks
+    /// every chunk dirty in `updateTerrainTiles`, so each one rebuilds its
+    /// mesh + atlas against the new tileset and bumps its `chunkGeneration`
+    /// — both re-requesting real art and guarding against a stale in-flight
+    /// completion from the *old* tileset landing after the new one.
+    public func refreshForTilesetChange(
+        snapshot next: TabletopGameplaySnapshot,
+        tileset: TabletopTilesetInfo?,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        updateTerrainTiles(next.terrain, tileset: tileset, materialProvider: materialProvider)
+        refreshTreeMaterial(snapshot: next, tileset: tileset, materialProvider: materialProvider)
     }
 
     // MARK: - Incremental fog update
@@ -528,18 +560,40 @@ public final class TabletopChunkBoard {
         }
 
         // Upgrade all trees to the real forest tile art (one shared decode).
-        if let materialProvider, let gi = forest.first?.graphicIndex {
-            materialProvider.terrainMaterial(
-                graphicIndex: gi, tileset: snapshot.assets?.tileset
-            ) { [weak self] material in
-                guard let self else { return }
-                for t in self.treeEntities { t.entity.model?.materials = [material] }
-                tabletopEngineLog("[Tabletop] trees: real forest texture applied")
-            }
-        }
+        refreshTreeMaterial(snapshot: snapshot, tileset: snapshot.assets?.tileset,
+                            materialProvider: materialProvider)
 
         tabletopEngineLog(
             "[Tabletop] trees: forest=\(forest.count) stride=\(stride) billboards=\(placed)")
+    }
+
+    /// Requests the shared tree material against `tileset`'s current
+    /// forest-tile art and applies it to every placed tree billboard when it
+    /// decodes. Guarded by `treeGeneration` so a stale in-flight decode (from
+    /// a tileset the caller has since superseded with another refresh) can
+    /// never overwrite a newer result — mirroring `chunkGeneration`'s
+    /// per-chunk stale-completion guard.
+    private func refreshTreeMaterial(
+        snapshot: TabletopGameplaySnapshot,
+        tileset: TabletopTilesetInfo?,
+        materialProvider: WargusTabletopMaterialProvider?
+    ) {
+        guard !treeEntities.isEmpty,
+              let materialProvider,
+              let gi = snapshot.terrain.first(where: { $0.kind == .forest })?.graphicIndex
+        else { return }
+
+        treeGeneration += 1
+        let gen = treeGeneration
+        materialProvider.terrainMaterial(
+            graphicIndex: gi, tileset: tileset
+        ) { [weak self] material in
+            guard let self else { return }
+            guard TabletopAtlasCompletionGate.accepts(
+                requestGeneration: gen, currentGeneration: self.treeGeneration) else { return }  // stale guard
+            for t in self.treeEntities { t.entity.model?.materials = [material] }
+            tabletopEngineLog("[Tabletop] trees: real forest texture applied")
+        }
     }
 
     /// A double-sided vertical quad for a tree billboard, centred on the origin.

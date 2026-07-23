@@ -700,10 +700,17 @@ void peonpad_tabletop_publish_snapshot(void)
             ExportExpandedTilesetPNG(ts, exported_width, exported_height);
         std::string image_path;
         uint16_t image_width = 0, image_height = 0;
+        PeonPadTilesetPathRoot path_root = PEONPAD_TILESET_PATH_ROOT_DATA;
         if (!exported_tileset.empty()) {
             image_path   = exported_tileset;
             image_width  = exported_width;
             image_height = exported_height;
+            // The exported PNG lives under the writable user/cache root
+            // (Parameters::Instance.GetUserDirectory(), the `-u` root — see
+            // ExportExpandedTilesetPNG), not the read-only staged data root.
+            // Set this explicitly (ABI v5) rather than letting the UI infer
+            // placement from the "tabletop-generated/" filename convention.
+            path_root = PEONPAD_TILESET_PATH_ROOT_CACHE;
         } else {
             // CTileset::ImageFile stores the unresolved Lua path (e.g.
             // "tilesets/summer/terrain/summer.png") without the "graphics/"
@@ -711,6 +718,7 @@ void peonpad_tabletop_publish_snapshot(void)
             // LibraryFileName so the UI receives the staged-data-root-relative
             // path it can actually open (e.g. "graphics/tilesets/summer/…").
             image_path = ResolveAssetPath(ts.ImageFile);
+            path_root  = PEONPAD_TILESET_PATH_ROOT_DATA;
         }
         std::snprintf(snap->tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
                       "%s", image_path.c_str());
@@ -724,6 +732,8 @@ void peonpad_tabletop_publish_snapshot(void)
         // PNG's own dimensions (unchanged fallback behavior).
         snap->tileset.image_width  = image_width;
         snap->tileset.image_height = image_height;
+        snap->tileset.image_path_root = static_cast<uint8_t>(path_root);
+        snap->tileset._pad5 = 0;
     }
 
     // ── Units ────────────────────────────────────────────────────────────

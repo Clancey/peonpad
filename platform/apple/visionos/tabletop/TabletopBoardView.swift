@@ -283,11 +283,26 @@ struct TabletopBoardView: View {
             // Keep tileEntities empty — the chunk board owns all terrain/fog entities.
             tileEntities = [:]
         } else {
-            // Incremental terrain and fog updates on the chunk board.
-            chunkBoard?.updateTerrainTiles(
-                diff.changedTerrainTiles,
-                tileset: next.assets?.tileset,
-                materialProvider: materialProvider)
+            // Incremental terrain and fog updates on the chunk board. When
+            // the tileset descriptor's render-relevant identity itself
+            // changed (e.g. the engine's exported-tileset path transitioned
+            // raw->generated or generated v1->v2 — see
+            // TabletopBoardReconciler.tilesetChanged), every chunk and the
+            // shared tree material must re-request their real-art textures
+            // even if no individual terrain tile's value changed —
+            // `updateTerrainTiles(diff.changedTerrainTiles, ...)` alone would
+            // leave every chunk with no changed tile bound to stale art.
+            if diff.tilesetChanged {
+                chunkBoard?.refreshForTilesetChange(
+                    snapshot: next,
+                    tileset: next.assets?.tileset,
+                    materialProvider: materialProvider)
+            } else {
+                chunkBoard?.updateTerrainTiles(
+                    diff.changedTerrainTiles,
+                    tileset: next.assets?.tileset,
+                    materialProvider: materialProvider)
+            }
             chunkBoard?.updateFogTiles(diff.changedFogTiles)
         }
 

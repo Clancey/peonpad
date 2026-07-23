@@ -49,6 +49,8 @@ struct PeonPadSnapshot {
     std::vector<PeonPadTerrainCell> terrain;    // map_width * map_height cells
     std::vector<PeonPadUnitRecord>  units;
     std::vector<PeonPadUnitType>    unit_types; // ABI v2: type_id → ident registry
+    bool                            has_tileset = false; // ABI v3
+    PeonPadTilesetDescriptor        tileset{};  // ABI v3: active-map tileset
 };
 
 // ── Bridge state (owned by simulation thread) ─────────────────────────────
@@ -175,6 +177,12 @@ const PeonPadUnitType *peonpad_snapshot_unit_types(const PeonPadSnapshot *s)
     return s->unit_types.data();
 }
 
+const PeonPadTilesetDescriptor *peonpad_snapshot_tileset(const PeonPadSnapshot *s)
+{
+    if (!s || !s->has_tileset) return nullptr;
+    return &s->tileset;
+}
+
 int peonpad_snapshot_retain(PeonPadSnapshot *s)
 {
     if (!s) return -1;
@@ -256,10 +264,10 @@ int peonpad_tabletop_publish_synthetic(
     const PeonPadUnitRecord    *units,
     uint32_t                    unit_count)
 {
-    return peonpad_tabletop_publish_synthetic_v2(
+    return peonpad_tabletop_publish_synthetic_v3(
         generation, map_width, map_height,
         terrain, terrain_count, units, unit_count,
-        nullptr, 0);
+        nullptr, 0, nullptr);
 }
 
 int peonpad_tabletop_publish_synthetic_v2(
@@ -272,6 +280,24 @@ int peonpad_tabletop_publish_synthetic_v2(
     uint32_t                    unit_count,
     const PeonPadUnitType      *types,
     uint32_t                    type_count)
+{
+    return peonpad_tabletop_publish_synthetic_v3(
+        generation, map_width, map_height,
+        terrain, terrain_count, units, unit_count,
+        types, type_count, nullptr);
+}
+
+int peonpad_tabletop_publish_synthetic_v3(
+    uint64_t                        generation,
+    uint32_t                        map_width,
+    uint32_t                        map_height,
+    const PeonPadTerrainCell       *terrain,
+    uint32_t                        terrain_count,
+    const PeonPadUnitRecord        *units,
+    uint32_t                        unit_count,
+    const PeonPadUnitType          *types,
+    uint32_t                        type_count,
+    const PeonPadTilesetDescriptor *tileset)
 {
     {
         std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
@@ -289,9 +315,22 @@ int peonpad_tabletop_publish_synthetic_v2(
     if (type_count > PEONPAD_TABLETOP_MAX_UNIT_TYPES) return -2;
     if (type_count > 0 && !types) return -2;
 
-    // Every ident must be NUL-terminated within the fixed buffer.
+    // Every ident and sprite_path must be NUL-terminated within its buffer.
     for (uint32_t i = 0; i < type_count; ++i) {
         if (memchr(types[i].ident, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr) {
+            return -2;
+        }
+        if (memchr(types[i].sprite_path, '\0', PEONPAD_TABLETOP_MAX_PATH) == nullptr) {
+            return -2;
+        }
+    }
+
+    // The tileset image_path and name must be NUL-terminated when present.
+    if (tileset) {
+        if (memchr(tileset->image_path, '\0', PEONPAD_TABLETOP_MAX_PATH) == nullptr) {
+            return -2;
+        }
+        if (memchr(tileset->name, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr) {
             return -2;
         }
     }
@@ -311,6 +350,10 @@ int peonpad_tabletop_publish_synthetic_v2(
     }
     if (type_count > 0) {
         snap->unit_types.assign(types, types + type_count);
+    }
+    if (tileset) {
+        snap->has_tileset = true;
+        snap->tileset = *tileset;
     }
 
     PublishSnap(snap);
@@ -334,6 +377,46 @@ static uint8_t ClassifyTerrain(tile_flags flags) noexcept
     if (flags & MapFieldCoastAllowed) return static_cast<uint8_t>(PEONPAD_TERRAIN_COAST);
     if (flags & MapFieldLandAllowed)  return static_cast<uint8_t>(PEONPAD_TERRAIN_GRASS);
     return static_cast<uint8_t>(PEONPAD_TERRAIN_DIRT);
+}
+
+// Replicate the engine's DrawUnitType() frame resolution (see
+// engine/stratagus/src/unit/unittype.cpp) so the UI receives the exact
+// sprite-sheet frame index and horizontal-mirror flag the engine itself would
+// draw for the unit's current facing + animation.  Keeping this one formula in
+// engine-owned C++ (rather than re-deriving it in Swift) is what lets the UI
+// stay a pure consumer of stable asset identifiers.
+static void ResolveSpriteFrame(const CUnitType &type, int frame,
+                               uint16_t &out_frame, uint8_t &out_mirror) noexcept
+{
+    if (type.Flip) {
+        // Five directions stored; the mirrored half uses a negative frame that
+        // draws frame (-frame - 1) horizontally flipped.
+        if (frame < 0) {
+            out_frame  = static_cast<uint16_t>(-frame - 1);
+            out_mirror = 1u;
+        } else {
+            out_frame  = static_cast<uint16_t>(frame);
+            out_mirror = 0u;
+        }
+        return;
+    }
+
+    // All directions stored (no mirroring): fold the direction into the frame.
+    const int dirs = type.NumDirections;
+    if (dirs <= 0) {
+        out_frame  = static_cast<uint16_t>(frame < 0 ? -frame - 1 : frame);
+        out_mirror = 0u;
+        return;
+    }
+    const int row = dirs / 2 + 1;
+    int resolved;
+    if (frame < 0) {
+        resolved = ((-frame - 1) / row) * dirs + dirs - (-frame - 1) % row;
+    } else {
+        resolved = (frame / row) * dirs + frame % row;
+    }
+    out_frame  = static_cast<uint16_t>(resolved < 0 ? 0 : resolved);
+    out_mirror = 0u;
 }
 
 // Drain queued commands and apply them to the running game state.
@@ -467,6 +550,9 @@ void peonpad_tabletop_publish_snapshot(void)
             PeonPadTerrainCell &out = snap->terrain[y * mw + x];
             out.tile_index    = static_cast<uint16_t>(field->getTileIndex());
             out.terrain_class = ClassifyTerrain(field->getFlags());
+            // Pixel-grid frame index into the tileset image (ABI v3), so the UI
+            // can crop the real tile art from the tileset PNG.
+            out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
 
             if (Map.NoFogOfWar || !ThisPlayer) {
                 out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
@@ -481,6 +567,25 @@ void peonpad_tabletop_publish_snapshot(void)
                 }
             }
         }
+    }
+
+    // ── Tileset descriptor (ABI v3) ─────────────────────────────────────
+    // The active map's tileset image + tile geometry, so terrain
+    // `graphic_index` values map to a source rectangle in the tileset PNG.
+    {
+        const CTileset &ts = Map.Tileset;
+        snap->has_tileset = true;
+        std::snprintf(snap->tileset.image_path, PEONPAD_TABLETOP_MAX_PATH,
+                      "%s", ts.ImageFile.c_str());
+        std::snprintf(snap->tileset.name, PEONPAD_TABLETOP_MAX_IDENT,
+                      "%s", ts.Name.c_str());
+        const PixelSize &pts = ts.getPixelTileSize();
+        snap->tileset.pixel_tile_width  = static_cast<uint16_t>(pts.x);
+        snap->tileset.pixel_tile_height = static_cast<uint16_t>(pts.y);
+        // Image dimensions are not exposed by CTileset; leave 0 (unknown) and
+        // let the UI derive the column count from the decoded PNG.
+        snap->tileset.image_width  = 0u;
+        snap->tileset.image_height = 0u;
     }
 
     // ── Units ────────────────────────────────────────────────────────────
@@ -523,6 +628,11 @@ void peonpad_tabletop_publish_snapshot(void)
         rec.world_x  = static_cast<float>(u->IX);
         rec.world_y  = static_cast<float>(u->IY);
         rec.type_id  = u->Type ? static_cast<uint16_t>(u->Type->Slot) : 0u;
+        if (u->Type) {
+            // Engine-resolved sprite frame + mirror for the current facing +
+            // animation (ABI v3), using the engine's own draw formula.
+            ResolveSpriteFrame(*u->Type, u->Frame, rec.sprite_frame, rec.sprite_mirror);
+        }
 
         // Register the unit type ident once per distinct type_id so the UI
         // can resolve real art without guessing from unit IDs.
@@ -536,6 +646,16 @@ void peonpad_tabletop_publish_snapshot(void)
                 t.type_id = rec.type_id;
                 std::snprintf(t.ident, PEONPAD_TABLETOP_MAX_IDENT, "%s",
                               u->Type->Ident.c_str());
+                // ABI v3 sprite metadata sourced from CUnitType so the UI can
+                // locate and tint the real sprite sheet from staged data.
+                std::snprintf(t.sprite_path, PEONPAD_TABLETOP_MAX_PATH, "%s",
+                              u->Type->File.c_str());
+                t.frame_width     = static_cast<uint16_t>(u->Type->Width);
+                t.frame_height    = static_cast<uint16_t>(u->Type->Height);
+                t.num_directions  = static_cast<uint8_t>(u->Type->NumDirections);
+                t.flip            = u->Type->Flip ? 1u : 0u;
+                t.team_color_start = static_cast<uint8_t>(PlayerColorIndexStart);
+                t.team_color_count = static_cast<uint8_t>(PlayerColorIndexCount);
                 snap->unit_types.push_back(t);
             }
         }

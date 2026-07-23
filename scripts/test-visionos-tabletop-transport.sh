@@ -45,6 +45,7 @@ swiftc \
   "$ROOT_DIR/platform/apple/visionos/tabletop/EngineCommandEncoder.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopMapFit.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/WargusTabletopAssetResolver.swift" \
+  "$ROOT_DIR/platform/apple/visionos/tabletop/TabletopAssetResolution.swift" \
   "$ROOT_DIR/platform/apple/visionos/tabletop/EngineStartupPlan.swift" \
   "$ROOT_DIR/tests/tabletop_transport_conversion_test.swift" \
   -o "$TEST_BINARY"

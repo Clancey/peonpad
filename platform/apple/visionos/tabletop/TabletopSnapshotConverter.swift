@@ -60,17 +60,31 @@ public enum TabletopSnapshotConverter {
             for x in 0..<width {
                 let cell = engine.terrain[y * width + x]
                 terrain.append(TabletopTerrainTile(
-                    tileX: x, tileZ: y, kind: terrainKind(cell.terrainClass)))
+                    tileX: x, tileZ: y, kind: terrainKind(cell.terrainClass),
+                    graphicIndex: Int(cell.graphicIndex)))
                 fog.append(TabletopFogTile(
                     tileX: x, tileZ: y, isRevealed: isRevealed(cell.fogState)))
             }
         }
 
-        // Unit-type registry: type_id → ident.
+        // Unit-type registry: type_id → ident, plus the ABI v3 sprite catalog
+        // keyed by ident so the render layer can resolve real art.
         var identByType: [UInt16: String] = [:]
         identByType.reserveCapacity(engine.unitTypes.count)
+        var spriteByIdent: [String: TabletopUnitSpriteInfo] = [:]
+        spriteByIdent.reserveCapacity(engine.unitTypes.count)
         for t in engine.unitTypes {
             identByType[t.typeID] = t.ident
+            if !t.spritePath.isEmpty {
+                spriteByIdent[t.ident] = TabletopUnitSpriteInfo(
+                    spritePath: t.spritePath,
+                    frameWidth: Int(t.frameWidth),
+                    frameHeight: Int(t.frameHeight),
+                    numDirections: Int(t.numDirections),
+                    flip: t.flip != 0,
+                    teamColorStart: Int(t.teamColorStart),
+                    teamColorCount: Int(t.teamColorCount))
+            }
         }
 
         // Units. The C selection is per-unit (`selected`); the UI selection is
@@ -89,11 +103,31 @@ public enum TabletopSnapshotConverter {
                 facingRadians: facingRadians(u.facing),
                 tileX: Int(u.tileX),
                 tileZ: Int(u.tileY),
-                kind: identByType[u.typeID] ?? ""
+                kind: identByType[u.typeID] ?? "",
+                spriteFrame: Int(u.spriteFrame),
+                spriteMirror: u.spriteMirror != 0
             ))
             if u.selected != 0, u.alive != 0, selectedID == nil {
                 selectedID = id
             }
+        }
+
+        // Asset catalog: present only when the engine reported any art
+        // descriptor (tileset or a non-empty sprite path). Absent → procedural.
+        let tilesetInfo = engine.tileset.map {
+            TabletopTilesetInfo(
+                imagePath: $0.imagePath,
+                pixelTileWidth: Int($0.pixelTileWidth),
+                pixelTileHeight: Int($0.pixelTileHeight),
+                imageWidth: Int($0.imageWidth),
+                imageHeight: Int($0.imageHeight),
+                name: $0.name)
+        }
+        let assets: TabletopAssetCatalog?
+        if tilesetInfo != nil || !spriteByIdent.isEmpty {
+            assets = TabletopAssetCatalog(tileset: tilesetInfo, unitTypes: spriteByIdent)
+        } else {
+            assets = nil
         }
 
         return TabletopGameplaySnapshot(
@@ -102,7 +136,8 @@ public enum TabletopSnapshotConverter {
             terrain: terrain,
             fogMask: fog,
             units: units,
-            selection: TabletopGameplaySelection(selectedUnitID: selectedID)
+            selection: TabletopGameplaySelection(selectedUnitID: selectedID),
+            assets: assets
         )
     }
 

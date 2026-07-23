@@ -42,7 +42,8 @@ extension EngineSnapshot {
                 terrain.append(EngineTerrainCell(
                     tileIndex: c.tile_index,
                     fogState: c.fog_state,
-                    terrainClass: c.terrain_class))
+                    terrainClass: c.terrain_class,
+                    graphicIndex: c.graphic_index))
             }
         }
 
@@ -56,7 +57,8 @@ extension EngineSnapshot {
                     id: u.id, owner: u.owner, alive: u.alive, selected: u.selected,
                     facing: u.facing, hp: u.hp, maxHP: u.max_hp,
                     tileX: u.tile_x, tileY: u.tile_y,
-                    worldX: u.world_x, worldY: u.world_y, typeID: u.type_id))
+                    worldX: u.world_x, worldY: u.world_y, typeID: u.type_id,
+                    spriteFrame: u.sprite_frame, spriteMirror: u.sprite_mirror))
             }
         }
 
@@ -70,15 +72,45 @@ extension EngineSnapshot {
                     guard let base = raw.baseAddress else { return "" }
                     return String(cString: base.assumingMemoryBound(to: CChar.self))
                 }
-                types.append(EngineUnitType(typeID: entry.type_id, ident: ident))
+                let spritePath = withUnsafeBytes(of: &entry.sprite_path) { raw -> String in
+                    guard let base = raw.baseAddress else { return "" }
+                    return String(cString: base.assumingMemoryBound(to: CChar.self))
+                }
+                types.append(EngineUnitType(
+                    typeID: entry.type_id, ident: ident,
+                    spritePath: spritePath,
+                    frameWidth: entry.frame_width, frameHeight: entry.frame_height,
+                    numDirections: entry.num_directions, flip: entry.flip,
+                    teamColorStart: entry.team_color_start,
+                    teamColorCount: entry.team_color_count))
             }
+        }
+
+        var tileset: EngineTilesetDescriptor? = nil
+        if let tptr = peonpad_snapshot_tileset(s) {
+            var td = tptr.pointee
+            let imagePath = withUnsafeBytes(of: &td.image_path) { raw -> String in
+                guard let base = raw.baseAddress else { return "" }
+                return String(cString: base.assumingMemoryBound(to: CChar.self))
+            }
+            let name = withUnsafeBytes(of: &td.name) { raw -> String in
+                guard let base = raw.baseAddress else { return "" }
+                return String(cString: base.assumingMemoryBound(to: CChar.self))
+            }
+            tileset = EngineTilesetDescriptor(
+                imagePath: imagePath,
+                pixelTileWidth: td.pixel_tile_width,
+                pixelTileHeight: td.pixel_tile_height,
+                imageWidth: td.image_width,
+                imageHeight: td.image_height,
+                name: name)
         }
 
         self.init(
             abiVersion: peonpad_snapshot_abi_version(s),
             generation: peonpad_snapshot_generation(s),
             mapWidth: width, mapHeight: height,
-            terrain: terrain, units: units, unitTypes: types)
+            terrain: terrain, units: units, unitTypes: types, tileset: tileset)
     }
 }
 

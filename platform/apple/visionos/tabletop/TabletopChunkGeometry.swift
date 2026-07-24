@@ -130,41 +130,92 @@ public struct TabletopAtlasSlotMap: Sendable {
     }
 }
 
-/// Pixel and normalized-UV layout for the horizontal terrain atlas. Each tile
-/// frame is surrounded by replicated horizontal edge pixels so linear filtering
-/// and mip generation cannot sample an unrelated neighbouring frame.
+public struct TabletopAtlasUVBounds: Equatable, Sendable {
+    public let u0: Float
+    public let u1: Float
+    public let v0: Float
+    public let v1: Float
+}
+
+/// Pixel and normalized-UV layout for a bounded multi-row terrain atlas. Each
+/// tile frame is surrounded by replicated edge pixels so filtering and mip
+/// generation cannot sample an unrelated neighbouring frame.
 public struct TabletopTerrainAtlasLayout: Equatable, Sendable {
     public static let defaultGutterPixels = 4
+    public static let maximumTextureDimension = 16_384
 
     public let slotCount: Int
     public let cellWidth: Int
+    public let cellHeight: Int
     public let gutterPixels: Int
+    public let maximumDimension: Int
+    public let columns: Int
+    public let rows: Int
+    public let isValid: Bool
 
     public init(
         slotCount: Int,
         cellWidth: Int,
-        gutterPixels: Int = defaultGutterPixels
+        cellHeight: Int = 1,
+        gutterPixels: Int = defaultGutterPixels,
+        maximumDimension: Int = maximumTextureDimension
     ) {
         self.slotCount = max(1, slotCount)
         self.cellWidth = max(1, cellWidth)
+        self.cellHeight = max(1, cellHeight)
         self.gutterPixels = max(0, gutterPixels)
+        self.maximumDimension = max(1, maximumDimension)
+
+        let strideX = self.cellWidth + 2 * self.gutterPixels
+        let strideY = self.cellHeight + 2 * self.gutterPixels
+        let maxColumns = self.maximumDimension / strideX
+        let maxRows = self.maximumDimension / strideY
+        let capacity = maxColumns > 0 && maxRows > 0
+            ? maxColumns.multipliedReportingOverflow(by: maxRows)
+            : (partialValue: 0, overflow: false)
+        self.isValid = maxColumns > 0 && maxRows > 0
+            && !capacity.overflow && self.slotCount <= capacity.partialValue
+        self.columns = self.isValid ? min(self.slotCount, maxColumns) : 1
+        self.rows = self.isValid
+            ? (self.slotCount + self.columns - 1) / self.columns
+            : 1
     }
 
-    public var slotStride: Int { cellWidth + 2 * gutterPixels }
-    public var atlasWidth: Int { slotCount * slotStride }
+    public var slotStrideX: Int { cellWidth + 2 * gutterPixels }
+    public var slotStrideY: Int { cellHeight + 2 * gutterPixels }
+    /// Backward-compatible name for the horizontal stride.
+    public var slotStride: Int { slotStrideX }
+    public var atlasWidth: Int { columns * slotStrideX }
+    public var atlasHeight: Int { rows * slotStrideY }
 
     public func slotOriginX(_ slot: Int) -> Int {
-        min(max(0, slot), slotCount - 1) * slotStride
+        let bounded = min(max(0, slot), slotCount - 1)
+        return (bounded % columns) * slotStrideX
+    }
+
+    public func slotOriginY(_ slot: Int) -> Int {
+        let bounded = min(max(0, slot), slotCount - 1)
+        return (bounded / columns) * slotStrideY
     }
 
     public func contentOriginX(_ slot: Int) -> Int {
         slotOriginX(slot) + gutterPixels
     }
 
-    public func contentUVBounds(_ slot: Int) -> (u0: Float, u1: Float) {
+    public func contentOriginY(_ slot: Int) -> Int {
+        slotOriginY(slot) + gutterPixels
+    }
+
+    public func contentUVBounds(_ slot: Int) -> TabletopAtlasUVBounds {
         let width = Float(atlasWidth)
+        let height = Float(atlasHeight)
         let x = Float(contentOriginX(slot))
-        return (x / width, (x + Float(cellWidth)) / width)
+        let y = Float(contentOriginY(slot))
+        return TabletopAtlasUVBounds(
+            u0: x / width,
+            u1: (x + Float(cellWidth)) / width,
+            v0: y / height,
+            v1: (y + Float(cellHeight)) / height)
     }
 }
 
@@ -212,7 +263,8 @@ public enum TabletopTerrainChunkMeshBuilder {
         var indices   = [UInt32]();       indices.reserveCapacity(count * 6)
 
         let layout   = atlasLayout ?? TabletopTerrainAtlasLayout(
-            slotCount: slotMap.slotCount, cellWidth: 1, gutterPixels: 0)
+            slotCount: slotMap.slotCount, cellWidth: 1,
+            cellHeight: 1, gutterPixels: 0)
         let up       = SIMD3<Float>(0, 1, 0)
 
         for (i, tile) in tiles.enumerated() {
@@ -229,12 +281,14 @@ public enum TabletopTerrainChunkMeshBuilder {
 
             // Atlas column UV for this tile's slot
             let slot = slotMap.slot(for: tile.graphicIndex)
-            let (u0, u1) = layout.contentUVBounds(slot)
+            let uv = layout.contentUVBounds(slot)
 
-            // NW(u0,0), NE(u1,0), SE(u1,1), SW(u0,1)
+            // NW(u0,v0), NE(u1,v0), SE(u1,v1), SW(u0,v1)
             // v=0 → UV top → Metal v=0 → image row 0 → top of tile art
-            uvs.append(SIMD2<Float>(u0, 0)); uvs.append(SIMD2<Float>(u1, 0))
-            uvs.append(SIMD2<Float>(u1, 1)); uvs.append(SIMD2<Float>(u0, 1))
+            uvs.append(SIMD2<Float>(uv.u0, uv.v0))
+            uvs.append(SIMD2<Float>(uv.u1, uv.v0))
+            uvs.append(SIMD2<Float>(uv.u1, uv.v1))
+            uvs.append(SIMD2<Float>(uv.u0, uv.v1))
 
             // Two CCW triangles from above (+Y).
             // cross((SE−NW),(NE−SE)) = cross((2,0,2),(0,0,−2)) = (0,+4,0) = +Y ✓
@@ -279,7 +333,8 @@ public enum TabletopTerrainChunkMeshBuilder {
         var indices:   [UInt32]       = []
 
         let layout   = atlasLayout ?? TabletopTerrainAtlasLayout(
-            slotCount: slotMap.slotCount, cellWidth: 1, gutterPixels: 0)
+            slotCount: slotMap.slotCount, cellWidth: 1,
+            cellHeight: 1, gutterPixels: 0)
         let up       = SIMD3<Float>(0, 1, 0)
         let eps: Float = 1e-5
 
@@ -310,7 +365,7 @@ public enum TabletopTerrainChunkMeshBuilder {
             let bounds = fit.tileBounds(tileX: tile.tileX, tileZ: tile.tileZ)
             let h  = tile.height
             let slot = slotMap.slot(for: tile.graphicIndex)
-            let (u0, u1) = layout.contentUVBounds(slot)
+            let uv = layout.contentUVBounds(slot)
 
             // Top quad (raised/recessed to the tile height).
             let nw = SIMD3<Float>(bounds.minX, h, bounds.minZ)
@@ -318,8 +373,8 @@ public enum TabletopTerrainChunkMeshBuilder {
             let se = SIMD3<Float>(bounds.maxX, h, bounds.maxZ)
             let sw = SIMD3<Float>(bounds.minX, h, bounds.maxZ)
             addQuad(nw, ne, se, sw, normal: up,
-                    SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0),
-                    SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
+                    SIMD2<Float>(uv.u0, uv.v0), SIMD2<Float>(uv.u1, uv.v0),
+                    SIMD2<Float>(uv.u1, uv.v1), SIMD2<Float>(uv.u0, uv.v1))
 
             // Side skirts wherever this tile stands above its neighbour (or the
             // map edge). The higher tile owns the cliff; equal-height neighbours
@@ -331,7 +386,8 @@ public enum TabletopTerrainChunkMeshBuilder {
                 guard nh < h - eps else { return }
                 let botA = SIMD3<Float>(topA.x, nh, topA.z)
                 let botB = SIMD3<Float>(topB.x, nh, topB.z)
-                let sideUV = SIMD2<Float>((u0 + u1) / 2, 0.5)
+                let sideUV = SIMD2<Float>(
+                    (uv.u0 + uv.u1) / 2, (uv.v0 + uv.v1) / 2)
                 addQuad(topA, topB, botB, botA, normal: outward,
                         sideUV, sideUV, sideUV, sideUV)
             }

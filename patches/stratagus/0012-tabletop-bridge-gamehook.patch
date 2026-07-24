@@ -2,7 +2,7 @@ diff --git a/src/stratagus/mainloop.cpp b/src/stratagus/mainloop.cpp
 index 1bcd380..8f801fc 100644
 --- a/src/stratagus/mainloop.cpp
 +++ b/src/stratagus/mainloop.cpp
-@@ -58,6 +58,15 @@
+@@ -58,6 +58,16 @@
  # include <coz.h>
  #endif
  
@@ -12,14 +12,18 @@ index 1bcd380..8f801fc 100644
 +// and is only compiled into the SDL3 peonpad_tabletop_bridge target.
 +// The header is found via the PEONPAD_APPLE_PLATFORM_DIR include path.
 +extern "C" void peonpad_tabletop_drain_commands(void);
++extern "C" void peonpad_tabletop_begin_visibility_epoch(void);
 +extern "C" void peonpad_tabletop_publish_snapshot(void);
 +#endif
 +
  void DrawGuichanWidgets();
  
  
-@@ -373,7 +382,13 @@ static void SingleGameLoop()
+@@ -373,7 +383,16 @@ static void SingleGameLoop()
  {
++#ifdef PEONPAD_TABLETOP
++	peonpad_tabletop_begin_visibility_epoch();
++#endif
  	while (GameRunning) {
  		DisplayLoop();
 +#ifdef PEONPAD_TABLETOP

@@ -17,6 +17,7 @@
 //   7. Concurrent access    – retain+release from multiple notional threads
 
 #include "PeonPadTabletopBridge.h"
+#include "TabletopSeenTerrainCache.h"
 
 #include <atomic>
 #include <cassert>
@@ -551,6 +552,127 @@ static bool test_tileset_export_cache_failure_backoff()
     return true;
 }
 
+static TabletopSeenTerrainEpoch MakeSeenEpoch(
+    const char *mapPath = "maps/a.smp",
+    const char *tilesetName = "Forest",
+    std::uintptr_t graphicIdentity = 0x1000,
+    int playerIndex = 0)
+{
+    TabletopSeenTerrainEpoch epoch;
+    epoch.loadGeneration = 1;
+    epoch.mapUid = 42;
+    epoch.mapPath = mapPath;
+    epoch.mapFieldIdentity = 0x4000;
+    epoch.tilesetGraphicIdentity = graphicIdentity;
+    epoch.tilesetName = tilesetName;
+    epoch.tilesetImagePath = std::string("graphics/") + tilesetName + ".png";
+    epoch.tilesetImageWidth = 512;
+    epoch.tilesetImageHeight = 768;
+    epoch.tilesetTileCount = 4096;
+    epoch.playerIdentity = static_cast<std::uintptr_t>(0x2000 + playerIndex);
+    epoch.playerIndex = playerIndex;
+    return epoch;
+}
+
+static bool test_seen_cache_same_size_map_reload()
+{
+    TabletopSeenTerrainCache cache(/*neutralTileIndex=*/0x100, /*unknown=*/0);
+    const auto epoch = MakeSeenEpoch();
+    EXPECT(cache.BeginEpoch(epoch, 16, /*gameCycle=*/100));
+    cache.RecordVisible(3, /*graphic=*/77, /*tile=*/0x700, /*forest=*/5);
+    EXPECT(!cache.BeginEpoch(epoch, 16, /*gameCycle=*/101));
+    auto reloaded = epoch;
+    // A same-map save reload may reuse every pointer/path/size and resume at an
+    // equal or greater cycle. The game-loop generation is authoritative.
+    reloaded.loadGeneration = 2;
+    EXPECT(cache.BeginEpoch(reloaded, 16, /*gameCycle=*/150));
+    const auto unseen = cache.NeutralUnseen();
+    EXPECT(unseen.graphicIndex == 0);
+    EXPECT(unseen.tileIndex == 0x100);
+    EXPECT(unseen.terrainClass == 0);
+    return true;
+}
+
+static bool test_seen_cache_tileset_epoch_reuses_frame_ids()
+{
+    TabletopSeenTerrainCache cache(0x100, 0);
+    const auto forest = MakeSeenEpoch("maps/a.smp", "Forest", 0x1000, 0);
+    EXPECT(cache.BeginEpoch(forest, 4, 10));
+    cache.RecordVisible(0, /*graphic=*/125, /*tile=*/0x070, /*forest=*/5);
+
+    const auto winter = MakeSeenEpoch("maps/a.smp", "Winter", 0x3000, 0);
+    EXPECT(cache.BeginEpoch(winter, 4, 11));
+    int resolverCalls = 0;
+    const auto resolved = cache.ResolveExplored(
+        0, /*same numeric frame=*/125,
+        [&](std::uint16_t, std::uint16_t &tile, std::uint8_t &terrain) {
+            ++resolverCalls;
+            tile = 0x400;
+            terrain = 4; // rock in the changed tileset
+            return true;
+        });
+    EXPECT(resolverCalls == 1);
+    EXPECT(resolved.tileIndex == 0x400);
+    EXPECT(resolved.terrainClass == 4);
+    return true;
+}
+
+static bool test_seen_cache_player_epoch_change()
+{
+    TabletopSeenTerrainCache cache(0x100, 0);
+    EXPECT(cache.BeginEpoch(MakeSeenEpoch("maps/a.smp", "Forest", 0x1000, 0), 4, 20));
+    cache.RecordVisible(1, 129, 0x700, 5);
+    EXPECT(cache.BeginEpoch(MakeSeenEpoch("maps/a.smp", "Forest", 0x1000, 1), 4, 21));
+    int resolverCalls = 0;
+    const auto resolved = cache.ResolveExplored(
+        1, 129,
+        [&](std::uint16_t, std::uint16_t &tile, std::uint8_t &terrain) {
+            ++resolverCalls;
+            tile = 0x500;
+            terrain = 6;
+            return true;
+        });
+    EXPECT(resolverCalls == 1);
+    EXPECT(resolved.tileIndex == 0x500);
+    EXPECT(resolved.terrainClass == 6);
+    return true;
+}
+
+static bool test_seen_cache_explored_continuity_within_epoch()
+{
+    TabletopSeenTerrainCache cache(0x100, 0);
+    const auto epoch = MakeSeenEpoch();
+    EXPECT(cache.BeginEpoch(epoch, 4, 30));
+    cache.RecordVisible(2, 206, 0x200, 6);
+    EXPECT(!cache.BeginEpoch(epoch, 4, 31));
+    int resolverCalls = 0;
+    const auto resolved = cache.ResolveExplored(
+        2, 206,
+        [&](std::uint16_t, std::uint16_t &, std::uint8_t &) {
+            ++resolverCalls;
+            return false;
+        });
+    EXPECT(resolverCalls == 0);
+    EXPECT(resolved.valid);
+    EXPECT(resolved.graphicIndex == 206);
+    EXPECT(resolved.tileIndex == 0x200);
+    EXPECT(resolved.terrainClass == 6);
+    return true;
+}
+
+static bool test_seen_cache_unseen_is_always_neutral()
+{
+    TabletopSeenTerrainCache cache(0x100, 0);
+    EXPECT(cache.BeginEpoch(MakeSeenEpoch(), 4, 40));
+    cache.RecordVisible(0, 125, 0x070, 5);
+    const auto unseen = cache.NeutralUnseen();
+    EXPECT(!unseen.valid);
+    EXPECT(unseen.graphicIndex == 0);
+    EXPECT(unseen.tileIndex == 0x100);
+    EXPECT(unseen.terrainClass == 0);
+    return true;
+}
+
 static bool test_synthetic_v3_asset_descriptors()
 {
     EXPECT(peonpad_tabletop_init() == 0);
@@ -1008,6 +1130,11 @@ int main()
     Run("expanded_tileset_cache_path", test_expanded_tileset_cache_path);
     Run("tileset_export_cache_reload", test_tileset_export_cache_reload_and_backoff);
     Run("tileset_export_cache_backoff", test_tileset_export_cache_failure_backoff);
+    Run("seen_cache_same_size_reload", test_seen_cache_same_size_map_reload);
+    Run("seen_cache_tileset_epoch", test_seen_cache_tileset_epoch_reuses_frame_ids);
+    Run("seen_cache_player_epoch", test_seen_cache_player_epoch_change);
+    Run("seen_cache_continuity", test_seen_cache_explored_continuity_within_epoch);
+    Run("seen_cache_unseen_neutral", test_seen_cache_unseen_is_always_neutral);
     Run("retain_release",           test_retain_release);
     Run("null_safety",              test_null_safety);
     Run("data_is_immutable_copy",   test_snapshot_data_is_immutable_copy);

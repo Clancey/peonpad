@@ -13,6 +13,7 @@
 // peonpad_tabletop_publish_synthetic) is always compiled and testable.
 
 #include "PeonPadTabletopBridge.h"
+#include "TabletopSeenTerrainCache.h"
 #include "TabletopTilesetPath.h"
 
 #include <atomic>
@@ -80,12 +81,9 @@ struct TabletopBridgeState {
     // Stratagus stores only the last-seen graphic frame, so the bridge retains
     // tile slot/class alongside it to keep explored relief coherent.
     std::mutex                  terrain_mutex;
-    uint32_t                    seen_map_width  = 0;
-    uint32_t                    seen_map_height = 0;
-    std::vector<uint16_t>       seen_tile_indices;
-    std::vector<uint16_t>       seen_graphic_indices;
-    std::vector<uint8_t>        seen_terrain_classes;
-    std::vector<uint8_t>        seen_metadata_valid;
+    std::uint64_t               visibility_epoch = 0;
+    TabletopSeenTerrainCache    seen_terrain{
+        0x100u, static_cast<std::uint8_t>(PEONPAD_TERRAIN_UNKNOWN)};
 };
 
 TabletopBridgeState g_bridge;
@@ -234,12 +232,8 @@ void peonpad_tabletop_cleanup(void)
     }
     {
         std::lock_guard<std::mutex> lk(g_bridge.terrain_mutex);
-        g_bridge.seen_map_width = 0;
-        g_bridge.seen_map_height = 0;
-        g_bridge.seen_tile_indices.clear();
-        g_bridge.seen_graphic_indices.clear();
-        g_bridge.seen_terrain_classes.clear();
-        g_bridge.seen_metadata_valid.clear();
+        g_bridge.visibility_epoch = 0;
+        g_bridge.seen_terrain.Reset();
     }
     // Drop the latest snapshot.
     PeonPadSnapshot *old = nullptr;
@@ -402,6 +396,13 @@ int peonpad_tabletop_publish_synthetic_v3(
 // ── Engine capture (simulation thread) ───────────────────────────────────
 
 #ifdef PEONPAD_TABLETOP
+
+void peonpad_tabletop_begin_visibility_epoch(void)
+{
+    std::lock_guard<std::mutex> terrain_lk(g_bridge.terrain_mutex);
+    ++g_bridge.visibility_epoch;
+    g_bridge.seen_terrain.Reset();
+}
 
 // Classify a tile's engine flags into a transport-neutral terrain class.
 // The order matters: the most visually-salient/blocking classes win so the
@@ -681,19 +682,27 @@ void peonpad_tabletop_publish_snapshot(void)
     // ── Terrain + fog ───────────────────────────────────────────────────
     const uint32_t cell_count = mw * mh;
     snap->terrain.resize(cell_count);
-    if (g_bridge.seen_map_width != mw || g_bridge.seen_map_height != mh
-        || g_bridge.seen_tile_indices.size() != cell_count
-        || g_bridge.seen_graphic_indices.size() != cell_count
-        || g_bridge.seen_terrain_classes.size() != cell_count
-        || g_bridge.seen_metadata_valid.size() != cell_count) {
-        g_bridge.seen_map_width = mw;
-        g_bridge.seen_map_height = mh;
-        g_bridge.seen_tile_indices.assign(cell_count, 0x100u);
-        g_bridge.seen_graphic_indices.assign(cell_count, 0u);
-        g_bridge.seen_terrain_classes.assign(
-            cell_count, static_cast<uint8_t>(PEONPAD_TERRAIN_UNKNOWN));
-        g_bridge.seen_metadata_valid.assign(cell_count, 0u);
-    }
+    const CTileset &active_tileset = Map.Tileset;
+    CGraphic *tileset_graphic = Map.TileGraphic.get();
+    SDL_Surface *tileset_surface =
+        tileset_graphic ? tileset_graphic->getSurface() : nullptr;
+    TabletopSeenTerrainEpoch seen_epoch;
+    seen_epoch.loadGeneration = g_bridge.visibility_epoch;
+    seen_epoch.mapUid = Map.Info.MapUID;
+    seen_epoch.mapPath = CurrentMapPath;
+    seen_epoch.mapFieldIdentity =
+        reinterpret_cast<std::uintptr_t>(Map.Fields.data());
+    seen_epoch.tilesetGraphicIdentity =
+        reinterpret_cast<std::uintptr_t>(tileset_graphic);
+    seen_epoch.tilesetName = active_tileset.Name;
+    seen_epoch.tilesetImagePath = active_tileset.ImageFile;
+    seen_epoch.tilesetImageWidth = tileset_surface ? tileset_surface->w : 0;
+    seen_epoch.tilesetImageHeight = tileset_surface ? tileset_surface->h : 0;
+    seen_epoch.tilesetTileCount = active_tileset.getTileCount();
+    seen_epoch.playerIdentity = reinterpret_cast<std::uintptr_t>(ThisPlayer);
+    seen_epoch.playerIndex = ThisPlayer ? ThisPlayer->Index : -1;
+    g_bridge.seen_terrain.BeginEpoch(
+        std::move(seen_epoch), cell_count, static_cast<std::uint64_t>(GameCycle));
 
     for (uint32_t y = 0; y < mh; ++y) {
         for (uint32_t x = 0; x < mw; ++x) {
@@ -707,21 +716,17 @@ void peonpad_tabletop_publish_snapshot(void)
             if (Map.NoFogOfWar || !ThisPlayer) {
                 out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
                 out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
-                g_bridge.seen_tile_indices[cell_index] = out.tile_index;
-                g_bridge.seen_graphic_indices[cell_index] =
-                    out.graphic_index;
-                g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
-                g_bridge.seen_metadata_valid[cell_index] = 1u;
+                g_bridge.seen_terrain.RecordVisible(
+                    cell_index, out.graphic_index, out.tile_index,
+                    out.terrain_class);
             } else {
                 const CMapFieldPlayerInfo &info = field->playerInfo;
                 if (info.IsTeamVisible(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_VISIBLE);
                     out.graphic_index = static_cast<uint16_t>(field->getGraphicTile());
-                    g_bridge.seen_tile_indices[cell_index] = out.tile_index;
-                    g_bridge.seen_graphic_indices[cell_index] =
-                        out.graphic_index;
-                    g_bridge.seen_terrain_classes[cell_index] = out.terrain_class;
-                    g_bridge.seen_metadata_valid[cell_index] = 1u;
+                    g_bridge.seen_terrain.RecordVisible(
+                        cell_index, out.graphic_index, out.tile_index,
+                        out.terrain_class);
                 } else if (info.IsExplored(*ThisPlayer)) {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_EXPLORED);
                     // Match the canonical map renderer: explored tiles retain
@@ -731,41 +736,35 @@ void peonpad_tabletop_publish_snapshot(void)
                     // The engine stores no last-seen logical tile or flags.
                     // Use the bridge's matching last-visible metadata so hidden
                     // current state cannot alter relief beneath retained art.
-                    if (g_bridge.seen_metadata_valid[cell_index] == 0u
-                        || g_bridge.seen_graphic_indices[cell_index]
-                            != out.graphic_index) {
-                        const int32_t seen_tile_index =
-                            Map.Tileset.findTileIndexByTile(info.SeenTile);
-                        if (seen_tile_index >= 0
-                            && static_cast<size_t>(seen_tile_index)
-                                < Map.Tileset.getTileCount()) {
-                            const auto idx =
-                                static_cast<tile_index>(seen_tile_index);
-                            g_bridge.seen_tile_indices[cell_index] =
-                                static_cast<uint16_t>(idx);
-                            g_bridge.seen_graphic_indices[cell_index] =
-                                out.graphic_index;
-                            g_bridge.seen_terrain_classes[cell_index] =
-                                ClassifyTerrain(Map.Tileset.getTile(idx).flag);
-                            g_bridge.seen_metadata_valid[cell_index] = 1u;
-                        } else {
-                            g_bridge.seen_tile_indices[cell_index] = 0x100u;
-                            g_bridge.seen_graphic_indices[cell_index] =
-                                out.graphic_index;
-                            g_bridge.seen_terrain_classes[cell_index] =
-                                static_cast<uint8_t>(PEONPAD_TERRAIN_UNKNOWN);
-                            g_bridge.seen_metadata_valid[cell_index] = 0u;
-                        }
-                    }
-                    out.tile_index = g_bridge.seen_tile_indices[cell_index];
-                    out.terrain_class =
-                        g_bridge.seen_terrain_classes[cell_index];
+                    const TabletopSeenTerrainMetadata seen =
+                        g_bridge.seen_terrain.ResolveExplored(
+                            cell_index, out.graphic_index,
+                            [&](std::uint16_t graphic,
+                                std::uint16_t &tileIndex,
+                                std::uint8_t &terrainClass) {
+                                const int32_t resolved =
+                                    active_tileset.findTileIndexByTile(graphic);
+                                if (resolved < 0
+                                    || static_cast<size_t>(resolved)
+                                        >= active_tileset.getTileCount()) {
+                                    return false;
+                                }
+                                const auto idx =
+                                    static_cast<tile_index>(resolved);
+                                tileIndex = static_cast<std::uint16_t>(idx);
+                                terrainClass = ClassifyTerrain(
+                                    active_tileset.getTile(idx).flag);
+                                return true;
+                            });
+                    out.tile_index = seen.tileIndex;
+                    out.terrain_class = seen.terrainClass;
                 } else {
                     out.fog_state = static_cast<uint8_t>(PEONPAD_FOG_UNSEEN);
-                    out.graphic_index = static_cast<uint16_t>(info.SeenTile);
-                    out.tile_index = g_bridge.seen_tile_indices[cell_index];
-                    out.terrain_class =
-                        g_bridge.seen_terrain_classes[cell_index];
+                    const TabletopSeenTerrainMetadata unseen =
+                        g_bridge.seen_terrain.NeutralUnseen();
+                    out.graphic_index = unseen.graphicIndex;
+                    out.tile_index = unseen.tileIndex;
+                    out.terrain_class = unseen.terrainClass;
                 }
             }
         }
@@ -923,6 +922,7 @@ void peonpad_tabletop_publish_snapshot(void)
 
 #else // PEONPAD_TABLETOP not defined ─ stub out the engine-only functions
 
+void peonpad_tabletop_begin_visibility_epoch(void) {}
 void peonpad_tabletop_publish_snapshot(void) {}
 void peonpad_tabletop_drain_commands(void) {}
 

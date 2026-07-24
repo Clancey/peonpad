@@ -132,6 +132,7 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/EngineStartupPlan.swift"
   "$TABLETOP_SRC_DIR/EngineTabletopTransport.swift"
   "$TABLETOP_SRC_DIR/TabletopChunkGeometry.swift"
+  "$TABLETOP_SRC_DIR/TabletopTerrainAtlasImage.swift"
   "$TABLETOP_SRC_DIR/TabletopChunkReadiness.swift"
   "$TABLETOP_SRC_DIR/TabletopFogMap.swift"
   "$TABLETOP_SRC_DIR/TabletopChunkBoard.swift"

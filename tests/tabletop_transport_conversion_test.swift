@@ -202,9 +202,33 @@ func testFogThreeStateConversionPreservesExplored() {
     guard let result = try? TabletopSnapshotConverter.convert(snap) else {
         expect(false, "conversion must succeed"); return
     }
+
     expectEqual(result.fogVisibility(atTileX: 0, tileZ: 0), .visible, "cell 0 visible")
     expectEqual(result.fogVisibility(atTileX: 1, tileZ: 0), .explored, "cell 1 explored (dim)")
     expectEqual(result.fogVisibility(atTileX: 2, tileZ: 0), .unexplored, "cell 2 unexplored")
+}
+
+func testTrulyUnseenTerrainMetadataStaysNeutral() {
+    let terrain = [
+        EngineTerrainCell(
+            tileIndex: 0x100,
+            fogState: EngineFogState.unseen.rawValue,
+            terrainClass: EngineTerrainClass.unknown.rawValue,
+            graphicIndex: 0),
+    ]
+    let snap = makeEngineSnapshot(width: 1, height: 1, terrain: terrain)
+    guard let result = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "neutral unseen snapshot converts")
+        return
+    }
+    expectEqual(result.fogVisibility(atTileX: 0, tileZ: 0), .unexplored,
+                "truly unseen tile remains fully shrouded")
+    expectEqual(result.terrain[0].tileIndex, 0x100,
+                "neutral mixed slot does not expose prior-map tile metadata")
+    expectEqual(result.terrain[0].graphicIndex, 0,
+                "truly unseen tile exposes no prior-map graphic frame")
+    expectEqual(result.terrain[0].kind, .grass,
+                "unknown unseen terrain uses neutral baseline relief")
 }
 
 func testFullConversionUnitsAndSelection() {
@@ -596,6 +620,7 @@ struct TransportConversionTests {
         testTerrainRowColumnAndTileIdentityPreserved()
         testFogMapping()
         testFogThreeStateConversionPreservesExplored()
+        testTrulyUnseenTerrainMetadataStaysNeutral()
         testFullConversionUnitsAndSelection()
         testConversionMapsUnknownTypeToEmptyKind()
         testConversionBuildsAssetCatalog()

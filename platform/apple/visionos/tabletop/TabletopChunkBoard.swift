@@ -8,7 +8,7 @@
 //   Terrain — 1 ModelEntity per 32 × 32-tile chunk.
 //             • Initial material: a tiny N × 1-pixel procedural colour texture
 //               (N = unique graphicIndex count in the chunk), visible immediately.
-//             • Progressive upgrade: a decoded horizontal-strip atlas applied
+//             • Progressive upgrade: a decoded bounded multi-row atlas applied
 //               asynchronously so the board never blocks the main thread.
 //   Fog     — 1 ModelEntity covering the entire board with a mapWidth × mapHeight
 //             RGBA texture (1 pixel per tile).  Rebuilt on every snapshot update.
@@ -320,12 +320,14 @@ public final class TabletopChunkBoard {
             chunkGeneration[key] = (chunkGeneration[key] ?? 0) + 1
             let gen = chunkGeneration[key]!
             readinessTracker.markPending(key)
-            // Apply procedural material immediately.
-            if let procMat = makeProceduralAtlasMaterial(
+            // Apply a current-geometry procedural material immediately. Never
+            // retain a stale atlas if real or procedural texture creation fails.
+            let procedural = makeProceduralAtlasMaterial(
                 slotMap: slotMap, atlasLayout: atlasLayout,
-                slotToKind: slotToKind) {
-                entity.model = ModelComponent(mesh: mesh, materials: [procMat])
-            }
+                slotToKind: slotToKind)
+            let fallback: Material = procedural
+                ?? SimpleMaterial(color: .gray, roughness: 1, isMetallic: false)
+            entity.model = ModelComponent(mesh: mesh, materials: [fallback])
             // Kick off real-art atlas upgrade.
             if let materialProvider {
                 materialProvider.buildTerrainAtlas(
@@ -466,10 +468,25 @@ public final class TabletopChunkBoard {
             return (tileX: $0.tileX, tileZ: $0.tileZ, graphicIndex: t?.graphicIndex)
         }
         let slotMap = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
-        let atlasLayout = TabletopTerrainAtlasLayout(
+        let requestedLayout = TabletopTerrainAtlasLayout(
             slotCount: slotMap.slotCount,
             cellWidth: max(1, tileset?.pixelTileWidth ?? 1),
+            cellHeight: max(1, tileset?.pixelTileHeight ?? 1),
             gutterPixels: tileset == nil ? 0 : TabletopTerrainAtlasLayout.defaultGutterPixels)
+        let atlasLayout: TabletopTerrainAtlasLayout
+        if requestedLayout.isValid {
+            atlasLayout = requestedLayout
+        } else {
+            // Real art cannot fit in one bounded Metal texture. Keep geometry
+            // and the immediate procedural material valid and bounded rather
+            // than retaining stale art or failing mesh material creation.
+            atlasLayout = TabletopTerrainAtlasLayout(
+                slotCount: slotMap.slotCount,
+                cellWidth: 1, cellHeight: 1, gutterPixels: 0)
+            tabletopEngineLog(
+                "[Tabletop] atlas layout fallback: slots=\(slotMap.slotCount) "
+                + "cell=\(requestedLayout.cellWidth)x\(requestedLayout.cellHeight)")
+        }
 
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): tiles=\(tiles.count) slots=\(slotMap.slotCount)")
 
@@ -518,18 +535,31 @@ public final class TabletopChunkBoard {
         atlasLayout: TabletopTerrainAtlasLayout,
         slotToKind: [Int: TabletopTerrainKind]
     ) -> PhysicallyBasedMaterial? {
-        let atlasWidth = atlasLayout.atlasWidth
-        var raw = [UInt8](repeating: 255, count: atlasWidth * 4)
+        guard atlasLayout.isValid else { return nil }
+        // The placeholder only needs the same normalized slot grid, not the
+        // real frame's pixel dimensions. A 3x3 solid-color cell per slot keeps
+        // linear filtering inside that slot while avoiding multi-megabyte
+        // temporary buffers for a 1024-distinct-frame chunk.
+        let placeholderCell = 3
+        let atlasWidth = atlasLayout.columns * placeholderCell
+        let atlasHeight = atlasLayout.rows * placeholderCell
+        var raw = [UInt8](
+            repeating: 255, count: atlasWidth * atlasHeight * 4)
         for (slot, kind) in slotToKind {
             guard slot < slotMap.slotCount else { continue }
             let (r, g, b) = kind.rgbaPM
-            let start = atlasLayout.slotOriginX(slot)
-            let end = start + atlasLayout.slotStride
-            for pixel in start..<end {
-                raw[pixel*4 + 0] = r
-                raw[pixel*4 + 1] = g
-                raw[pixel*4 + 2] = b
-                raw[pixel*4 + 3] = 255
+            let startX = (slot % atlasLayout.columns) * placeholderCell
+            let endX = startX + placeholderCell
+            let startY = (slot / atlasLayout.columns) * placeholderCell
+            let endY = startY + placeholderCell
+            for y in startY..<endY {
+                for x in startX..<endX {
+                    let pixel = (y * atlasWidth + x) * 4
+                    raw[pixel + 0] = r
+                    raw[pixel + 1] = g
+                    raw[pixel + 2] = b
+                    raw[pixel + 3] = 255
+                }
             }
         }
         let data = Data(raw)
@@ -537,7 +567,7 @@ public final class TabletopChunkBoard {
         let bi   = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         guard let provider = CGDataProvider(data: data as CFData),
               let cgImage  = CGImage(
-                  width: atlasWidth, height: 1,
+                  width: atlasWidth, height: atlasHeight,
                   bitsPerComponent: 8, bitsPerPixel: 32,
                   bytesPerRow: atlasWidth * 4,
                   space: cs, bitmapInfo: bi,

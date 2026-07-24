@@ -23,6 +23,7 @@
 // ─────────────
 //   peonpad_tabletop_publish_snapshot()   ← simulation thread only
 //   peonpad_tabletop_drain_commands()     ← simulation thread only
+//   peonpad_tabletop_begin_visibility_epoch() ← simulation thread only
 //   peonpad_tabletop_latest_snapshot()    ← any thread (UI thread typical)
 //   peonpad_snapshot_retain/release()     ← any thread
 //   peonpad_tabletop_post_command()       ← any thread (UI thread typical)
@@ -384,6 +385,11 @@ int peonpad_tabletop_init(void);
 /// command queue.  Safe to call if peonpad_tabletop_init was never called.
 /// Call from the simulation thread during engine shutdown.
 void peonpad_tabletop_cleanup(void);
+
+/// Starts a new map/save visibility epoch before publishing snapshots from a
+/// newly-entered game loop. Clears last-seen logical terrain metadata even when
+/// a reload reuses dimensions, paths, object addresses, frame IDs, and cycles.
+void peonpad_tabletop_begin_visibility_epoch(void);
 
 /// Called by the simulation thread after each game tick to capture and publish
 /// a new coherent snapshot of the current game state.

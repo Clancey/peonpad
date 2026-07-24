@@ -126,7 +126,7 @@ public final class WargusTabletopMaterialProvider {
 
     // MARK: - Atlas material
 
-    /// Asynchronously builds a horizontal-strip atlas `UnlitMaterial` that packs
+    /// Asynchronously builds a bounded multi-row atlas material that packs
     /// all terrain graphicIndices defined in `slotMap` into one texture.
     ///
     /// Each slot uses the padded content bounds supplied by `atlasLayout`, the
@@ -135,10 +135,9 @@ public final class WargusTabletopMaterialProvider {
     /// Fires `completion` on the main actor with a non-nil material when at least
     /// one slot decoded successfully; `nil` otherwise (caller keeps procedural).
     ///
-    /// Atlas width is bounded by `maxAtlasPixelWidth` to stay within Metal's
-    /// maximum 2D texture limit (typically 16 384 px). When the computed width
-    /// would exceed this limit the atlas is not created and `nil` is returned.
-    public static nonisolated let maxAtlasPixelWidth = 16_384
+    /// Both atlas dimensions are bounded by Metal's maximum 2D texture size.
+    public static nonisolated let maxAtlasPixelDimension =
+        TabletopTerrainAtlasLayout.maximumTextureDimension
 
     /// Backward-compatible entry point for callers that do not need to share an
     /// explicit padded layout with prebuilt geometry.
@@ -150,6 +149,7 @@ public final class WargusTabletopMaterialProvider {
         let layout = TabletopTerrainAtlasLayout(
             slotCount: slotMap.slotCount,
             cellWidth: max(1, tileset?.pixelTileWidth ?? 1),
+            cellHeight: max(1, tileset?.pixelTileHeight ?? 1),
             gutterPixels: 0)
         buildTerrainAtlas(
             slotMap: slotMap, atlasLayout: layout,
@@ -194,71 +194,28 @@ public final class WargusTabletopMaterialProvider {
             let cellW   = firstImg.width
             let cellH   = firstImg.height
             let N       = slotMap.slotCount
-            guard atlasLayout.slotCount == N,
-                  atlasLayout.cellWidth == cellW else {
+            guard atlasLayout.isValid,
+                  atlasLayout.slotCount == N,
+                  atlasLayout.cellWidth == cellW,
+                  atlasLayout.cellHeight == cellH else {
                 Task { @MainActor in completion(nil) }
                 return
             }
             let atlasW  = atlasLayout.atlasWidth
-            let atlasH  = cellH
-            // Guard against exceeding Metal's maximum texture dimension.
+            let atlasH  = atlasLayout.atlasHeight
             guard atlasW > 0, atlasH > 0,
-                  atlasW <= WargusTabletopMaterialProvider.maxAtlasPixelWidth else {
+                  atlasW <= WargusTabletopMaterialProvider.maxAtlasPixelDimension,
+                  atlasH <= WargusTabletopMaterialProvider.maxAtlasPixelDimension else {
                 tabletopEngineLog(
-                    "[Tabletop] atlas skipped: \(N) padded slots × "
-                    + "\(atlasLayout.slotStride)px = \(atlasW)px "
-                    + "(limit \(WargusTabletopMaterialProvider.maxAtlasPixelWidth)px)")
+                    "[Tabletop] atlas skipped: \(N) padded slots = "
+                    + "\(atlasW)x\(atlasH)px (limit "
+                    + "\(WargusTabletopMaterialProvider.maxAtlasPixelDimension)px)")
                 Task { @MainActor in completion(nil) }
                 return
             }
 
-            // Pack all slot images into a single horizontal-strip atlas. The
-            // left/right gutter repeats each frame's edge pixels, preventing
-            // bilinear filtering and mipmaps from bleeding an unrelated frame
-            // into a tile along atlas slot boundaries.
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-            guard let ctx = CGContext(
-                data: nil, width: atlasW, height: atlasH,
-                bitsPerComponent: 8, bytesPerRow: 0,
-                space: colorSpace, bitmapInfo: bitmapInfo) else {
-                Task { @MainActor in completion(nil) }
-                return
-            }
-            ctx.interpolationQuality = .none
-            // Flood the entire atlas with a neutral fallback before drawing
-            // decoded tiles.  This prevents transparent holes for any slot
-            // whose graphicIndex is nil or whose image failed to decode —
-            // those slots show a neutral grey rather than a transparent cutout
-            // that would expose the RealityKit background.
-            ctx.setFillColor(CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1.0))
-            ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(atlasW), height: CGFloat(atlasH)))
-            // Match the y-flip applied by decode() so atlas tiles are not
-            // inverted relative to tiles decoded by the single-material path.
-            ctx.translateBy(x: 0, y: CGFloat(atlasH))
-            ctx.scaleBy(x: 1, y: -1)
-            for (slot, img) in slotImages {
-                guard img.width == cellW, img.height == cellH else { continue }
-                let originX = atlasLayout.slotOriginX(slot)
-                let contentX = atlasLayout.contentOriginX(slot)
-                ctx.draw(img, in: CGRect(x: CGFloat(contentX), y: 0,
-                                        width: CGFloat(cellW), height: CGFloat(cellH)))
-                let gutter = atlasLayout.gutterPixels
-                guard gutter > 0,
-                      let leftEdge = img.cropping(to: CGRect(
-                        x: 0, y: 0, width: 1, height: CGFloat(cellH))),
-                      let rightEdge = img.cropping(to: CGRect(
-                        x: CGFloat(cellW - 1), y: 0,
-                        width: 1, height: CGFloat(cellH)))
-                else { continue }
-                ctx.draw(leftEdge, in: CGRect(
-                    x: CGFloat(originX), y: 0,
-                    width: CGFloat(gutter), height: CGFloat(cellH)))
-                ctx.draw(rightEdge, in: CGRect(
-                    x: CGFloat(contentX + cellW), y: 0,
-                    width: CGFloat(gutter), height: CGFloat(cellH)))
-            }
-            guard let atlasImage = ctx.makeImage() else {
+            guard let atlasImage = TabletopTerrainAtlasImageBuilder.build(
+                slotImages: slotImages, layout: atlasLayout) else {
                 Task { @MainActor in completion(nil) }
                 return
             }

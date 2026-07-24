@@ -152,6 +152,10 @@ public struct TabletopTerrainAtlasLayout: Equatable, Sendable {
     public let columns: Int
     public let rows: Int
     public let isValid: Bool
+    private let validatedSlotStrideX: Int
+    private let validatedSlotStrideY: Int
+    private let validatedAtlasWidth: Int
+    private let validatedAtlasHeight: Int
 
     public init(
         slotCount: Int,
@@ -166,47 +170,89 @@ public struct TabletopTerrainAtlasLayout: Equatable, Sendable {
         self.gutterPixels = max(0, gutterPixels)
         self.maximumDimension = max(1, maximumDimension)
 
-        let strideX = self.cellWidth + 2 * self.gutterPixels
-        let strideY = self.cellHeight + 2 * self.gutterPixels
-        let maxColumns = self.maximumDimension / strideX
-        let maxRows = self.maximumDimension / strideY
+        let doubledGutter = self.gutterPixels.multipliedReportingOverflow(by: 2)
+        let strideXResult = self.cellWidth.addingReportingOverflow(
+            doubledGutter.partialValue)
+        let strideYResult = self.cellHeight.addingReportingOverflow(
+            doubledGutter.partialValue)
+        let arithmeticOK = !doubledGutter.overflow
+            && !strideXResult.overflow && !strideYResult.overflow
+            && strideXResult.partialValue > 0 && strideYResult.partialValue > 0
+
+        let strideX = arithmeticOK ? strideXResult.partialValue : 1
+        let strideY = arithmeticOK ? strideYResult.partialValue : 1
+        let maxColumns = arithmeticOK ? self.maximumDimension / strideX : 0
+        let maxRows = arithmeticOK ? self.maximumDimension / strideY : 0
         let capacity = maxColumns > 0 && maxRows > 0
             ? maxColumns.multipliedReportingOverflow(by: maxRows)
             : (partialValue: 0, overflow: false)
-        self.isValid = maxColumns > 0 && maxRows > 0
+        let fits = arithmeticOK && maxColumns > 0 && maxRows > 0
             && !capacity.overflow && self.slotCount <= capacity.partialValue
-        self.columns = self.isValid ? min(self.slotCount, maxColumns) : 1
-        self.rows = self.isValid
-            ? (self.slotCount + self.columns - 1) / self.columns
-            : 1
+
+        let resolvedColumns = fits ? min(self.slotCount, maxColumns) : 1
+        let quotient = fits ? self.slotCount / resolvedColumns : 0
+        let remainder = fits ? self.slotCount % resolvedColumns : 0
+        let rowResult = quotient.addingReportingOverflow(
+            remainder == 0 ? 0 : 1)
+        let resolvedRows = fits && !rowResult.overflow
+            ? max(1, rowResult.partialValue) : 1
+        let widthResult = resolvedColumns.multipliedReportingOverflow(by: strideX)
+        let heightResult = resolvedRows.multipliedReportingOverflow(by: strideY)
+        let dimensionsOK = fits && !rowResult.overflow
+            && !widthResult.overflow && !heightResult.overflow
+            && widthResult.partialValue > 0
+            && heightResult.partialValue > 0
+            && widthResult.partialValue <= self.maximumDimension
+            && heightResult.partialValue <= self.maximumDimension
+
+        self.isValid = dimensionsOK
+        self.columns = dimensionsOK ? resolvedColumns : 1
+        self.rows = dimensionsOK ? resolvedRows : 1
+        self.validatedSlotStrideX = dimensionsOK ? strideX : 1
+        self.validatedSlotStrideY = dimensionsOK ? strideY : 1
+        self.validatedAtlasWidth = dimensionsOK ? widthResult.partialValue : 1
+        self.validatedAtlasHeight = dimensionsOK ? heightResult.partialValue : 1
     }
 
-    public var slotStrideX: Int { cellWidth + 2 * gutterPixels }
-    public var slotStrideY: Int { cellHeight + 2 * gutterPixels }
+    public var slotStrideX: Int { validatedSlotStrideX }
+    public var slotStrideY: Int { validatedSlotStrideY }
     /// Backward-compatible name for the horizontal stride.
     public var slotStride: Int { slotStrideX }
-    public var atlasWidth: Int { columns * slotStrideX }
-    public var atlasHeight: Int { rows * slotStrideY }
+    public var atlasWidth: Int { validatedAtlasWidth }
+    public var atlasHeight: Int { validatedAtlasHeight }
 
     public func slotOriginX(_ slot: Int) -> Int {
+        guard isValid else { return 0 }
         let bounded = min(max(0, slot), slotCount - 1)
-        return (bounded % columns) * slotStrideX
+        let result = (bounded % columns).multipliedReportingOverflow(
+            by: slotStrideX)
+        return result.overflow ? 0 : result.partialValue
     }
 
     public func slotOriginY(_ slot: Int) -> Int {
+        guard isValid else { return 0 }
         let bounded = min(max(0, slot), slotCount - 1)
-        return (bounded / columns) * slotStrideY
+        let result = (bounded / columns).multipliedReportingOverflow(
+            by: slotStrideY)
+        return result.overflow ? 0 : result.partialValue
     }
 
     public func contentOriginX(_ slot: Int) -> Int {
-        slotOriginX(slot) + gutterPixels
+        guard isValid else { return 0 }
+        let result = slotOriginX(slot).addingReportingOverflow(gutterPixels)
+        return result.overflow ? 0 : result.partialValue
     }
 
     public func contentOriginY(_ slot: Int) -> Int {
-        slotOriginY(slot) + gutterPixels
+        guard isValid else { return 0 }
+        let result = slotOriginY(slot).addingReportingOverflow(gutterPixels)
+        return result.overflow ? 0 : result.partialValue
     }
 
     public func contentUVBounds(_ slot: Int) -> TabletopAtlasUVBounds {
+        guard isValid else {
+            return TabletopAtlasUVBounds(u0: 0, u1: 1, v0: 0, v1: 1)
+        }
         let width = Float(atlasWidth)
         let height = Float(atlasHeight)
         let x = Float(contentOriginX(slot))
@@ -216,6 +262,17 @@ public struct TabletopTerrainAtlasLayout: Equatable, Sendable {
             u1: (x + Float(cellWidth)) / width,
             v0: y / height,
             v1: (y + Float(cellHeight)) / height)
+    }
+
+    /// Bounded layout for the procedural placeholder when real frame metadata
+    /// is malformed or cannot fit in one Metal texture.
+    public func proceduralFallback() -> TabletopTerrainAtlasLayout {
+        TabletopTerrainAtlasLayout(
+            slotCount: slotCount,
+            cellWidth: 1,
+            cellHeight: 1,
+            gutterPixels: 0,
+            maximumDimension: maximumDimension)
     }
 }
 

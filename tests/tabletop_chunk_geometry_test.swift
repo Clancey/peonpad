@@ -213,6 +213,58 @@ func testAtlasLayoutMetalDimensionBoundaries() {
     expectEq(above.rows, 2, "above-boundary atlas uses two rows")
 }
 
+func testAtlasLayoutExtremeInputsNeverTrap() {
+    let layouts = [
+        TabletopTerrainAtlasLayout(
+            slotCount: 1_024, cellWidth: Int.max,
+            cellHeight: 32, gutterPixels: 1),
+        TabletopTerrainAtlasLayout(
+            slotCount: 1_024, cellWidth: 32,
+            cellHeight: 32, gutterPixels: Int.max),
+        TabletopTerrainAtlasLayout(
+            slotCount: Int.max, cellWidth: 1,
+            cellHeight: 1, gutterPixels: 0),
+        TabletopTerrainAtlasLayout(
+            slotCount: Int.max, cellWidth: Int.max,
+            cellHeight: Int.max, gutterPixels: Int.max,
+            maximumDimension: Int.max),
+    ]
+    for (index, layout) in layouts.enumerated() {
+        expect(!layout.isValid, "extreme layout \(index) is safely invalid")
+        expectEq(layout.slotStrideX, 1, "invalid layout \(index) safe x stride")
+        expectEq(layout.slotStrideY, 1, "invalid layout \(index) safe y stride")
+        expectEq(layout.atlasWidth, 1, "invalid layout \(index) safe width")
+        expectEq(layout.atlasHeight, 1, "invalid layout \(index) safe height")
+        expectEq(layout.slotOriginX(Int.max), 0,
+                 "invalid layout \(index) safe slot x")
+        expectEq(layout.slotOriginY(Int.max), 0,
+                 "invalid layout \(index) safe slot y")
+        expectEq(layout.contentOriginX(Int.max), 0,
+                 "invalid layout \(index) safe content x")
+        expectEq(layout.contentOriginY(Int.max), 0,
+                 "invalid layout \(index) safe content y")
+        expectEq(
+            layout.contentUVBounds(Int.max),
+            TabletopAtlasUVBounds(u0: 0, u1: 1, v0: 0, v1: 1),
+            "invalid layout \(index) returns neutral UV bounds")
+    }
+}
+
+func testInvalidMetadataSelectsBoundedProceduralFallback() {
+    let invalid = TabletopTerrainAtlasLayout(
+        slotCount: 1_024, cellWidth: Int.max,
+        cellHeight: 32, gutterPixels: 4)
+    let fallback = invalid.proceduralFallback()
+    expect(!invalid.isValid, "adversarial frame metadata is rejected")
+    expect(fallback.isValid, "1024-slot procedural fallback remains valid")
+    expect(fallback.atlasWidth <=
+           TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "procedural fallback width is bounded")
+    expect(fallback.atlasHeight <=
+           TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "procedural fallback height is bounded")
+}
+
 func testPaddedAtlasWrapAndUVOrientation() {
     // 32px frame + 4px gutters = 40px stride; only 409 slots fit per
     // 16384px row, so slot 409 must begin row 1 without rotating/mirroring.
@@ -304,6 +356,34 @@ private func makeCornerTile() -> CGImage? {
     return CGImage(
         width: 2, height: 2,
         bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 8,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false,
+        intent: .defaultIntent)
+}
+
+private func gradientRGB(x: Int, y: Int) -> (UInt8, UInt8, UInt8) {
+    (UInt8(10 + x * 20), UInt8(20 + y * 30), UInt8(30 + x + y * 5))
+}
+
+private func makeGradientTile(width: Int, height: Int) -> CGImage? {
+    var pixels = [UInt8](repeating: 255, count: width * height * 4)
+    for memoryY in 0..<height {
+        let visualY = height - 1 - memoryY
+        for x in 0..<width {
+            let (r, g, b) = gradientRGB(x: x, y: visualY)
+            let offset = (memoryY * width + x) * 4
+            pixels[offset + 0] = r
+            pixels[offset + 1] = g
+            pixels[offset + 2] = b
+        }
+    }
+    let data = Data(pixels)
+    guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+    return CGImage(
+        width: width, height: height,
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
         space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: CGBitmapInfo(
             rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
@@ -422,6 +502,7 @@ func testSyntheticSingleRowVerticalGutters() {
         expect(false, "asymmetric single-row frame packs")
         return
     }
+
     let topLeft = pixelRGB(
         atlas, x: layout.slotOriginX(0), y: layout.slotOriginY(0))
     let bottomLeft = pixelRGB(
@@ -432,6 +513,84 @@ func testSyntheticSingleRowVerticalGutters() {
            "single-row top gutter replicates visual top edge")
     expect(bottomLeft.map { $0.b > $0.r && $0.b > $0.g } == true,
            "single-row bottom gutter replicates visual bottom edge")
+}
+
+func testGradientAtlasCopiesEveryPixelAndGutterExactly() {
+    let width = 5, height = 4, gutter = 4
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 2, cellWidth: width, cellHeight: height,
+        gutterPixels: gutter)
+    guard let gradient = makeGradientTile(width: width, height: height),
+          let atlas = TabletopTerrainAtlasImageBuilder.build(
+            slotImages: [1: gradient], layout: layout)
+    else {
+        expect(false, "gradient production atlas packs")
+        return
+    }
+    let originX = layout.slotOriginX(1)
+    let originY = layout.slotOriginY(1)
+    let contentX = layout.contentOriginX(1)
+    let contentY = layout.contentOriginY(1)
+
+    func expectPixel(
+        atlasX: Int, atlasY: Int, sourceX: Int, sourceY: Int,
+        _ message: String
+    ) {
+        let actual = pixelRGB(atlas, x: atlasX, y: atlasY)
+        let expected = gradientRGB(x: sourceX, y: sourceY)
+        expect(actual.map {
+            $0.r == expected.0 && $0.g == expected.1 && $0.b == expected.2
+        } == true, "\(message), got \(String(describing: actual))")
+    }
+
+    for y in 0..<height {
+        for x in 0..<width {
+            expectPixel(
+                atlasX: contentX + x, atlasY: contentY + y,
+                sourceX: x, sourceY: y,
+                "content pixel \(x),\(y) copied exactly")
+        }
+        for gx in 0..<gutter {
+            expectPixel(
+                atlasX: originX + gx, atlasY: contentY + y,
+                sourceX: 0, sourceY: y,
+                "left gutter row \(y) copied exactly")
+            expectPixel(
+                atlasX: contentX + width + gx, atlasY: contentY + y,
+                sourceX: width - 1, sourceY: y,
+                "right gutter row \(y) copied exactly")
+        }
+    }
+    for x in 0..<width {
+        for gy in 0..<gutter {
+            expectPixel(
+                atlasX: contentX + x, atlasY: originY + gy,
+                sourceX: x, sourceY: 0,
+                "top gutter column \(x) copied without stretch")
+            expectPixel(
+                atlasX: contentX + x, atlasY: contentY + height + gy,
+                sourceX: x, sourceY: height - 1,
+                "bottom gutter column \(x) copied without stretch")
+        }
+    }
+    for gy in 0..<gutter {
+        for gx in 0..<gutter {
+            expectPixel(
+                atlasX: originX + gx, atlasY: originY + gy,
+                sourceX: 0, sourceY: 0, "top-left corner exact")
+            expectPixel(
+                atlasX: contentX + width + gx, atlasY: originY + gy,
+                sourceX: width - 1, sourceY: 0, "top-right corner exact")
+            expectPixel(
+                atlasX: originX + gx, atlasY: contentY + height + gy,
+                sourceX: 0, sourceY: height - 1, "bottom-left corner exact")
+            expectPixel(
+                atlasX: contentX + width + gx,
+                atlasY: contentY + height + gy,
+                sourceX: width - 1, sourceY: height - 1,
+                "bottom-right corner exact")
+        }
+    }
 }
 
 // MARK: - TabletopTerrainChunkMeshBuilder tests
@@ -1039,11 +1198,14 @@ struct TabletopChunkGeometryTests {
         testAtlasSlotMapEntries()
         testPaddedAtlasLayout()
         testAtlasLayoutMetalDimensionBoundaries()
+        testAtlasLayoutExtremeInputsNeverTrap()
+        testInvalidMetadataSelectsBoundedProceduralFallback()
         testPaddedAtlasWrapAndUVOrientation()
         testAtlasLayoutSupportsFullDistinctChunk()
         testSyntheticMultiRowAtlasPacking()
         testSyntheticWrappedFrameOrientation()
         testSyntheticSingleRowVerticalGutters()
+        testGradientAtlasCopiesEveryPixelAndGutterExactly()
 
         testChunkMeshBuilderBasic()
         testChunkMeshBuilderUVs()

@@ -480,9 +480,7 @@ public final class TabletopChunkBoard {
             // Real art cannot fit in one bounded Metal texture. Keep geometry
             // and the immediate procedural material valid and bounded rather
             // than retaining stale art or failing mesh material creation.
-            atlasLayout = TabletopTerrainAtlasLayout(
-                slotCount: slotMap.slotCount,
-                cellWidth: 1, cellHeight: 1, gutterPixels: 0)
+            atlasLayout = requestedLayout.proceduralFallback()
             tabletopEngineLog(
                 "[Tabletop] atlas layout fallback: slots=\(slotMap.slotCount) "
                 + "cell=\(requestedLayout.cellWidth)x\(requestedLayout.cellHeight)")

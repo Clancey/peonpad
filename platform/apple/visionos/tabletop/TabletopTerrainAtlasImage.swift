@@ -77,18 +77,43 @@ public enum TabletopTerrainAtlasImageBuilder {
                 x: 0, y: CGFloat(layout.cellHeight - 1),
                 width: CGFloat(layout.cellWidth), height: 1)),
                let bottomEdge = image.cropping(to: CGRect(
-                x: 0, y: 0, width: CGFloat(layout.cellWidth), height: 1)) {
-                // Stretch across the whole padded slot: this fills both corner
-                // gutters with the corresponding top/bottom edge in two draws.
+                x: 0, y: 0, width: CGFloat(layout.cellWidth), height: 1)),
+               let topLeft = image.cropping(to: CGRect(
+                x: 0, y: CGFloat(layout.cellHeight - 1),
+                width: 1, height: 1)),
+               let topRight = image.cropping(to: CGRect(
+                x: CGFloat(layout.cellWidth - 1),
+                y: CGFloat(layout.cellHeight - 1),
+                width: 1, height: 1)),
+               let bottomLeft = image.cropping(to: CGRect(
+                x: 0, y: 0, width: 1, height: 1)),
+               let bottomRight = image.cropping(to: CGRect(
+                x: CGFloat(layout.cellWidth - 1), y: 0,
+                width: 1, height: 1)) {
                 ctx.draw(topEdge, in: CGRect(
-                    x: CGFloat(originX), y: CGFloat(originY),
-                    width: CGFloat(layout.slotStrideX),
+                    x: CGFloat(contentX), y: CGFloat(originY),
+                    width: CGFloat(layout.cellWidth),
                     height: CGFloat(gutter)))
                 ctx.draw(bottomEdge, in: CGRect(
+                    x: CGFloat(contentX),
+                    y: CGFloat(contentY + layout.cellHeight),
+                    width: CGFloat(layout.cellWidth),
+                    height: CGFloat(gutter)))
+                ctx.draw(topLeft, in: CGRect(
+                    x: CGFloat(originX), y: CGFloat(originY),
+                    width: CGFloat(gutter), height: CGFloat(gutter)))
+                ctx.draw(topRight, in: CGRect(
+                    x: CGFloat(contentX + layout.cellWidth),
+                    y: CGFloat(originY),
+                    width: CGFloat(gutter), height: CGFloat(gutter)))
+                ctx.draw(bottomLeft, in: CGRect(
                     x: CGFloat(originX),
                     y: CGFloat(contentY + layout.cellHeight),
-                    width: CGFloat(layout.slotStrideX),
-                    height: CGFloat(gutter)))
+                    width: CGFloat(gutter), height: CGFloat(gutter)))
+                ctx.draw(bottomRight, in: CGRect(
+                    x: CGFloat(contentX + layout.cellWidth),
+                    y: CGFloat(contentY + layout.cellHeight),
+                    width: CGFloat(gutter), height: CGFloat(gutter)))
             }
         }
         return ctx.makeImage()

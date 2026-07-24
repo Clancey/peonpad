@@ -4,28 +4,40 @@ set -eu
 setopt PIPE_FAIL
 
 usage() {
-  print "Usage: ./scripts/verify-tabletop-bundle.sh <xrsimulator|xros> <app> [--metadata PATH]"
+  print "Usage: ./scripts/verify-tabletop-bundle.sh <xrsimulator|xros> <app> [--private-data] [--metadata PATH]"
 }
 
 if (( $# == 1 )) && [[ "$1" == --help ]]; then
   usage
   exit 0
 fi
-if (( $# != 2 && $# != 4 )); then
+if (( $# < 2 )); then
   usage >&2
   exit 2
 fi
 
 TARGET=$1
 APP=${2:A}
+shift 2
 METADATA=""
-if (( $# == 4 )); then
-  [[ "$3" == --metadata ]] || {
-    usage >&2
-    exit 2
-  }
-  METADATA=${4:A}
-fi
+PRIVATE_DATA=0
+while (( $# > 0 )); do
+  case "$1" in
+    --private-data)
+      PRIVATE_DATA=1
+      ;;
+    --metadata)
+      (( $# >= 2 )) || { usage >&2; exit 2; }
+      METADATA=${2:A}
+      shift
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 EXPECTED_BUNDLE_IDENTIFIER=${PEONPAD_TABLETOP_BUNDLE_IDENTIFIER:-org.peonpad.visionos.tabletop}
 MINIMUM_FLOOR=2.0
 case "$TARGET" in
@@ -307,19 +319,9 @@ if [[ -n "$DEPENDENCIES" ]]; then
   done <<< "$DEPENDENCIES"
 fi
 
-PROPRIETARY_HIT=$(find "$APP" \
-  \( -type d \( -iname 'data.Wargus' -o -iname 'ref' \) \
-  -o -type f \( -iname '*.mpq' -o -iname '*.MPQ' \
-  -o -iname 'INSTALL.EXE' -o -iname 'WAR2DAT.MPQ' \
-  -o -iname 'setup_warcraft_ii_*' -o -iname '.env' \
-  -o -iname '.env.*' -o -iname '*.mobileprovision' \
-  -o -iname '*.provisionprofile' -o -iname '*.p12' \
-  -o -iname '*.cer' -o -iname '*.keychain' \
-  -o -iname '*.keychain-db' \) \) -print -quit)
-[[ -z "$PROPRIETARY_HIT" ]] || {
-  print -u2 "forbidden private/proprietary content in bundle: ${PROPRIETARY_HIT#$APP/}"
-  exit 1
-}
+DATA_MODE=default
+(( PRIVATE_DATA )) && DATA_MODE=private
+"${0:A:h}/verify-tabletop-data-bundle.sh" "$APP" "$DATA_MODE"
 
 if [[ "$TARGET" == xrsimulator ]]; then
   codesign --verify --deep --strict "$APP" || {
@@ -373,4 +375,8 @@ print "verified arm64 visionOS tabletop $TARGET bundle: $APP"
 print "  platform: $EXPECTED_PLATFORM; minimum: $MACHO_MINIMUM; SDK: $MACHO_SDK"
 print "  scene:    SwiftUI App/Scene lifecycle; ImmersiveSpace board"
 print "  signing:  $SIGNATURE"
-print "  content:  compiled resources present; prohibited content absent"
+if (( PRIVATE_DATA )); then
+  print "  content:  explicit private data verified at PrivateGameData/wargus"
+else
+  print "  content:  asset-free default verified; private content absent"
+fi

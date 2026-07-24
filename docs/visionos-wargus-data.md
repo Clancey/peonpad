@@ -4,9 +4,10 @@ PeonPad's native visionOS shell can load authentic Warcraft II game data from
 an already-extracted private copy you own. This document describes the local
 developer workflow that keeps proprietary assets strictly outside the repository.
 
-**No proprietary assets are distributed, committed, or bundled with PeonPad.**
-You must own a licensed copy of Warcraft II. The scripts here operate only on
-data you have already extracted to your own machine.
+**No proprietary assets are distributed or committed with PeonPad.** The
+default build remains asset-free. An explicit private build mode can embed your
+own licensed extracted runtime data into a local app bundle that must not be
+shared. You must own a licensed copy of Warcraft II.
 
 ---
 
@@ -56,16 +57,27 @@ committed. The script also verifies this invariant explicitly with
 
 ---
 
-## Step 2 — Build and install the native shell
+## Step 2 — Build the tabletop app
 
 ```sh
-./scripts/build-visionos-shell.sh xrsimulator --launch
+./scripts/build-visionos-tabletop.sh xrsimulator
 ```
 
-This builds the Release native visionOS shell, boots the Apple Vision Pro
-simulator if needed, installs the app, and confirms it is resident. The smoke
-shell renders a static SDL3 frame and reports `PEONPAD_VISIONOS_READY=1`; it
-does not yet run Stratagus or load game data.
+This produces an asset-free app. It can use simulator injection as a development
+fallback.
+
+To build a private app that launches normally with its licensed data embedded:
+
+```sh
+PEONPAD_WARGUS_DATA_DIR="/path/to/data.Wargus" \
+  ./scripts/build-visionos-tabletop.sh xrsimulator --private-data
+```
+
+`--private-data` is the only switch that enables embedding, and it requires the
+environment variable. The filtered runtime tree is copied to the deterministic,
+read-only bundle resource `PrivateGameData/wargus/`. The resulting app can be
+hundreds of megabytes; its exact size depends on the extracted edition. It is
+for the license holder's local use only and must not be redistributed.
 
 ---
 
@@ -97,7 +109,8 @@ It also pre-creates the writable user directory:
 
 | Concern | Path |
 |---------|------|
-| Read-only game data | `<data-container>/Documents/wargus-data/` |
+| Read-only game data (private build, preferred) | `<app>/PrivateGameData/wargus/` |
+| Read-only game data (development fallback) | `<data-container>/Documents/wargus-data/` |
 | Writable user/config/save/log | `<data-container>/Library/Application Support/<bundle-id>/user/` |
 
 The SDL3 engine receives the game-data path as the `-d` argument and the user
@@ -119,6 +132,10 @@ rooted at the repository.
   source path inside `$ROOT_DIR/`.
 - Proprietary installer archives are excluded from the staged copy via
   `rsync --exclude` patterns.
+- Symlinks are rejected, and MPQs/installers/platform metadata are forbidden in
+  both private and default bundle verification.
+- Default verification fails if `PrivateGameData` exists. Private verification
+  only permits a validated runtime tree at `PrivateGameData/wargus`.
 - `tests/script-guardrails.sh` verifies all of the above invariants with
   synthetic fixtures — no proprietary data is required to run them.
 
@@ -136,14 +153,9 @@ rm -rf build/visionos-wargus-data
 
 ---
 
-## Status and forward path
+## Runtime behavior
 
-The current native visionOS shell (`org.peonpad.visionos`) is the SDL3 smoke
-shell documented in [`visionos-shell.md`](visionos-shell.md). It does not yet
-run Stratagus or load a map.
-
-When full gameplay is enabled on visionOS, the CMake build will accept a
-`PEONPAD_VISIONOS_DATA_DIR` cache variable (mirroring the existing
-`PEONPAD_IOS_DATA_DIR`) and embed the staged data into the app bundle at build
-time. Until then, `inject-visionos-wargus-data.sh` provides the runtime path
-to the simulator container for integration testing.
+The tabletop launcher prefers a validated embedded private bundle, then checks
+the simulator's injected `Documents/wargus-data` fallback. Writable config,
+saves, logs, and caches always remain under Application Support and are passed
+to Stratagus with `-u`; the read-only data root is passed with `-d`.

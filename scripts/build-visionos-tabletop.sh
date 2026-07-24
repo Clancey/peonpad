@@ -8,7 +8,7 @@ ROOT_DIR=${SCRIPT_DIR:h}
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-visionos-tabletop.sh <xrsimulator|xros> [--launch] [--screenshot PATH]
+Usage: ./scripts/build-visionos-tabletop.sh <xrsimulator|xros> [--private-data] [--launch] [--screenshot PATH]
 
 Builds the native visionOS tabletop app: a SwiftUI + RealityKit executable
 compiled directly with swiftc (no Xcode project) and linked against the real
@@ -18,7 +18,10 @@ SDL3 smoke shell built by build-visionos-shell.sh -- distinct bundle id,
 executable, and app bundle -- and from the Designed-for-iPad Warcraft II app.
 --launch and --screenshot are supported only for xrsimulator. The engine
 static libraries are built on demand via build-visionos-engine-libs.sh. No
-proprietary game data or art is bundled; the app reads staged data at runtime.
+Default builds are asset-free. --private-data is an explicit local-only mode
+that requires PEONPAD_WARGUS_DATA_DIR to point to licensed, extracted data.Wargus
+and embeds its filtered runtime tree at PrivateGameData/wargus. Raw MPQs,
+installers, metadata, symlinks, and credentials are never embedded.
 EOF
 }
 
@@ -35,8 +38,12 @@ TARGET=$1
 shift
 LAUNCH=0
 SCREENSHOT=""
+PRIVATE_DATA=0
 while (( $# > 0 )); do
   case "$1" in
+    --private-data)
+      PRIVATE_DATA=1
+      ;;
     --launch)
       LAUNCH=1
       ;;
@@ -77,6 +84,10 @@ esac
 
 if [[ -n "$SCREENSHOT" && $LAUNCH -eq 0 ]]; then
   print -u2 "--screenshot requires --launch"
+  exit 2
+fi
+if (( PRIVATE_DATA )) && [[ -z "${PEONPAD_WARGUS_DATA_DIR:-}" ]]; then
+  print -u2 "--private-data requires PEONPAD_WARGUS_DATA_DIR=/path/to/extracted/data.Wargus"
   exit 2
 fi
 if [[ -n "$SCREENSHOT" ]]; then
@@ -120,6 +131,7 @@ SOURCES=(
   "$TABLETOP_SRC_DIR/TabletopSceneBuilder.swift"
   "$TABLETOP_SRC_DIR/TabletopActionPanel.swift"
   "$TABLETOP_SRC_DIR/TabletopActionPanelView.swift"
+  "$TABLETOP_SRC_DIR/TabletopLauncherModel.swift"
   "$TABLETOP_SRC_DIR/TabletopBoardView.swift"
   "$TABLETOP_SRC_DIR/TabletopApp.swift"
   "$TABLETOP_SRC_DIR/EngineTabletopModel.swift"
@@ -257,18 +269,35 @@ plutil -lint "$APP/Info.plist" >/dev/null
   "$ROOT_DIR/platform/apple/ios/PeonPadAssets.xcassets/AppIcon.appiconset/PeonPadIcon.png" \
   "$BUILD_DIR/tabletop-assets"
 
+if (( PRIVATE_DATA )); then
+  PEONPAD_WARGUS_DATA_DIR="$PEONPAD_WARGUS_DATA_DIR" \
+    "$SCRIPT_DIR/stage-visionos-wargus-data.sh"
+  cmake -E make_directory "$APP/PrivateGameData/wargus"
+  rsync -a --delete \
+    "$ROOT_DIR/build/visionos-wargus-data/" \
+    "$APP/PrivateGameData/wargus/"
+fi
+
 if [[ "$TARGET" == xrsimulator ]]; then
   codesign --force --sign - --timestamp=none "$APP"
   codesign --verify --deep --strict "$APP"
 fi
 
-"$SCRIPT_DIR/verify-tabletop-bundle.sh" "$TARGET" "$APP"
+VERIFY_ARGS=("$TARGET" "$APP")
+(( PRIVATE_DATA )) && VERIFY_ARGS+=(--private-data)
+"$SCRIPT_DIR/verify-tabletop-bundle.sh" "${VERIFY_ARGS[@]}"
 
 print
 print "PeonPad native visionOS tabletop app built:"
 print "  app:       $APP"
 print "  target:    arm64 $TARGET, visionOS 2.0+"
-print "  payload:   live Stratagus/Wargus engine on the placeable board; reads staged data at runtime; no proprietary data or art bundled"
+if (( PRIVATE_DATA )); then
+  PRIVATE_SIZE=$(du -sh "$APP/PrivateGameData/wargus" | awk '{print $1}')
+  print "  payload:   private licensed extracted data at PrivateGameData/wargus ($PRIVATE_SIZE)"
+  print "  license:   local use only; do not distribute this app bundle"
+else
+  print "  payload:   asset-free; simulator Documents/wargus-data remains a development fallback"
+fi
 
 if [[ "$TARGET" == xros ]]; then
   print "  signing:   unsigned"

@@ -235,28 +235,22 @@ public enum PeonPadTabletopLaunch {
     /// directory. Matches PEONPAD_TABLETOP_BUNDLE_IDENTIFIER in the build.
     public static let bundleIdentifier = "org.peonpad.visionos.tabletop"
 
-    /// Builds the engine launch configuration from the app container:
-    ///   • data: <home>/Documents/wargus-data  (staged, read-only; PR #13)
-    ///   • user: <home>/Library/Application Support/<bundle>/user (writable)
-    ///   • scenario: PEONPAD_TABLETOP_SCENARIO env override, else a default.
+    /// Builds the engine launch configuration selected by the native launcher.
+    /// Game data is read-only; user/config/save/log output always uses the
+    /// writable Application Support container.
     public static func resolveConfig(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
+        dataRoot: WargusDataRoot,
+        battlefield: TabletopBattlefield,
+        settings: TabletopLaunchSettings,
         home: String = NSHomeDirectory()
     ) -> EngineLaunchConfig {
-        let dataOverride = environment["PEONPAD_TABLETOP_DATA_DIR"]
-        let dataPath = dataOverride ?? "\(home)/Documents/wargus-data"
-        let userPath = environment["PEONPAD_TABLETOP_USER_DIR"]
-            ?? "\(home)/Library/Application Support/\(bundleIdentifier)/user"
-        let scenario = environment["PEONPAD_TABLETOP_SCENARIO"]
+        let userPath = "\(home)/Library/Application Support/\(bundleIdentifier)/user"
         return EngineLaunchConfig(
-            dataPath: dataPath, userPath: userPath, scenario: scenario,
+            dataPath: dataRoot.path,
+            userPath: userPath,
+            scenario: battlefield.relativePath,
+            playerName: settings.normalizedPlayerName,
             executableName: "peonpad-tabletop")
-    }
-
-    /// Constructs the production engine transport, or `nil` when the engine
-    /// cannot start (paths not ready) so the board shows its diagnostic overlay.
-    public static func makeEngineTransport() -> EngineTabletopTransport? {
-        EngineTabletopTransport(config: resolveConfig())
     }
 }
 

@@ -2,12 +2,11 @@
 
 PeonPad has a second, entirely separate native visionOS target: a SwiftUI +
 RealityKit **tabletop** app that renders a placeable, spatially-manipulable
-procedural battlefield board with upright transparent unit billboards. It
-includes a production-quality gameplay slice with a versioned, Codable pure-
-state snapshot model, deterministic command reduction, and interactive unit
-selection and movement. There is no Stratagus, no proprietary Warcraft II art
-or data -- only representative procedural content to prove the spatial board,
-gesture, and gameplay mechanics.
+native battlefield board with upright transparent unit billboards. It links
+the Stratagus/Wargus engine through a versioned bridge, consumes coherent live
+snapshots, and supports interactive unit selection and movement. Default builds
+remain asset-free; an explicit local-only private mode can embed licensed,
+already-extracted game data.
 
 It is fully independent of, and does not modify, either of the branch's other
 two native paths:
@@ -35,8 +34,10 @@ mean either reimplementing RealityKit-equivalent 3D scene management by hand
 or bringing Swift/RealityKit into the SDL3 shell's process -- both violate
 "do not modify or weaken the existing paths." Instead, the tabletop app is:
 
-- A plain SwiftUI `App` (`TabletopApp.swift`) with a `WindowGroup` launcher and
-  an `ImmersiveSpace` (`.mixed` style) that the launcher opens automatically.
+- A plain SwiftUI `App` (`TabletopApp.swift`) with a native map/settings launcher
+  and an `ImmersiveSpace` (`.mixed` style) opened only after explicit selection.
+  The engine is single-shot per process; returning to the launcher offers resume
+  rather than pretending a different map can restart safely.
 - A `RealityView`-based scene (`TabletopBoardView.swift`) that builds the
   board from the gameplay snapshot, wires `SpatialEventGesture` input, and
   re-orients every unit's billboard once per frame.
@@ -284,9 +285,10 @@ Struct layout and round-trip are covered by `tests/tabletop_bridge_test.cpp`.
   per-frame disk reads: decoded textures are cached and only re-requested on an
   observed frame/ownership change.
 
-All pixels come from the staged read-only game-data directory at runtime
-(`docs/visionos-wargus-data.md`); **no proprietary art is bundled or committed.**
-With no staged data the board renders fully procedurally.
+All pixels come from a validated read-only game-data root at runtime
+(`docs/visionos-wargus-data.md`). Default bundles contain no proprietary art.
+Explicit private bundles place the license holder's filtered extracted runtime
+tree at `PrivateGameData/wargus`; proprietary data is never committed.
 
 ## Opt-in command integration harness
 
@@ -308,6 +310,7 @@ the select/move/stop sequencing are host-tested
 ./scripts/test-visionos-tabletop-gestures.sh     # gesture, billboard, two-hand
 ./scripts/test-visionos-tabletop-gameplay.sh     # snapshot model, reducer
 ./scripts/test-visionos-tabletop-live-state.sh   # transport source, reconciler diffs
+./scripts/test-visionos-tabletop-launcher.sh     # paths, maps, state, argv
 ./scripts/test-visionos-tabletop-transport.sh    # snapshot conversion, asset catalog
 ./scripts/test-visionos-tabletop-assets.sh       # path confinement, atlas math, LRU
 ./scripts/test-visionos-tabletop-harness.sh      # command-harness gating + sequencing

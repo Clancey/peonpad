@@ -44,6 +44,8 @@ fi
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
 "$ROOT_DIR/scripts/build-visionos-tabletop.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-tabletop-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/verify-tabletop-data-bundle.sh" --help >/dev/null
+"$ROOT_DIR/scripts/test-visionos-tabletop-launcher.sh" --help >/dev/null
 "$ROOT_DIR/scripts/test-visionos-tabletop-gestures.sh" --help >/dev/null
 rg -q 'PEONPAD_IOS_CONTROL_DOCK=ON' \
   "$ROOT_DIR/scripts/build-vision-compat-simulator.sh"
@@ -525,6 +527,9 @@ rg -Fq -- "--exclude '*.[Mm][Pp][Qq]'" "$VISIONOS_STAGE_SCRIPT"
 rg -Fq -- "--exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]'" \
   "$VISIONOS_STAGE_SCRIPT"
 rg -Fq -- "--exclude .DS_Store" "$VISIONOS_STAGE_SCRIPT"
+rg -Fq -- "--exclude Thumbs.db" "$VISIONOS_STAGE_SCRIPT"
+rg -Fq -- "--exclude desktop.ini" "$VISIONOS_STAGE_SCRIPT"
+rg -q 'symbolic links are not allowed' "$VISIONOS_STAGE_SCRIPT"
 
 # The staging script must refuse a source inside the repository.
 rg -q 'source must be outside the repository' "$VISIONOS_STAGE_SCRIPT"
@@ -620,6 +625,32 @@ UNTRACKED=$(git -C "$ROOT_DIR" status --porcelain \
 if PEONPAD_WARGUS_DATA_DIR="$ROOT_DIR/data.Wargus" \
     "$VISIONOS_STAGE_SCRIPT" >/dev/null 2>&1; then
   print -u2 "staging script accepted a source path inside the repository"
+  exit 1
+fi
+
+# The content verifier must keep default and private bundle modes distinct.
+DATA_VERIFY="$ROOT_DIR/scripts/verify-tabletop-data-bundle.sh"
+FAKE_APP="$WARGUS_STAGE_ROOT/Fake.app"
+cmake -E make_directory "$FAKE_APP"
+"$DATA_VERIFY" "$FAKE_APP" default >/dev/null
+if "$DATA_VERIFY" "$FAKE_APP" private >/dev/null 2>&1; then
+  print -u2 "private verifier accepted an asset-free bundle"
+  exit 1
+fi
+cmake -E make_directory "$FAKE_APP/PrivateGameData/wargus/scripts"
+cmake -E make_directory "$FAKE_APP/PrivateGameData/wargus/graphics"
+cmake -E make_directory "$FAKE_APP/PrivateGameData/wargus/maps"
+cmake -E make_directory "$FAKE_APP/PrivateGameData/wargus/sounds"
+printf 'entry' > "$FAKE_APP/PrivateGameData/wargus/scripts/stratagus.lua"
+printf 'extracted' > "$FAKE_APP/PrivateGameData/wargus/extracted"
+"$DATA_VERIFY" "$FAKE_APP" private >/dev/null
+if "$DATA_VERIFY" "$FAKE_APP" default >/dev/null 2>&1; then
+  print -u2 "default verifier accepted embedded private data"
+  exit 1
+fi
+printf 'archive' > "$FAKE_APP/PrivateGameData/wargus/war2dat.mpq"
+if "$DATA_VERIFY" "$FAKE_APP" private >/dev/null 2>&1; then
+  print -u2 "private verifier accepted a raw MPQ"
   exit 1
 fi
 

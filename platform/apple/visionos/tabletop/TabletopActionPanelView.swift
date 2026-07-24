@@ -22,6 +22,8 @@ struct TabletopActionPanelView: View {
     let onCommand: (TabletopGameplayCommand) -> Void
     /// Re-centres the board in front of the viewer.
     let onRecenter: () -> Void
+    /// Leaves immersion without stopping or restarting the single-shot engine.
+    let onReturnToLauncher: () -> Void
 
     @State private var showHelp = false
 
@@ -98,6 +100,12 @@ struct TabletopActionPanelView: View {
             .buttonStyle(.bordered)
             .help("Show navigation controls")
             .accessibilityIdentifier("tabletop.nav.help")
+            Button(action: onReturnToLauncher) {
+                Label("Launcher", systemImage: "rectangle.portrait.and.arrow.right")
+            }
+            .buttonStyle(.bordered)
+            .help("Return to launcher; the current game keeps running")
+            .accessibilityIdentifier("tabletop.nav.launcher")
         }
     }
 

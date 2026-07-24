@@ -33,21 +33,40 @@ struct TabletopBoardView: View {
     /// across SwiftUI re-renders; `_session = State(initialValue:)` in the
     /// designated init lets tests inject a DemoTabletopSession.
     @State private var session: AnyTabletopSession
+    private let isTransportBound: Bool
+    private let launcherWindowID: String
+    private let onReturnToLauncher: () -> Void
+    @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
 
     /// Production default: LiveTabletopSession with no transport bound.
     /// Logs an error and delivers an empty stream; the board shows a
     /// diagnostic overlay until a transport is connected.
     init() {
         _session = State(initialValue: AnyTabletopSession(LiveTabletopSession(transport: nil)))
+        _materialProvider = State(initialValue: nil)
+        isTransportBound = false
+        launcherWindowID = ""
+        onReturnToLauncher = {}
     }
 
     /// Designated init for tests and SwiftUI previews.
     init<S: TabletopGameplaySource & TabletopCommandSink>(
         session: S,
-        harnessTransport: TabletopTransport? = nil
+        harnessTransport: TabletopTransport? = nil,
+        launchConfig: EngineLaunchConfig? = nil,
+        launcherWindowID: String = "",
+        onReturnToLauncher: @escaping () -> Void = {}
     ) where S: Sendable {
         _session = State(initialValue: AnyTabletopSession(session))
+        _materialProvider = State(initialValue: launchConfig.flatMap {
+            WargusTabletopMaterialProvider.make(
+                dataPath: $0.dataPath, cachePath: $0.userPath)
+        })
         self.harnessTransport = harnessTransport
+        self.isTransportBound = harnessTransport != nil
+        self.launcherWindowID = launcherWindowID
+        self.onReturnToLauncher = onReturnToLauncher
     }
 
     /// The production transport, passed through only so the opt-in command
@@ -104,10 +123,7 @@ struct TabletopBoardView: View {
     /// Also passes the writable user/cache directory, since engine-generated
     /// assets (the expanded-tileset PNG cache) live there, never in the
     /// read-only data directory (see EngineStartupPlan.swift).
-    @State private var materialProvider: WargusTabletopMaterialProvider? =
-        WargusTabletopMaterialProvider.make(
-            dataPath: PeonPadTabletopLaunch.resolveConfig().dataPath,
-            cachePath: PeonPadTabletopLaunch.resolveConfig().userPath)
+    @State private var materialProvider: WargusTabletopMaterialProvider?
 
     /// Chunked board entity manager: replaces the 32 768-entity per-tile
     /// approach with 16 terrain-chunk entities + 1 fog entity for a 128×128 map.
@@ -179,8 +195,10 @@ struct TabletopBoardView: View {
                 TabletopActionPanelView(
                     context: TabletopActionPanel.context(for: gameplaySnapshot),
                     onCommand: { session.send($0) },
-                    onRecenter: recenter)
+                    onRecenter: recenter,
+                    onReturnToLauncher: returnToLauncher)
             }
+
         }
         .gesture(
             SpatialEventGesture()
@@ -230,12 +248,36 @@ struct TabletopBoardView: View {
         // (live session with no transport bound).
         .overlay(alignment: .center) {
             if gameplaySnapshot == nil {
-                noTransportOverlay
+                if isTransportBound {
+                    loadingOverlay
+                } else {
+                    noTransportOverlay
+                }
             }
         }
     }
 
+    private func returnToLauncher() {
+        guard !launcherWindowID.isEmpty else { return }
+        onReturnToLauncher()
+        openWindow(id: launcherWindowID)
+        Task {
+            await dismissImmersiveSpace()
+        }
+    }
+
     // MARK: - No-transport diagnostic
+
+    private var loadingOverlay: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.large)
+            Text("Loading battlefield…")
+                .font(.headline)
+        }
+        .padding(24)
+        .glassBackgroundEffect()
+    }
 
     private var noTransportOverlay: some View {
         VStack(spacing: 10) {
@@ -582,4 +624,3 @@ struct TabletopBoardView: View {
 private extension SIMD2 where Scalar == Float {
     var length: Float { (x * x + y * y).squareRoot() }
 }
-

@@ -109,11 +109,73 @@ extension EngineSnapshot {
                 pathRoot: td.image_path_root)
         }
 
+        var actions: [EngineActionDescriptor] = []
+        let actionCount = Int(peonpad_snapshot_action_count(s))
+        if actionCount > 0, let ptr = peonpad_snapshot_actions(s) {
+            actions.reserveCapacity(actionCount)
+            for i in 0..<actionCount {
+                var entry = ptr[i]
+                func string<T>(_ field: inout T) -> String {
+                    withUnsafeBytes(of: &field) { raw -> String in
+                        guard let base = raw.baseAddress else { return "" }
+                        return String(cString: base.assumingMemoryBound(to: CChar.self))
+                    }
+                }
+                var costs: [EngineActionCost] = []
+                let costCount = min(Int(entry.cost_count), 8)
+                withUnsafeBytes(of: &entry.costs) { raw in
+                    let values = raw.bindMemory(to: PeonPadActionCost.self)
+                    for index in 0..<min(costCount, values.count) {
+                        costs.append(EngineActionCost(
+                            resourceID: values[index].resource_id,
+                            amount: values[index].amount))
+                    }
+                }
+                actions.append(EngineActionDescriptor(
+                    id: entry.action_id,
+                    slot: entry.slot,
+                    panelLevel: entry.panel_level,
+                    kind: entry.command_kind,
+                    visible: entry.visible != 0,
+                    enabled: entry.enabled != 0,
+                    selected: entry.selected != 0,
+                    autocast: entry.autocast != 0,
+                    targetKind: entry.target_kind,
+                    value: entry.value,
+                    hotkey: entry.hotkey,
+                    iconFrame: entry.icon_frame,
+                    iconWidth: entry.icon_width,
+                    iconHeight: entry.icon_height,
+                    costs: costs,
+                    ident: string(&entry.ident),
+                    valueIdent: string(&entry.value_ident),
+                    text: string(&entry.text),
+                    tooltip: string(&entry.tooltip),
+                    iconPath: string(&entry.icon_path)))
+            }
+        }
+
+        var actionState = EngineActionState()
+        if let state = peonpad_snapshot_action_state(s)?.pointee {
+            actionState = EngineActionState(
+                paused: state.paused != 0,
+                targetKind: state.target_kind,
+                targetCommandKind: state.target_command_kind,
+                panelLevel: state.panel_level,
+                targetSlot: state.target_slot,
+                targetActionID: state.target_action_id,
+                lastRequestID: state.last_request_id,
+                lastResult: state.last_result,
+                queueOverflowCount: state.queue_overflow_count,
+                rejectedCommandCount: state.rejected_command_count)
+        }
+
         self.init(
             abiVersion: peonpad_snapshot_abi_version(s),
             generation: peonpad_snapshot_generation(s),
             mapWidth: width, mapHeight: height,
-            terrain: terrain, units: units, unitTypes: types, tileset: tileset)
+            terrain: terrain, units: units, unitTypes: types, tileset: tileset,
+            actions: actions, actionState: actionState)
     }
 }
 
@@ -123,6 +185,8 @@ public final class EngineTabletopTransport: TabletopTransport, @unchecked Sendab
     private let host: PeonPadEngineHost
     private let expectedABIVersion: UInt32
     private let pollInterval: UInt64  // nanoseconds
+    private let requestLock = NSLock()
+    private var nextRequestID: UInt64 = 1
 
     /// Creates and starts a live engine transport, or returns `nil` when the
     /// data/user paths are not ready. A `nil` result is an explicit failure the
@@ -208,7 +272,9 @@ public final class EngineTabletopTransport: TabletopTransport, @unchecked Sendab
     }
 
     public func send(_ command: TabletopGameplayCommand) async {
-        guard let encoded = EngineCommandEncoder.encode(command) else {
+        let requestID = allocateRequestID()
+        guard let encoded = EngineCommandEncoder.encode(
+            command, requestID: requestID) else {
             print("[EngineTabletop] ⚠️  dropped unencodable command: \(command)")
             return
         }
@@ -218,10 +284,22 @@ public final class EngineTabletopTransport: TabletopTransport, @unchecked Sendab
         cmd.unit_id = encoded.unitID
         cmd.tile_x = encoded.tileX
         cmd.tile_y = encoded.tileY
+        cmd.action_id = encoded.actionID
+        cmd.request_id = encoded.requestID
+        cmd.action_slot = encoded.actionSlot
         let rc = withUnsafePointer(to: &cmd) { peonpad_tabletop_post_command($0) }
         if rc != 0 {
             print("[EngineTabletop] ⚠️  post_command rejected (rc=\(rc)): \(command)")
         }
+    }
+
+    private func allocateRequestID() -> UInt64 {
+        requestLock.lock()
+        defer { requestLock.unlock() }
+        let result = nextRequestID
+        nextRequestID &+= 1
+        if nextRequestID == 0 { nextRequestID = 1 }
+        return result
     }
 }
 

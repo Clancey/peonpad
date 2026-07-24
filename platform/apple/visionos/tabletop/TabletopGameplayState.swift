@@ -311,11 +311,141 @@ public struct TabletopAssetCatalog: Codable, Equatable {
     }
 
     /// The sprite descriptor for a unit ident, or `nil` when the catalog has
-    /// no entry (missing sprite → procedural billboard fallback for that unit).
+    /// no entry (missing sprite -> procedural billboard fallback for that unit).
     public func sprite(forUnitKind kind: String) -> TabletopUnitSpriteInfo? {
         unitTypes[kind]
     }
 }
+
+// MARK: - Engine action model (ABI v6)
+
+public enum TabletopEngineActionKind: UInt16, Codable, Equatable {
+        case move = 0, attack, repair, harvest, build, patrol, explore
+        case attackGround, spellCast, unload, stop, submenu, train, standGround
+        case returnGoods, research, upgradeTo, cancel, cancelUpgrade
+        case cancelTrain, cancelBuild, callback
+        case unknown = 65535
+    }
+
+    public enum TabletopActionTargetKind: UInt8, Codable, Equatable {
+        case none = 0
+        case map = 1
+        case buildPlacement = 2
+    }
+
+    public struct TabletopActionCost: Codable, Equatable {
+        public var resourceID: UInt8
+        public var amount: Int
+        public init(resourceID: UInt8, amount: Int) {
+            self.resourceID = resourceID
+            self.amount = amount
+        }
+    }
+
+    public struct TabletopEngineAction: Codable, Equatable {
+        public var id: UInt64
+        public var slot: UInt16
+        public var panelLevel: UInt16
+        public var kind: TabletopEngineActionKind
+        public var isVisible: Bool
+        public var isEnabled: Bool
+        public var isSelected: Bool
+        public var isAutocast: Bool
+        public var targetKind: TabletopActionTargetKind
+        public var value: Int
+        public var hotkey: UInt32
+        public var iconFrame: Int
+        public var iconWidth: Int
+        public var iconHeight: Int
+        public var costs: [TabletopActionCost]
+        public var ident: String
+        public var valueIdent: String
+        public var text: String
+        public var tooltip: String
+        public var iconPath: String
+
+        public init(
+            id: UInt64, slot: UInt16, panelLevel: UInt16 = 0,
+            kind: TabletopEngineActionKind, isVisible: Bool = true,
+            isEnabled: Bool = true, isSelected: Bool = false,
+            isAutocast: Bool = false, targetKind: TabletopActionTargetKind = .none,
+            value: Int = 0, hotkey: UInt32 = 0, iconFrame: Int = 0,
+            iconWidth: Int = 0, iconHeight: Int = 0,
+            costs: [TabletopActionCost] = [], ident: String = "",
+            valueIdent: String = "", text: String = "", tooltip: String = "",
+            iconPath: String = ""
+        ) {
+            self.id = id
+            self.slot = slot
+            self.panelLevel = panelLevel
+            self.kind = kind
+            self.isVisible = isVisible
+            self.isEnabled = isEnabled
+            self.isSelected = isSelected
+            self.isAutocast = isAutocast
+            self.targetKind = targetKind
+            self.value = value
+            self.hotkey = hotkey
+            self.iconFrame = iconFrame
+            self.iconWidth = iconWidth
+            self.iconHeight = iconHeight
+            self.costs = costs
+            self.ident = ident
+            self.valueIdent = valueIdent
+            self.text = text
+            self.tooltip = tooltip
+            self.iconPath = iconPath
+        }
+    }
+
+    public enum TabletopEngineCommandResult: Int32, Codable, Equatable {
+        case none = 0
+        case accepted = 1
+        case rejectedNoSelection = -1
+        case rejectedStaleAction = -2
+        case rejectedHidden = -3
+        case rejectedDisabled = -4
+        case rejectedNoTarget = -5
+        case rejectedBadTarget = -6
+        case rejectedUnsupported = -7
+        case rejectedPaused = -8
+        case rejectedUnitNotFound = -9
+    }
+
+    public struct TabletopEngineActionState: Codable, Equatable {
+        public var isPaused: Bool
+        public var targetKind: TabletopActionTargetKind
+        public var targetActionKind: TabletopEngineActionKind
+        public var panelLevel: UInt8
+        public var targetSlot: UInt16
+        public var targetActionID: UInt64
+        public var lastRequestID: UInt64
+        public var lastResult: TabletopEngineCommandResult
+        public var queueOverflowCount: UInt32
+        public var rejectedCommandCount: UInt32
+
+        public init(
+            isPaused: Bool = false, targetKind: TabletopActionTargetKind = .none,
+            targetActionKind: TabletopEngineActionKind = .unknown,
+            panelLevel: UInt8 = 0, targetSlot: UInt16 = 0,
+            targetActionID: UInt64 = 0, lastRequestID: UInt64 = 0,
+            lastResult: TabletopEngineCommandResult = .none,
+            queueOverflowCount: UInt32 = 0, rejectedCommandCount: UInt32 = 0
+        ) {
+            self.isPaused = isPaused
+            self.targetKind = targetKind
+            self.targetActionKind = targetActionKind
+            self.panelLevel = panelLevel
+            self.targetSlot = targetSlot
+            self.targetActionID = targetActionID
+            self.lastRequestID = lastRequestID
+            self.lastResult = lastResult
+            self.queueOverflowCount = queueOverflowCount
+            self.rejectedCommandCount = rejectedCommandCount
+        }
+
+        public var isAwaitingBoardTarget: Bool { targetKind != .none }
+    }
 
 // MARK: - Versioned snapshot
 
@@ -323,7 +453,7 @@ public struct TabletopAssetCatalog: Codable, Equatable {
 /// commands produce a new snapshot via `TabletopGameplayCommandReducer.reduce`.
 public struct TabletopGameplaySnapshot: Codable, Equatable {
     /// Bumped when the serialised layout changes incompatibly.
-    public static let currentVersion = 1
+    public static let currentVersion = 2
 
     public var version: Int
     public var mapSize: TabletopMapSize
@@ -337,6 +467,10 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
     /// `nil` for procedural/demo snapshots; the render layer then uses
     /// procedural terrain colors and billboards.
     public var assets: TabletopAssetCatalog?
+    /// Authoritative current Stratagus button panel (ABI v6).
+    public var actions: [TabletopEngineAction]
+    /// Pause, submenu, target-placement, and command-result state (ABI v6).
+    public var actionState: TabletopEngineActionState
 
     public init(
         version: Int,
@@ -345,7 +479,9 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         fogMask: [TabletopFogTile],
         units: [TabletopGameplayUnit],
         selection: TabletopGameplaySelection,
-        assets: TabletopAssetCatalog? = nil
+        assets: TabletopAssetCatalog? = nil,
+        actions: [TabletopEngineAction] = [],
+        actionState: TabletopEngineActionState = TabletopEngineActionState()
     ) {
         self.version = version
         self.mapSize = mapSize
@@ -354,6 +490,8 @@ public struct TabletopGameplaySnapshot: Codable, Equatable {
         self.units = units
         self.selection = selection
         self.assets = assets
+        self.actions = actions
+        self.actionState = actionState
     }
 
     // MARK: Convenience accessors
@@ -399,6 +537,14 @@ public enum TabletopGameplayCommand: Equatable, Codable {
     /// exists so higher-level state machines can emit it and receive a
     /// validation result without special-casing.
     case stopUnit(id: String)
+    /// Invoke exactly the descriptor identified by id + engine panel slot.
+    case activateAction(id: UInt64, slot: UInt16)
+    /// Complete the currently pending map/build target.
+    case submitActionTarget(tileX: Int, tileZ: Int)
+    /// Cancel pending target/build placement or return to the root submenu.
+    case cancelAction
+    case pause
+    case resume
 }
 
 // MARK: - Validation
@@ -409,6 +555,10 @@ public enum TabletopCommandValidation: Equatable {
     case rejectedUnitNotFound(id: String)
     /// The targeted unit exists but has `hp == 0` and cannot receive commands.
     case rejectedDeadUnit(id: String, hp: Int)
+    case rejectedActionNotFound(id: UInt64, slot: UInt16)
+    case rejectedActionDisabled(id: UInt64, slot: UInt16)
+    case rejectedNoPendingTarget
+    case rejectedTargetOutOfBounds(tileX: Int, tileZ: Int)
 }
 
 // MARK: - Command reducer
@@ -432,6 +582,27 @@ public enum TabletopGameplayCommandReducer {
             return validateUnit(id, in: snapshot)
         case .stopUnit(let id):
             return validateUnit(id, in: snapshot)
+        case .activateAction(let id, let slot):
+            guard let action = snapshot.actions.first(where: {
+                $0.id == id && $0.slot == slot && $0.isVisible
+            }) else {
+                return .rejectedActionNotFound(id: id, slot: slot)
+            }
+            return action.isEnabled
+                ? .valid
+                : .rejectedActionDisabled(id: id, slot: slot)
+        case .submitActionTarget(let tileX, let tileZ):
+            guard snapshot.actionState.isAwaitingBoardTarget else {
+                return .rejectedNoPendingTarget
+            }
+            guard tileX >= 0, tileZ >= 0,
+                  tileX < snapshot.mapSize.width,
+                  tileZ < snapshot.mapSize.height else {
+                return .rejectedTargetOutOfBounds(tileX: tileX, tileZ: tileZ)
+            }
+            return .valid
+        case .cancelAction, .pause, .resume:
+            return .valid
         }
     }
 
@@ -449,8 +620,10 @@ public enum TabletopGameplayCommandReducer {
         switch command {
         case .deselectAll:
             next.selection = TabletopGameplaySelection()
+            clearTargetState(&next.actionState)
         case .selectUnit(let id):
             next.selection = TabletopGameplaySelection(selectedUnitID: id)
+            clearTargetState(&next.actionState)
         case .moveUnit(let id, let toTileX, let toTileZ):
             if let idx = next.units.firstIndex(where: { $0.id == id }) {
                 next.units[idx].tileX = toTileX
@@ -460,11 +633,48 @@ public enum TabletopGameplayCommandReducer {
             // Pure-state model: no velocity to clear. Validation above
             // ensures the unit exists and is alive; nothing else to update.
             break
+        case .activateAction(let id, let slot):
+            if let action = next.actions.first(where: {
+                $0.id == id && $0.slot == slot
+            }) {
+                next.actionState.targetKind = action.targetKind
+                next.actionState.targetActionKind = action.kind
+                next.actionState.targetActionID =
+                    action.targetKind == .none ? 0 : action.id
+                next.actionState.targetSlot =
+                    action.targetKind == .none ? 0 : action.slot
+                if action.kind == .submenu {
+                    next.actionState.panelLevel = UInt8(clamping: action.value)
+                }
+                next.actionState.lastResult = .accepted
+            }
+        case .submitActionTarget:
+            clearTargetState(&next.actionState)
+            next.actionState.lastResult = .accepted
+        case .cancelAction:
+            clearTargetState(&next.actionState)
+            next.actionState.panelLevel = 0
+            next.actionState.lastResult = .accepted
+        case .pause:
+            clearTargetState(&next.actionState)
+            next.actionState.panelLevel = 0
+            next.actionState.isPaused = true
+            next.actionState.lastResult = .accepted
+        case .resume:
+            next.actionState.isPaused = false
+            next.actionState.lastResult = .accepted
         }
         return next
     }
 
     // MARK: Private helpers
+
+    private static func clearTargetState(_ state: inout TabletopEngineActionState) {
+        state.targetKind = .none
+        state.targetActionKind = .unknown
+        state.targetActionID = 0
+        state.targetSlot = 0
+    }
 
     private static func validateUnit(
         _ id: String,

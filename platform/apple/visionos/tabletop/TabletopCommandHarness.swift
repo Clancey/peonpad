@@ -1,7 +1,8 @@
 // TabletopCommandHarness.swift
 //
 // An opt-in, non-production integration harness that proves the tabletop's
-// command path is accepted end-to-end: it submits select → move → stop through
+// command path is accepted end-to-end: it submits selection, exact engine-button
+// activation, target cancellation/submission, submenu activation, and stop through
 // the *exact* production `TabletopTransport.send(_:)` and verifies that the
 // engine changed state and that the next reconciled snapshot observed it.
 //
@@ -29,7 +30,7 @@ public struct TabletopCommandHarnessReport: Equatable {
     }
 }
 
-/// Drives a fixed select → move → stop probe against the live snapshot stream.
+/// Drives a fixed authoritative-action probe against the live snapshot stream.
 /// It is fed each reconciled `TabletopGameplaySnapshot` and returns the
 /// command(s) to submit (through the real transport) plus any verdicts. It only
 /// advances when it *observes* the engine's state change in a later snapshot, so
@@ -51,7 +52,12 @@ public final class TabletopCommandHarness {
 
     public enum Phase: Equatable {
         case selecting
-        case moving
+        case activatingTargetForCancel
+        case cancellingTarget
+        case activatingTargetForSubmit
+        case submittingTarget
+        case openingNontrivial
+        case closingNontrivial
         case stopping
         case finished
         case failed
@@ -65,6 +71,10 @@ public final class TabletopCommandHarness {
     private var targetUnitID: String?
     private var baselineTile: (x: Int, z: Int)?
     private var moveTarget: (x: Int, z: Int)?
+    private var targetAction: TabletopEngineAction?
+    private var nontrivialAction: TabletopEngineAction?
+    private var baselinePanelLevel: UInt8 = 0
+    private var stopRequestBaseline: UInt64 = 0
     private var waited = 0
 
     public init(maxSnapshotsPerPhase: Int = 600) {
@@ -102,47 +112,143 @@ public final class TabletopCommandHarness {
             // Awaiting the engine to reflect the selection.
             if let id = targetUnitID,
                snapshot.selection.selectedUnitID == id {
-                let target = chooseMoveTarget(in: snapshot)
-                moveTarget = target
-                phase = .moving
+                guard let action = pickTargetAction(in: snapshot) else {
+                    return timeoutOrWait("action")
+                }
+                targetAction = action
+                phase = .activatingTargetForCancel
                 waited = 0
                 let pass = report("select", true,
                                   "unit \(id) selected in engine snapshot")
-                return ([.moveUnit(id: id, toTileX: target.x, toTileZ: target.z)], [pass])
+                return ([.activateAction(id: action.id, slot: action.slot)], [pass])
             }
             return timeoutOrWait("select")
 
-        case .moving:
+        case .activatingTargetForCancel:
+            guard let action = targetAction else {
+                phase = .failed
+                return ([], [report("action", false, "missing exact target action")])
+            }
+            if snapshot.actionState.targetActionID == action.id,
+               snapshot.actionState.targetSlot == action.slot,
+               snapshot.actionState.isAwaitingBoardTarget {
+                phase = .cancellingTarget
+                waited = 0
+                return ([.cancelAction], [
+                    report("activate", true,
+                           "exact slot \(action.slot) entered \(action.targetKind) targeting"),
+                ])
+            }
+            return timeoutOrWait("activate")
+
+        case .cancellingTarget:
+            guard let action = targetAction else {
+                phase = .failed
+                return ([], [report("cancel", false, "missing exact target action")])
+            }
+            if !snapshot.actionState.isAwaitingBoardTarget {
+                phase = .activatingTargetForSubmit
+                waited = 0
+                return ([.activateAction(id: action.id, slot: action.slot)], [
+                    report("cancel", true, "engine target state cleared"),
+                ])
+            }
+            return timeoutOrWait("cancel")
+
+        case .activatingTargetForSubmit:
+            guard let action = targetAction else {
+                phase = .failed
+                return ([], [report("target", false, "missing exact target action")])
+            }
+            if snapshot.actionState.targetActionID == action.id,
+               snapshot.actionState.targetSlot == action.slot,
+               snapshot.actionState.isAwaitingBoardTarget {
+                let target = chooseMoveTarget(in: snapshot)
+                moveTarget = target
+                phase = .submittingTarget
+                waited = 0
+                return ([.submitActionTarget(tileX: target.x, tileZ: target.z)], [])
+            }
+            return timeoutOrWait("target")
+
+        case .submittingTarget:
             guard let id = targetUnitID, let baseline = baselineTile else {
                 phase = .failed
-                return ([], [report("move", false, "missing target state")])
+                return ([], [report("target", false, "missing movement baseline")])
             }
             if let unit = snapshot.units.first(where: { $0.id == id }) {
                 let moved = unit.tileX != baseline.x || unit.tileZ != baseline.z
                 if moved {
-                    phase = .stopping
+                    guard let action = pickNontrivialAction(in: snapshot) else {
+                        return timeoutOrWait("nontrivial")
+                    }
+                    nontrivialAction = action
+                    baselinePanelLevel = snapshot.actionState.panelLevel
+                    phase = .openingNontrivial
                     waited = 0
-                    let pass = report("move", true,
-                        "unit \(id) moved to (\(unit.tileX),\(unit.tileZ)) from "
+                    let pass = report("target", true,
+                        "exact action target moved unit \(id) to "
+                        + "(\(unit.tileX),\(unit.tileZ)) from "
                         + "(\(baseline.x),\(baseline.z))")
-                    return ([.stopUnit(id: id)], [pass])
+                    return ([.activateAction(id: action.id, slot: action.slot)], [pass])
                 }
             }
-            return timeoutOrWait("move")
+            return timeoutOrWait("target")
+
+        case .openingNontrivial:
+            guard let action = nontrivialAction else {
+                phase = .failed
+                return ([], [report("nontrivial", false, "missing submenu action")])
+            }
+            if snapshot.actionState.panelLevel != baselinePanelLevel {
+                phase = .closingNontrivial
+                waited = 0
+                return ([.cancelAction], [
+                    report("nontrivial", true,
+                           "exact submenu slot \(action.slot) opened panel "
+                           + "\(snapshot.actionState.panelLevel)"),
+                ])
+            }
+            return timeoutOrWait("nontrivial")
+
+        case .closingNontrivial:
+            guard let id = targetUnitID else {
+                phase = .failed
+                return ([], [report("back", false, "missing selected unit")])
+            }
+            if snapshot.actionState.panelLevel == 0,
+               !snapshot.actionState.isAwaitingBoardTarget {
+                phase = .stopping
+                waited = 0
+                stopRequestBaseline = snapshot.actionState.lastRequestID
+                return ([.stopUnit(id: id)], [
+                    report("back", true, "cancel/back restored root action panel"),
+                ])
+            }
+            return timeoutOrWait("back")
 
         case .stopping:
             guard let id = targetUnitID else {
                 phase = .failed
                 return ([], [report("stop", false, "missing target state")])
             }
-            // The stop order was submitted on entering this phase. Observing the
-            // unit alive and present in the very next reconciled snapshot proves
-            // the stop command round-tripped without desync/crash.
-            if snapshot.units.contains(where: { $0.id == id && $0.isAlive }) {
+            if snapshot.actionState.lastRequestID != stopRequestBaseline {
+                guard snapshot.actionState.lastResult == .accepted else {
+                    phase = .failed
+                    return ([], [
+                        report("stop", false,
+                               "engine rejected stop: \(snapshot.actionState.lastResult)"),
+                    ])
+                }
+                guard snapshot.units.contains(where: { $0.id == id && $0.isAlive }) else {
+                    phase = .failed
+                    return ([], [report("stop", false, "stopped unit disappeared")])
+                }
                 phase = .finished
                 return ([], [
                     report("stop", true, "unit \(id) stopped and still reconciled"),
-                    report("complete", true, "select+move+stop round-trip observed"),
+                    report("complete", true,
+                           "selection+exact-action+target/cancel+submenu+stop observed"),
                 ])
             }
             return timeoutOrWait("stop")
@@ -150,6 +256,23 @@ public final class TabletopCommandHarness {
     }
 
     // MARK: - Helpers
+
+    private func pickTargetAction(
+        in snapshot: TabletopGameplaySnapshot
+    ) -> TabletopEngineAction? {
+        let available = snapshot.actions.filter {
+            $0.isVisible && $0.isEnabled && $0.targetKind == .map
+        }
+        return available.first(where: { $0.kind == .move }) ?? available.first
+    }
+
+    private func pickNontrivialAction(
+        in snapshot: TabletopGameplaySnapshot
+    ) -> TabletopEngineAction? {
+        snapshot.actions.first(where: {
+            $0.isVisible && $0.isEnabled && $0.kind == .submenu
+        })
+    }
 
     /// Prefer a unit owned by the local player (owner 0), else any live unit.
     private func pickUnit(in snapshot: TabletopGameplaySnapshot) -> TabletopGameplayUnit? {
@@ -221,7 +344,7 @@ public enum TabletopCommandHarnessDriver {
         }
     ) -> Task<Void, Never>? {
         guard TabletopCommandHarness.isEnabled(environment: environment) else { return nil }
-        log("[TabletopHarness] enabled — probing select→move→stop through the "
+        log("[TabletopHarness] enabled — probing authoritative actions through the "
             + "production transport (opt-in, non-production).")
         return Task {
             let harness = TabletopCommandHarness()

@@ -16,6 +16,7 @@
 #include "TabletopSeenTerrainCache.h"
 #include "TabletopTilesetPath.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <cstdio>
@@ -30,19 +31,26 @@
 #include "TabletopTilesetExport.h"
 #include "TabletopTilesetExportCache.h"
 #include "commands.h"
+#include "cursor.h"
+#include "depend.h"
 #include "fow.h"
+#include "icons.h"
 #include "interface.h"
 #include "iolib.h"
 #include "map.h"
 #include "parameters.h"
 #include "player.h"
+#include "spells.h"
 #include "stratagus.h"
 #include "tile.h"
 #include "tileset.h"
 #include "unit.h"
 #include "unit_manager.h"
 #include "unittype.h"
+#include "ui.h"
 #include "vec2i.h"
+#include "upgrade.h"
+#include "upgrade_structs.h"
 #include "video.h"
 #endif
 
@@ -58,6 +66,8 @@ struct PeonPadSnapshot {
     std::vector<PeonPadUnitType>    unit_types; // ABI v2: type_id → ident registry
     bool                            has_tileset = false; // ABI v3
     PeonPadTilesetDescriptor        tileset{};  // ABI v3: active-map tileset
+    std::vector<PeonPadActionDescriptor> actions; // ABI v6
+    PeonPadActionState              action_state{}; // ABI v6
 };
 
 // ── Bridge state (owned by simulation thread) ─────────────────────────────
@@ -76,6 +86,19 @@ struct TabletopBridgeState {
     PeonPadSnapshot            *latest      = nullptr;  // guarded by snap_mutex
 
     std::vector<PeonPadCommand> pending;                // guarded by cmd_mutex
+    uint32_t                    queue_overflow_count = 0; // guarded by cmd_mutex
+    uint32_t                    rejected_command_count = 0; // guarded by cmd_mutex
+
+    // Simulation-thread action execution state, copied into each snapshot.
+    uint64_t                    publication_generation = 0;
+    uint64_t                    last_request_id = 0;
+    int32_t                     last_result = PEONPAD_COMMAND_RESULT_NONE;
+    uint64_t                    target_action_id = 0;
+    uint16_t                    target_slot = 0;
+    uint16_t                    target_kind = PEONPAD_ACTION_TARGET_NONE;
+    uint16_t                    target_command_kind = PEONPAD_ACTION_UNKNOWN;
+    uint64_t                    target_selection_hash = 0;
+    bool                        performed_headless_unpause = false;
 
     // Simulation-thread cache of the last visible logical terrain metadata.
     // Stratagus stores only the last-seen graphic frame, so the bridge retains
@@ -116,6 +139,16 @@ bool CommandIsValid(const PeonPadCommand *cmd) noexcept
 {
     if (!cmd) return false;
     if (cmd->abi_ver != PEONPAD_TABLETOP_ABI_VERSION) return false;
+    for (uint8_t byte : cmd->_reserved) {
+        if (byte != 0) return false;
+    }
+    for (uint8_t byte : cmd->_pad_v6) {
+        if (byte != 0) return false;
+    }
+    for (uint8_t byte : cmd->_reserved_v6) {
+        if (byte != 0) return false;
+    }
+    if (cmd->flags != 0) return false;
     switch (static_cast<PeonPadCommandType>(cmd->type)) {
         case PEONPAD_CMD_SELECT:
         case PEONPAD_CMD_DESELECT:
@@ -123,10 +156,18 @@ bool CommandIsValid(const PeonPadCommand *cmd) noexcept
         case PEONPAD_CMD_DESELECT_ALL:
             return true;
         case PEONPAD_CMD_MOVE:
+        case PEONPAD_CMD_TARGET_ACTION:
             // Reject tiles beyond the hard map limit.
             return (cmd->tile_x >= 0 && cmd->tile_y >= 0
                     && static_cast<uint32_t>(cmd->tile_x) < PEONPAD_TABLETOP_MAX_MAP_DIM
                     && static_cast<uint32_t>(cmd->tile_y) < PEONPAD_TABLETOP_MAX_MAP_DIM);
+        case PEONPAD_CMD_ACTIVATE_ACTION:
+            return cmd->action_id != 0
+                && cmd->action_slot < PEONPAD_TABLETOP_MAX_ACTIONS;
+        case PEONPAD_CMD_CANCEL_ACTION:
+        case PEONPAD_CMD_PAUSE:
+        case PEONPAD_CMD_RESUME:
+            return true;
         default:
             return false;
     }
@@ -198,6 +239,22 @@ const PeonPadTilesetDescriptor *peonpad_snapshot_tileset(const PeonPadSnapshot *
     return &s->tileset;
 }
 
+uint32_t peonpad_snapshot_action_count(const PeonPadSnapshot *s)
+{
+    return s ? static_cast<uint32_t>(s->actions.size()) : 0u;
+}
+
+const PeonPadActionDescriptor *peonpad_snapshot_actions(const PeonPadSnapshot *s)
+{
+    if (!s || s->actions.empty()) return nullptr;
+    return s->actions.data();
+}
+
+const PeonPadActionState *peonpad_snapshot_action_state(const PeonPadSnapshot *s)
+{
+    return s ? &s->action_state : nullptr;
+}
+
 int peonpad_snapshot_retain(PeonPadSnapshot *s)
 {
     if (!s) return -1;
@@ -217,6 +274,17 @@ int peonpad_tabletop_init(void)
     std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
     if (g_bridge.initialized) return -1;
     g_bridge.initialized = true;
+    g_bridge.queue_overflow_count = 0;
+    g_bridge.rejected_command_count = 0;
+    g_bridge.publication_generation = 0;
+    g_bridge.last_request_id = 0;
+    g_bridge.last_result = PEONPAD_COMMAND_RESULT_NONE;
+    g_bridge.target_action_id = 0;
+    g_bridge.target_slot = 0;
+    g_bridge.target_kind = PEONPAD_ACTION_TARGET_NONE;
+    g_bridge.target_command_kind = PEONPAD_ACTION_UNKNOWN;
+    g_bridge.target_selection_hash = 0;
+    g_bridge.performed_headless_unpause = false;
     return 0;
 }
 
@@ -249,12 +317,19 @@ void peonpad_tabletop_cleanup(void)
 
 int peonpad_tabletop_post_command(const PeonPadCommand *cmd)
 {
-    if (!CommandIsValid(cmd)) return -2;
+    if (!CommandIsValid(cmd)) {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        ++g_bridge.rejected_command_count;
+        return -2;
+    }
     std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
     // Check initialized under the same lock that cleanup() holds when it
     // clears initialized — prevents enqueueing after cleanup returns.
     if (!g_bridge.initialized) return -1;
-    if (g_bridge.pending.size() >= PEONPAD_TABLETOP_MAX_COMMANDS) return -3;
+    if (g_bridge.pending.size() >= PEONPAD_TABLETOP_MAX_COMMANDS) {
+        ++g_bridge.queue_overflow_count;
+        return -3;
+    }
     g_bridge.pending.push_back(*cmd);
     return 0;
 }
@@ -284,10 +359,10 @@ int peonpad_tabletop_publish_synthetic(
     const PeonPadUnitRecord    *units,
     uint32_t                    unit_count)
 {
-    return peonpad_tabletop_publish_synthetic_v3(
+    return peonpad_tabletop_publish_synthetic_v6(
         generation, map_width, map_height,
         terrain, terrain_count, units, unit_count,
-        nullptr, 0, nullptr);
+        nullptr, 0, nullptr, nullptr, 0, nullptr);
 }
 
 int peonpad_tabletop_publish_synthetic_v2(
@@ -301,10 +376,10 @@ int peonpad_tabletop_publish_synthetic_v2(
     const PeonPadUnitType      *types,
     uint32_t                    type_count)
 {
-    return peonpad_tabletop_publish_synthetic_v3(
+    return peonpad_tabletop_publish_synthetic_v6(
         generation, map_width, map_height,
         terrain, terrain_count, units, unit_count,
-        types, type_count, nullptr);
+        types, type_count, nullptr, nullptr, 0, nullptr);
 }
 
 int peonpad_tabletop_publish_synthetic_v3(
@@ -318,6 +393,27 @@ int peonpad_tabletop_publish_synthetic_v3(
     const PeonPadUnitType          *types,
     uint32_t                        type_count,
     const PeonPadTilesetDescriptor *tileset)
+{
+    return peonpad_tabletop_publish_synthetic_v6(
+        generation, map_width, map_height,
+        terrain, terrain_count, units, unit_count,
+        types, type_count, tileset, nullptr, 0, nullptr);
+}
+
+int peonpad_tabletop_publish_synthetic_v6(
+    uint64_t                        generation,
+    uint32_t                        map_width,
+    uint32_t                        map_height,
+    const PeonPadTerrainCell       *terrain,
+    uint32_t                        terrain_count,
+    const PeonPadUnitRecord        *units,
+    uint32_t                        unit_count,
+    const PeonPadUnitType          *types,
+    uint32_t                        type_count,
+    const PeonPadTilesetDescriptor *tileset,
+    const PeonPadActionDescriptor  *actions,
+    uint32_t                        action_count,
+    const PeonPadActionState       *action_state)
 {
     {
         std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
@@ -334,6 +430,8 @@ int peonpad_tabletop_publish_synthetic_v3(
     if (unit_count > 0 && !units) return -2;
     if (type_count > PEONPAD_TABLETOP_MAX_UNIT_TYPES) return -2;
     if (type_count > 0 && !types) return -2;
+    if (action_count > PEONPAD_TABLETOP_MAX_ACTIONS) return -2;
+    if (action_count > 0 && !actions) return -2;
 
     // Every ident and sprite_path must be NUL-terminated within its buffer.
     for (uint32_t i = 0; i < type_count; ++i) {
@@ -351,6 +449,31 @@ int peonpad_tabletop_publish_synthetic_v3(
             return -2;
         }
         if (memchr(tileset->name, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr) {
+            return -2;
+        }
+    }
+    for (uint32_t i = 0; i < action_count; ++i) {
+        const PeonPadActionDescriptor &action = actions[i];
+        if (action.cost_count > PEONPAD_TABLETOP_MAX_ACTION_COSTS
+            || action.slot >= PEONPAD_TABLETOP_MAX_ACTIONS
+            || action.action_id == 0
+            || action.visible > 1
+            || action.enabled > 1
+            || action.selected > 1
+            || action.autocast > 1
+            || action.target_kind > PEONPAD_ACTION_TARGET_BUILD_PLACEMENT
+            || memchr(action.ident, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr
+            || memchr(action.value_ident, '\0', PEONPAD_TABLETOP_MAX_IDENT) == nullptr
+            || memchr(action.text, '\0', PEONPAD_TABLETOP_MAX_ACTION_TEXT) == nullptr
+            || memchr(action.tooltip, '\0', PEONPAD_TABLETOP_MAX_ACTION_DETAIL) == nullptr
+            || memchr(action.icon_path, '\0', PEONPAD_TABLETOP_MAX_PATH) == nullptr) {
+            return -2;
+        }
+    }
+    if (action_state) {
+        if (action_state->action_count != action_count
+            || action_state->paused > 1
+            || action_state->target_kind > PEONPAD_ACTION_TARGET_BUILD_PLACEMENT) {
             return -2;
         }
     }
@@ -374,6 +497,18 @@ int peonpad_tabletop_publish_synthetic_v3(
     if (tileset) {
         snap->has_tileset = true;
         snap->tileset = *tileset;
+    }
+    if (action_count > 0) {
+        snap->actions.assign(actions, actions + action_count);
+    }
+    if (action_state) {
+        snap->action_state = *action_state;
+    } else {
+        snap->action_state.target_command_kind = PEONPAD_ACTION_UNKNOWN;
+        snap->action_state.action_count = static_cast<uint16_t>(action_count);
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        snap->action_state.queue_overflow_count = g_bridge.queue_overflow_count;
+        snap->action_state.rejected_command_count = g_bridge.rejected_command_count;
     }
 
     // Re-check initialized under cmd_mutex and publish atomically.  Without
@@ -553,11 +688,194 @@ static void ResolveSpriteFrame(const CUnitType &type, int frame,
     out_mirror = 0u;
 }
 
+static_assert(static_cast<int>(ButtonCmd::Move) == PEONPAD_ACTION_MOVE);
+static_assert(static_cast<int>(ButtonCmd::CallbackAction) == PEONPAD_ACTION_CALLBACK);
+
+static uint64_t HashBytes(uint64_t hash, const void *bytes, size_t count) noexcept
+{
+    const auto *p = static_cast<const uint8_t *>(bytes);
+    for (size_t i = 0; i < count; ++i) {
+        hash ^= p[i];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t CurrentSelectionHash() noexcept
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (const CUnit *unit : Selected) {
+        const uint32_t id = unit ? static_cast<uint32_t>(UnitNumber(*unit)) : UINT32_MAX;
+        hash = HashBytes(hash, &id, sizeof(id));
+    }
+    return hash;
+}
+
+static uint64_t ActionID(const ButtonAction &button, uint16_t slot,
+                         uint16_t level, uint64_t selection_hash) noexcept
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    const uint16_t kind = static_cast<uint16_t>(button.Action);
+    hash = HashBytes(hash, &selection_hash, sizeof(selection_hash));
+    hash = HashBytes(hash, &slot, sizeof(slot));
+    hash = HashBytes(hash, &level, sizeof(level));
+    hash = HashBytes(hash, &kind, sizeof(kind));
+    hash = HashBytes(hash, &button.Value, sizeof(button.Value));
+    hash = HashBytes(hash, button.Icon.Name.data(), button.Icon.Name.size());
+    hash = HashBytes(hash, button.ValueStr.data(), button.ValueStr.size());
+    return hash == 0 ? 1 : hash;
+}
+
+static uint8_t ActionTargetKind(ButtonTargetKind target) noexcept
+{
+    switch (target) {
+        case ButtonTargetKind::Map:
+            return PEONPAD_ACTION_TARGET_MAP;
+        case ButtonTargetKind::Build:
+            return PEONPAD_ACTION_TARGET_BUILD_PLACEMENT;
+        case ButtonTargetKind::None:
+            return PEONPAD_ACTION_TARGET_NONE;
+    }
+    return PEONPAD_ACTION_TARGET_NONE;
+}
+
+static void AddActionCosts(const ButtonAction &button,
+                           PeonPadActionDescriptor &out) noexcept
+{
+    int costs[ManaResCost + 1]{};
+    switch (button.Action) {
+        case ButtonCmd::Research:
+            if (button.Value >= 0
+                && static_cast<size_t>(button.Value) < AllUpgrades.size()) {
+                std::copy(std::begin(AllUpgrades[button.Value]->Costs),
+                          std::end(AllUpgrades[button.Value]->Costs), costs);
+            }
+            break;
+        case ButtonCmd::SpellCast:
+            if (button.Value >= 0
+                && static_cast<size_t>(button.Value) < SpellTypeTable.size()) {
+                std::copy(std::begin(SpellTypeTable[button.Value]->Costs),
+                          std::end(SpellTypeTable[button.Value]->Costs), costs);
+                costs[ManaResCost] = SpellTypeTable[button.Value]->ManaCost;
+            }
+            break;
+        case ButtonCmd::Build:
+        case ButtonCmd::Train:
+        case ButtonCmd::UpgradeTo:
+            if (button.Value >= 0
+                && static_cast<size_t>(button.Value) < getUnitTypes().size()
+                && ThisPlayer) {
+                const CUnitStats &stats =
+                    getUnitTypes()[button.Value]->Stats[ThisPlayer->Index];
+                std::copy(std::begin(stats.Costs), std::end(stats.Costs), costs);
+                costs[FoodCost] = stats.Variables[DEMAND_INDEX].Value;
+            }
+            break;
+        default:
+            break;
+    }
+
+    for (uint8_t resource = 0;
+         resource <= ManaResCost
+         && out.cost_count < PEONPAD_TABLETOP_MAX_ACTION_COSTS;
+         ++resource) {
+        if (resource == ScoreCost || costs[resource] == 0) continue;
+        PeonPadActionCost &cost = out.costs[out.cost_count++];
+        cost.resource_id = resource;
+        cost.amount = costs[resource];
+    }
+}
+
+static PeonPadActionDescriptor CopyAction(const ButtonAction &button,
+                                          uint16_t slot,
+                                          uint16_t level,
+                                          uint64_t selection_hash) noexcept
+{
+    PeonPadActionDescriptor out{};
+    out.action_id = ActionID(button, slot, level, selection_hash);
+    out.slot = slot;
+    out.panel_level = level;
+    out.command_kind = static_cast<uint16_t>(button.Action);
+    out.visible = button.Pos == -1 ? 0u : 1u;
+    out.enabled = UI.ButtonPanel.IsEnabled(slot) ? 1u : 0u;
+    const unsigned status = UI.ButtonPanel.Status(slot);
+    out.selected = (status & IconSelected) ? 1u : 0u;
+    out.autocast = (status & IconAutoCast) ? 1u : 0u;
+    out.target_kind = ActionTargetKind(UI.ButtonPanel.TargetKind(slot));
+    out.value = button.Value;
+    out.hotkey = button.Key > 0 ? static_cast<uint32_t>(button.Key) : 0u;
+    std::snprintf(out.ident, sizeof(out.ident), "%s", button.Icon.Name.c_str());
+    std::snprintf(out.value_ident, sizeof(out.value_ident), "%s",
+                  button.ValueStr.c_str());
+    std::snprintf(out.text, sizeof(out.text), "%s", button.Hint.c_str());
+
+    std::string tooltip = button.Description;
+    if (ThisPlayer) {
+        const std::string dependencies = PrintDependencies(*ThisPlayer, button);
+        if (!dependencies.empty()) {
+            if (!tooltip.empty()) tooltip += "\n";
+            tooltip += dependencies;
+        }
+    }
+    std::snprintf(out.tooltip, sizeof(out.tooltip), "%s", tooltip.c_str());
+
+    if (button.Icon.Icon) {
+        out.icon_frame = static_cast<uint16_t>(
+            std::max(0, button.Icon.Icon->Frame));
+        if (button.Icon.Icon->G) {
+            const CPlayerColorGraphic &graphic = *button.Icon.Icon->G;
+            const std::string icon_path = ResolveAssetPath(graphic.File.string());
+            std::snprintf(out.icon_path, sizeof(out.icon_path), "%s",
+                          icon_path.c_str());
+            out.icon_width = static_cast<uint16_t>(
+                std::clamp(graphic.Width, 0, static_cast<int>(UINT16_MAX)));
+            out.icon_height = static_cast<uint16_t>(
+                std::clamp(graphic.Height, 0, static_cast<int>(UINT16_MAX)));
+        }
+    }
+    AddActionCosts(button, out);
+    return out;
+}
+
+static void ClearTargetState() noexcept
+{
+    g_bridge.target_action_id = 0;
+    g_bridge.target_slot = 0;
+    g_bridge.target_kind = PEONPAD_ACTION_TARGET_NONE;
+    g_bridge.target_command_kind = PEONPAD_ACTION_UNKNOWN;
+    g_bridge.target_selection_hash = 0;
+}
+
+static void RecordResult(const PeonPadCommand &cmd,
+                         PeonPadCommandResult result) noexcept
+{
+    g_bridge.last_request_id = cmd.request_id;
+    g_bridge.last_result = result;
+}
+
+static CUnit *FindAliveUnit(uint32_t id, bool owned) noexcept
+{
+    if (!UnitManager) return nullptr;
+    const unsigned slot_count = UnitManager->GetUsedSlotCount();
+    for (unsigned i = 0; i < slot_count; ++i) {
+        CUnit &unit = UnitManager->GetSlotUnit(static_cast<int>(i));
+        if (unit.IsAliveOnMap()
+            && static_cast<uint32_t>(UnitNumber(unit)) == id
+            && (!owned || unit.Player == ThisPlayer)) {
+            return &unit;
+        }
+    }
+    return nullptr;
+}
+
 // Drain queued commands and apply them to the running game state.
 // Called from the simulation thread before GameLogicLoop().
 void peonpad_tabletop_drain_commands(void)
 {
-    if (!g_bridge.initialized) return;
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        if (!g_bridge.initialized) return;
+    }
     if (!ThisPlayer) return;
 
     // The visionOS tabletop drives the engine headlessly with no in-engine
@@ -566,8 +884,11 @@ void peonpad_tabletop_drain_commands(void)
     // Keep the simulation advancing so snapshots reflect live gameplay and
     // command round-trips are visible; also clear any cycle-skip left by
     // replay/fast-forward. This only affects the tabletop bridge build.
-    if (GamePaused) GamePaused = false;
-    if (SkipGameCycle >= 1) SkipGameCycle = 0;
+    if (!g_bridge.performed_headless_unpause) {
+        if (GetGamePaused()) SetGamePaused(false);
+        if (SkipGameCycle >= 1) SkipGameCycle = 0;
+        g_bridge.performed_headless_unpause = true;
+    }
 
     std::vector<PeonPadCommand> batch;
     {
@@ -578,16 +899,11 @@ void peonpad_tabletop_drain_commands(void)
 
     for (const PeonPadCommand &cmd : batch) {
         if (cmd.type == PEONPAD_CMD_SELECT || cmd.type == PEONPAD_CMD_DESELECT) {
-            CUnit *target = nullptr;
-            const unsigned slot_count = UnitManager->GetUsedSlotCount();
-            for (unsigned i = 0; i < slot_count; ++i) {
-                CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
-                if (u.IsAliveOnMap()
-                    && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id) {
-                    target = &u;
-                    break;
-                }
+            if (g_bridge.target_kind != PEONPAD_ACTION_TARGET_NONE) {
+                CancelButtonTarget();
+                ClearTargetState();
             }
+            CUnit *target = FindAliveUnit(cmd.unit_id, false);
             if (target) {
                 if (cmd.type == PEONPAD_CMD_SELECT) {
                     SelectUnit(*target);
@@ -596,6 +912,9 @@ void peonpad_tabletop_drain_commands(void)
                     UnSelectUnit(*target);
                     SelectedUnitChanged();
                 }
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+            } else {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
             }
         } else if (cmd.type == PEONPAD_CMD_MOVE) {
             // Issue move orders.  Vec2i stores short components; map tiles are
@@ -605,51 +924,133 @@ void peonpad_tabletop_drain_commands(void)
             // Reject coordinates outside the loaded map — static
             // PEONPAD_TABLETOP_MAX_MAP_DIM only catches the absolute
             // maximum; real maps are much smaller.
-            if (!Map.Info.IsPointOnMap(dest)) continue;
+            if (!Map.Info.IsPointOnMap(dest)) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_BAD_TARGET);
+                continue;
+            }
 
             if (cmd.unit_id != 0) {
                 // unit_id != 0: select just that unit, then move it.
                 // Matches Swift TabletopTransport.send(.moveUnit(id, dest)).
-                CUnit *target = nullptr;
-                const unsigned slot_count = UnitManager->GetUsedSlotCount();
-                for (unsigned i = 0; i < slot_count; ++i) {
-                    CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
-                    if (u.IsAliveOnMap()
-                        && u.Player == ThisPlayer
-                        && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id) {
-                        target = &u;
-                        break;
-                    }
-                }
+                CUnit *target = FindAliveUnit(cmd.unit_id, true);
                 if (target) {
                     UnSelectAll();
                     SelectUnit(*target);
                     SelectedUnitChanged();
                     SendCommandMove(*target, dest, EFlushMode::On);
+                    RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+                } else {
+                    RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
                 }
             } else {
                 // unit_id == 0: move all currently-selected units.
+                bool issued = false;
                 for (CUnit *u : Selected) {
                     if (u && u->IsAliveOnMap() && u->Player == ThisPlayer) {
                         SendCommandMove(*u, dest, EFlushMode::On);
+                        issued = true;
                     }
                 }
+                RecordResult(cmd, issued
+                    ? PEONPAD_COMMAND_RESULT_ACCEPTED
+                    : PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION);
             }
         } else if (cmd.type == PEONPAD_CMD_DESELECT_ALL) {
             // Clear the entire selection; matches Swift TabletopTransport.send(.deselectAll).
             UnSelectAll();
             SelectedUnitChanged();
+            RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
         } else if (cmd.type == PEONPAD_CMD_STOP) {
-            const unsigned slot_count = UnitManager->GetUsedSlotCount();
-            for (unsigned i = 0; i < slot_count; ++i) {
-                CUnit &u = UnitManager->GetSlotUnit(static_cast<int>(i));
-                if (u.IsAliveOnMap()
-                    && static_cast<uint32_t>(UnitNumber(u)) == cmd.unit_id
-                    && u.Player == ThisPlayer) {
-                    SendCommandStopUnit(u);
-                    break;
-                }
+            if (CUnit *unit = FindAliveUnit(cmd.unit_id, true)) {
+                SendCommandStopUnit(*unit);
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+            } else {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
             }
+        } else if (cmd.type == PEONPAD_CMD_ACTIVATE_ACTION) {
+            if (GetGamePaused()) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_PAUSED);
+                continue;
+            }
+            if (Selected.empty()) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION);
+                continue;
+            }
+            UI.ButtonPanel.Update();
+            const size_t slot = cmd.action_slot;
+            if (slot >= CurrentButtons.size()
+                || slot >= UI.ButtonPanel.Buttons.size()
+                || CurrentButtons[slot].Pos == -1) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_HIDDEN);
+                continue;
+            }
+            const uint64_t selection_hash = CurrentSelectionHash();
+            const uint64_t current_id = ActionID(
+                CurrentButtons[slot], cmd.action_slot,
+                static_cast<uint16_t>(CurrentButtonLevel), selection_hash);
+            if (current_id != cmd.action_id) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_STALE_ACTION);
+                continue;
+            }
+            if (!UI.ButtonPanel.IsEnabled(static_cast<int>(slot))) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_DISABLED);
+                continue;
+            }
+            const uint16_t command_kind =
+                static_cast<uint16_t>(CurrentButtons[slot].Action);
+            UI.ButtonPanel.DoClicked(static_cast<int>(slot));
+            if (CursorBuilding) {
+                g_bridge.target_kind = PEONPAD_ACTION_TARGET_BUILD_PLACEMENT;
+            } else if (CursorState == CursorStates::Select) {
+                g_bridge.target_kind = PEONPAD_ACTION_TARGET_MAP;
+            } else {
+                ClearTargetState();
+            }
+            if (g_bridge.target_kind != PEONPAD_ACTION_TARGET_NONE) {
+                g_bridge.target_action_id = cmd.action_id;
+                g_bridge.target_slot = cmd.action_slot;
+                g_bridge.target_command_kind = command_kind;
+                g_bridge.target_selection_hash = selection_hash;
+            }
+            RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+        } else if (cmd.type == PEONPAD_CMD_TARGET_ACTION) {
+            if (g_bridge.target_kind == PEONPAD_ACTION_TARGET_NONE) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_NO_TARGET);
+                continue;
+            }
+            if (Selected.empty()
+                || CurrentSelectionHash() != g_bridge.target_selection_hash) {
+                CancelButtonTarget();
+                ClearTargetState();
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_STALE_ACTION);
+                continue;
+            }
+            const Vec2i target{static_cast<short>(cmd.tile_x),
+                               static_cast<short>(cmd.tile_y)};
+            if (!Map.Info.IsPointOnMap(target)) {
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_BAD_TARGET);
+                continue;
+            }
+            const bool accepted = SubmitButtonTarget(target);
+            if (accepted
+                || (!CursorBuilding && CursorState != CursorStates::Select)) {
+                ClearTargetState();
+            }
+            RecordResult(cmd, accepted
+                ? PEONPAD_COMMAND_RESULT_ACCEPTED
+                : PEONPAD_COMMAND_RESULT_REJECTED_BAD_TARGET);
+        } else if (cmd.type == PEONPAD_CMD_CANCEL_ACTION) {
+            CancelButtonTarget();
+            ClearTargetState();
+            RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+        } else if (cmd.type == PEONPAD_CMD_PAUSE) {
+            CancelButtonTarget();
+            ClearTargetState();
+            SetGamePaused(true);
+            RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
+        } else if (cmd.type == PEONPAD_CMD_RESUME) {
+            SetGamePaused(false);
+            RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
         }
     }
 }
@@ -672,10 +1073,22 @@ void peonpad_tabletop_publish_snapshot(void)
     const uint32_t mh = static_cast<uint32_t>(Map.Info.MapHeight);
     if (mw > PEONPAD_TABLETOP_MAX_MAP_DIM || mh > PEONPAD_TABLETOP_MAX_MAP_DIM) return;
 
+    if (g_bridge.target_kind != PEONPAD_ACTION_TARGET_NONE
+        && (Selected.empty()
+            || CurrentSelectionHash() != g_bridge.target_selection_hash)) {
+        CancelButtonTarget();
+        ClearTargetState();
+        g_bridge.last_result = PEONPAD_COMMAND_RESULT_REJECTED_STALE_ACTION;
+    }
+
     auto *snap = new (std::nothrow) PeonPadSnapshot;
     if (!snap) return;
 
-    snap->generation = static_cast<uint64_t>(GameCycle);
+    ++g_bridge.publication_generation;
+    if (g_bridge.publication_generation == 0) {
+        g_bridge.publication_generation = 1;
+    }
+    snap->generation = g_bridge.publication_generation;
     snap->map_width  = mw;
     snap->map_height = mh;
 
@@ -915,6 +1328,43 @@ void peonpad_tabletop_publish_snapshot(void)
         }
 
         snap->units.push_back(rec);
+    }
+
+    // ── Authoritative command panel + target state (ABI v6) ──────────────
+    // Update and copy on the simulation thread. The snapshot owns plain values;
+    // no ButtonAction, icon, callback, or mutable engine pointer escapes.
+    UI.ButtonPanel.Update();
+    const uint16_t panel_level = static_cast<uint16_t>(
+        std::clamp(CurrentButtonLevel, 0, static_cast<int>(UINT16_MAX)));
+    const uint64_t selection_hash = CurrentSelectionHash();
+    const size_t panel_count = std::min(
+        CurrentButtons.size(), static_cast<size_t>(PEONPAD_TABLETOP_MAX_ACTIONS));
+    snap->actions.reserve(panel_count);
+    for (size_t slot = 0; slot < panel_count; ++slot) {
+        if (CurrentButtons[slot].Pos == -1) continue;
+        snap->actions.push_back(CopyAction(
+            CurrentButtons[slot], static_cast<uint16_t>(slot), panel_level,
+            selection_hash));
+    }
+
+    snap->action_state.target_action_id = g_bridge.target_action_id;
+    snap->action_state.last_request_id = g_bridge.last_request_id;
+    snap->action_state.last_result = g_bridge.last_result;
+    snap->action_state.target_slot = g_bridge.target_slot;
+    snap->action_state.action_count =
+        static_cast<uint16_t>(snap->actions.size());
+    snap->action_state.target_command_kind = g_bridge.target_command_kind;
+    snap->action_state.paused = GetGamePaused() ? 1u : 0u;
+    snap->action_state.target_kind =
+        static_cast<uint8_t>(g_bridge.target_kind);
+    snap->action_state.panel_level = static_cast<uint8_t>(
+        std::min<uint16_t>(panel_level, UINT8_MAX));
+    {
+        std::lock_guard<std::mutex> lk(g_bridge.cmd_mutex);
+        snap->action_state.queue_overflow_count =
+            g_bridge.queue_overflow_count;
+        snap->action_state.rejected_command_count =
+            g_bridge.rejected_command_count;
     }
 
     PublishSnap(snap);

@@ -65,7 +65,7 @@ static void Run(const char *name, bool (*test_fn)())
 
 static bool test_abi_version_constant()
 {
-    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 5u);
+    EXPECT(PEONPAD_TABLETOP_ABI_VERSION == 6u);
     return true;
 }
 
@@ -95,10 +95,13 @@ static bool test_struct_sizes()
     //   + image_path_root(1) + _pad5(1) = 170 bytes
     EXPECT(sizeof(PeonPadTilesetDescriptor) == 170u);
 
-    // PeonPadCommand:
-    //   type(4) + abi_ver(4) + unit_id(4) + tile_x(4) + tile_y(4)
-    //   + _reserved[8] = 28 bytes
-    EXPECT(sizeof(PeonPadCommand) == 28u);
+    EXPECT(sizeof(PeonPadActionCost) == 8u);
+    EXPECT(sizeof(PeonPadActionDescriptor) == 520u);
+    EXPECT(sizeof(PeonPadActionState) == 48u);
+
+    // ABI v6 keeps all v1-v5 offsets through the original 28-byte prefix,
+    // then appends alignment, exact action identity, correlation, and reserves.
+    EXPECT(sizeof(PeonPadCommand) == 64u);
 
     return true;
 }
@@ -147,11 +150,42 @@ static bool test_struct_field_offsets()
     EXPECT(offsetof(PeonPadTilesetDescriptor, name)              == 136u);
     EXPECT(offsetof(PeonPadTilesetDescriptor, image_path_root)   == 168u);
 
+    EXPECT(offsetof(PeonPadActionDescriptor, action_id)    ==   0u);
+    EXPECT(offsetof(PeonPadActionDescriptor, slot)         ==   8u);
+    EXPECT(offsetof(PeonPadActionDescriptor, panel_level)  ==  10u);
+    EXPECT(offsetof(PeonPadActionDescriptor, command_kind) ==  12u);
+    EXPECT(offsetof(PeonPadActionDescriptor, visible)      ==  14u);
+    EXPECT(offsetof(PeonPadActionDescriptor, target_kind)  ==  18u);
+    EXPECT(offsetof(PeonPadActionDescriptor, costs)        ==  36u);
+    EXPECT(offsetof(PeonPadActionDescriptor, ident)        == 100u);
+    EXPECT(offsetof(PeonPadActionDescriptor, value_ident)  == 132u);
+    EXPECT(offsetof(PeonPadActionDescriptor, text)         == 164u);
+    EXPECT(offsetof(PeonPadActionDescriptor, tooltip)      == 260u);
+    EXPECT(offsetof(PeonPadActionDescriptor, icon_path)    == 388u);
+
+    EXPECT(offsetof(PeonPadActionState, target_action_id)       ==  0u);
+    EXPECT(offsetof(PeonPadActionState, last_request_id)        ==  8u);
+    EXPECT(offsetof(PeonPadActionState, last_result)            == 16u);
+    EXPECT(offsetof(PeonPadActionState, queue_overflow_count)   == 20u);
+    EXPECT(offsetof(PeonPadActionState, rejected_command_count) == 24u);
+    EXPECT(offsetof(PeonPadActionState, target_slot)            == 28u);
+    EXPECT(offsetof(PeonPadActionState, action_count)           == 30u);
+    EXPECT(offsetof(PeonPadActionState, target_command_kind)    == 32u);
+    EXPECT(offsetof(PeonPadActionState, paused)                 == 34u);
+    EXPECT(offsetof(PeonPadActionState, target_kind)            == 35u);
+    EXPECT(offsetof(PeonPadActionState, panel_level)            == 36u);
+
     EXPECT(offsetof(PeonPadCommand, type)     ==  0u);
     EXPECT(offsetof(PeonPadCommand, abi_ver)  ==  4u);
     EXPECT(offsetof(PeonPadCommand, unit_id)  ==  8u);
     EXPECT(offsetof(PeonPadCommand, tile_x)   == 12u);
     EXPECT(offsetof(PeonPadCommand, tile_y)   == 16u);
+    EXPECT(offsetof(PeonPadCommand, _reserved)    == 20u);
+    EXPECT(offsetof(PeonPadCommand, action_id)    == 32u);
+    EXPECT(offsetof(PeonPadCommand, request_id)   == 40u);
+    EXPECT(offsetof(PeonPadCommand, action_slot)  == 48u);
+    EXPECT(offsetof(PeonPadCommand, flags)        == 50u);
+    EXPECT(offsetof(PeonPadCommand, _reserved_v6) == 52u);
 
     return true;
 }
@@ -177,6 +211,19 @@ static bool test_enum_values()
     EXPECT(static_cast<int>(PEONPAD_CMD_MOVE)         == 3);
     EXPECT(static_cast<int>(PEONPAD_CMD_STOP)         == 4);
     EXPECT(static_cast<int>(PEONPAD_CMD_DESELECT_ALL) == 5);
+    EXPECT(static_cast<int>(PEONPAD_CMD_ACTIVATE_ACTION) == 6);
+    EXPECT(static_cast<int>(PEONPAD_CMD_TARGET_ACTION)   == 7);
+    EXPECT(static_cast<int>(PEONPAD_CMD_CANCEL_ACTION)   == 8);
+    EXPECT(static_cast<int>(PEONPAD_CMD_PAUSE)           == 9);
+    EXPECT(static_cast<int>(PEONPAD_CMD_RESUME)          == 10);
+
+    EXPECT(static_cast<int>(PEONPAD_ACTION_BUILD) == 4);
+    EXPECT(static_cast<int>(PEONPAD_ACTION_TRAIN) == 12);
+    EXPECT(static_cast<int>(PEONPAD_ACTION_RESEARCH) == 15);
+    EXPECT(static_cast<int>(PEONPAD_ACTION_TARGET_MAP) == 1);
+    EXPECT(static_cast<int>(PEONPAD_ACTION_TARGET_BUILD_PLACEMENT) == 2);
+    EXPECT(static_cast<int>(PEONPAD_COMMAND_RESULT_REJECTED_DISABLED) == -4);
+    EXPECT(static_cast<int>(PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND) == -9);
 
     // ABI v5: tileset image_path root discriminator.
     EXPECT(static_cast<int>(PEONPAD_TILESET_PATH_ROOT_DATA)  == 0);
@@ -795,6 +842,149 @@ static bool test_synthetic_v3_rejects_unterminated_paths()
     return true;
 }
 
+static bool test_synthetic_v6_action_panel()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    PeonPadActionDescriptor actions[3] = {};
+    actions[0].action_id = 0x101;
+    actions[0].slot = 0;
+    actions[0].command_kind = PEONPAD_ACTION_MOVE;
+    actions[0].visible = 1;
+    actions[0].enabled = 1;
+    actions[0].target_kind = PEONPAD_ACTION_TARGET_MAP;
+    actions[0].hotkey = 'm';
+    std::snprintf(actions[0].ident, PEONPAD_TABLETOP_MAX_IDENT, "icon-move");
+    std::snprintf(actions[0].text, PEONPAD_TABLETOP_MAX_ACTION_TEXT, "Move");
+
+    actions[1].action_id = 0x202;
+    actions[1].slot = 3;
+    actions[1].panel_level = 1;
+    actions[1].command_kind = PEONPAD_ACTION_BUILD;
+    actions[1].visible = 1;
+    actions[1].enabled = 1;
+    actions[1].target_kind = PEONPAD_ACTION_TARGET_BUILD_PLACEMENT;
+    actions[1].value = 17;
+    actions[1].cost_count = 3;
+    actions[1].costs[0].resource_id = 0;
+    actions[1].costs[0].amount = 100;
+    actions[1].costs[1].resource_id = 1;
+    actions[1].costs[1].amount = 500;
+    actions[1].costs[2].resource_id = 2;
+    actions[1].costs[2].amount = 250;
+    actions[1].icon_frame = 4;
+    actions[1].icon_width = 46;
+    actions[1].icon_height = 38;
+    std::snprintf(actions[1].ident, PEONPAD_TABLETOP_MAX_IDENT, "icon-build-farm");
+    std::snprintf(actions[1].value_ident, PEONPAD_TABLETOP_MAX_IDENT, "unit-human-farm");
+    std::snprintf(actions[1].text, PEONPAD_TABLETOP_MAX_ACTION_TEXT, "Build Farm");
+    std::snprintf(actions[1].tooltip, PEONPAD_TABLETOP_MAX_ACTION_DETAIL,
+                  "Provides food for additional units");
+    std::snprintf(actions[1].icon_path, PEONPAD_TABLETOP_MAX_PATH,
+                  "human/icons/farm.png");
+
+    actions[2].action_id = 0x303;
+    actions[2].slot = 7;
+    actions[2].command_kind = PEONPAD_ACTION_RESEARCH;
+    actions[2].visible = 1;
+    actions[2].enabled = 0;
+    actions[2].selected = 1;
+    std::snprintf(actions[2].ident, PEONPAD_TABLETOP_MAX_IDENT, "icon-research");
+    std::snprintf(actions[2].value_ident, PEONPAD_TABLETOP_MAX_IDENT,
+                  "upgrade-sword1");
+    std::snprintf(actions[2].text, PEONPAD_TABLETOP_MAX_ACTION_TEXT,
+                  "Upgrade Swords");
+
+    PeonPadActionState state{};
+    state.target_action_id = actions[1].action_id;
+    state.last_request_id = 44;
+    state.last_result = PEONPAD_COMMAND_RESULT_ACCEPTED;
+    state.queue_overflow_count = 2;
+    state.rejected_command_count = 3;
+    state.target_slot = actions[1].slot;
+    state.action_count = 3;
+    state.target_command_kind = PEONPAD_ACTION_BUILD;
+    state.target_kind = PEONPAD_ACTION_TARGET_BUILD_PLACEMENT;
+    state.panel_level = 1;
+
+    EXPECT(peonpad_tabletop_publish_synthetic_v6(
+        88, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+        actions, 3, &state) == 0);
+
+    PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+    EXPECT(s != nullptr);
+    EXPECT(peonpad_snapshot_action_count(s) == 3u);
+    const PeonPadActionDescriptor *published = peonpad_snapshot_actions(s);
+    EXPECT(published != nullptr);
+    EXPECT(published[1].action_id == 0x202u);
+    EXPECT(published[1].slot == 3u);
+    EXPECT(published[1].command_kind == PEONPAD_ACTION_BUILD);
+    EXPECT(published[1].target_kind == PEONPAD_ACTION_TARGET_BUILD_PLACEMENT);
+    EXPECT(published[1].cost_count == 3u);
+    EXPECT(published[1].costs[1].amount == 500);
+    EXPECT(std::strcmp(published[1].value_ident, "unit-human-farm") == 0);
+    EXPECT(std::strcmp(published[1].tooltip,
+                       "Provides food for additional units") == 0);
+    EXPECT(published[2].enabled == 0u);
+    EXPECT(published[2].selected == 1u);
+
+    const PeonPadActionState *published_state = peonpad_snapshot_action_state(s);
+    EXPECT(published_state != nullptr);
+    EXPECT(published_state->target_action_id == 0x202u);
+    EXPECT(published_state->last_request_id == 44u);
+    EXPECT(published_state->last_result == PEONPAD_COMMAND_RESULT_ACCEPTED);
+    EXPECT(published_state->target_kind == PEONPAD_ACTION_TARGET_BUILD_PLACEMENT);
+    EXPECT(published_state->queue_overflow_count == 2u);
+
+    actions[1].action_id = 999;
+    state.target_action_id = 999;
+    EXPECT(published[1].action_id == 0x202u);
+    EXPECT(published_state->target_action_id == 0x202u);
+
+    peonpad_snapshot_release(s);
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
+static bool test_synthetic_v6_rejects_bad_actions()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+
+    PeonPadActionDescriptor action{};
+    action.action_id = 1;
+    action.visible = 1;
+    action.enabled = 1;
+    PeonPadActionState state{};
+    state.action_count = 1;
+    state.target_command_kind = PEONPAD_ACTION_UNKNOWN;
+
+    action.cost_count = PEONPAD_TABLETOP_MAX_ACTION_COSTS + 1;
+    EXPECT(peonpad_tabletop_publish_synthetic_v6(
+        1, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+        &action, 1, &state) == -2);
+    action.cost_count = 0;
+
+    action.slot = PEONPAD_TABLETOP_MAX_ACTIONS;
+    EXPECT(peonpad_tabletop_publish_synthetic_v6(
+        1, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+        &action, 1, &state) == -2);
+    action.slot = 0;
+
+    std::memset(action.text, 'X', sizeof(action.text));
+    EXPECT(peonpad_tabletop_publish_synthetic_v6(
+        1, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+        &action, 1, &state) == -2);
+    action.text[0] = '\0';
+
+    state.action_count = 0;
+    EXPECT(peonpad_tabletop_publish_synthetic_v6(
+        1, 0, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+        &action, 1, &state) == -2);
+
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
 static bool test_retain_release()
 {
     EXPECT(peonpad_tabletop_init() == 0);
@@ -828,6 +1018,9 @@ static bool test_null_safety()
     EXPECT(peonpad_snapshot_terrain(nullptr)       == nullptr);
     EXPECT(peonpad_snapshot_unit_count(nullptr)    == 0u);
     EXPECT(peonpad_snapshot_units(nullptr)         == nullptr);
+    EXPECT(peonpad_snapshot_action_count(nullptr)  == 0u);
+    EXPECT(peonpad_snapshot_actions(nullptr)       == nullptr);
+    EXPECT(peonpad_snapshot_action_state(nullptr)  == nullptr);
     EXPECT(peonpad_snapshot_retain(nullptr)        == -1);
     peonpad_snapshot_release(nullptr); // must not crash
 
@@ -937,6 +1130,51 @@ static bool test_command_move_out_of_range()
     return true;
 }
 
+static bool test_action_command_validation()
+{
+    EXPECT(peonpad_tabletop_init() == 0);
+    PeonPadCommand cmd{};
+    cmd.abi_ver = PEONPAD_TABLETOP_ABI_VERSION;
+    cmd.request_id = 9;
+
+    cmd.type = PEONPAD_CMD_ACTIVATE_ACTION;
+    cmd.action_id = 0;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == -2);
+    cmd.action_id = 123;
+    cmd.action_slot = PEONPAD_TABLETOP_MAX_ACTIONS;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == -2);
+    cmd.action_slot = 4;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+
+    cmd = {};
+    cmd.abi_ver = PEONPAD_TABLETOP_ABI_VERSION;
+    cmd.type = PEONPAD_CMD_TARGET_ACTION;
+    cmd.request_id = 10;
+    cmd.tile_x = 7;
+    cmd.tile_y = 8;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+    cmd.tile_x = -1;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == -2);
+
+    cmd = {};
+    cmd.abi_ver = PEONPAD_TABLETOP_ABI_VERSION;
+    cmd.type = PEONPAD_CMD_CANCEL_ACTION;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+    cmd.type = PEONPAD_CMD_PAUSE;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+    cmd.type = PEONPAD_CMD_RESUME;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == 0);
+
+    cmd.flags = 1;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == -2);
+    cmd.flags = 0;
+    cmd._reserved_v6[0] = 1;
+    EXPECT(peonpad_tabletop_post_command(&cmd) == -2);
+
+    peonpad_tabletop_cleanup();
+    return true;
+}
+
 static bool test_command_not_initialized()
 {
     PeonPadCommand cmd{};
@@ -1007,6 +1245,13 @@ static bool test_command_queue_full()
     }
     // One over the limit must return -3.
     EXPECT(peonpad_tabletop_post_command(&cmd) == -3);
+
+    EXPECT(peonpad_tabletop_publish_synthetic(
+        1, 0, 0, nullptr, 0, nullptr, 0) == 0);
+    PeonPadSnapshot *s = peonpad_tabletop_latest_snapshot();
+    EXPECT(s != nullptr);
+    EXPECT(peonpad_snapshot_action_state(s)->queue_overflow_count == 1u);
+    peonpad_snapshot_release(s);
 
     peonpad_tabletop_cleanup();
     return true;
@@ -1127,6 +1372,8 @@ int main()
     Run("synthetic_v2_bad_ident",   test_synthetic_v2_rejects_unterminated_ident);
     Run("synthetic_v3_descriptors", test_synthetic_v3_asset_descriptors);
     Run("synthetic_v3_bad_paths",   test_synthetic_v3_rejects_unterminated_paths);
+    Run("synthetic_v6_actions",     test_synthetic_v6_action_panel);
+    Run("synthetic_v6_bad_actions", test_synthetic_v6_rejects_bad_actions);
     Run("expanded_tileset_cache_path", test_expanded_tileset_cache_path);
     Run("tileset_export_cache_reload", test_tileset_export_cache_reload_and_backoff);
     Run("tileset_export_cache_backoff", test_tileset_export_cache_failure_backoff);
@@ -1148,6 +1395,7 @@ int main()
     Run("cmd_wrong_abi_version",    test_command_wrong_abi_version);
     Run("cmd_unknown_type",         test_command_unknown_type);
     Run("cmd_move_out_of_range",    test_command_move_out_of_range);
+    Run("action_cmd_validation",    test_action_command_validation);
     Run("cmd_not_initialized",      test_command_not_initialized);
     Run("valid_commands_accepted",  test_valid_commands_accepted);
     Run("command_queue_full",       test_command_queue_full);

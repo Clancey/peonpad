@@ -135,6 +135,43 @@ public enum TabletopSnapshotConverter {
             assets = nil
         }
 
+        let actions = engine.actions.map { action in
+            TabletopEngineAction(
+                id: action.id,
+                slot: action.slot,
+                panelLevel: action.panelLevel,
+                kind: actionKind(action.kind),
+                isVisible: action.visible,
+                isEnabled: action.enabled,
+                isSelected: action.selected,
+                isAutocast: action.autocast,
+                targetKind: targetKind(action.targetKind),
+                value: Int(action.value),
+                hotkey: action.hotkey,
+                iconFrame: Int(action.iconFrame),
+                iconWidth: Int(action.iconWidth),
+                iconHeight: Int(action.iconHeight),
+                costs: action.costs.map {
+                    TabletopActionCost(resourceID: $0.resourceID, amount: Int($0.amount))
+                },
+                ident: action.ident,
+                valueIdent: action.valueIdent,
+                text: action.text,
+                tooltip: action.tooltip,
+                iconPath: action.iconPath)
+        }
+        let actionState = TabletopEngineActionState(
+            isPaused: engine.actionState.paused,
+            targetKind: targetKind(engine.actionState.targetKind),
+            targetActionKind: actionKind(engine.actionState.targetCommandKind),
+            panelLevel: engine.actionState.panelLevel,
+            targetSlot: engine.actionState.targetSlot,
+            targetActionID: engine.actionState.targetActionID,
+            lastRequestID: engine.actionState.lastRequestID,
+            lastResult: commandResult(engine.actionState.lastResult),
+            queueOverflowCount: engine.actionState.queueOverflowCount,
+            rejectedCommandCount: engine.actionState.rejectedCommandCount)
+
         return TabletopGameplaySnapshot(
             version: TabletopGameplaySnapshot.currentVersion,
             mapSize: TabletopMapSize(width: width, height: height),
@@ -142,7 +179,9 @@ public enum TabletopSnapshotConverter {
             fogMask: fog,
             units: units,
             selection: TabletopGameplaySelection(selectedUnitID: selectedID),
-            assets: assets
+            assets: assets,
+            actions: actions,
+            actionState: actionState
         )
     }
 
@@ -199,5 +238,17 @@ public enum TabletopSnapshotConverter {
         case .wall:    return .rock
         case .unknown, .none: return .grass
         }
+    }
+
+    public static func actionKind(_ raw: UInt16) -> TabletopEngineActionKind {
+        TabletopEngineActionKind(rawValue: raw) ?? .unknown
+    }
+
+    public static func targetKind(_ raw: UInt8) -> TabletopActionTargetKind {
+        TabletopActionTargetKind(rawValue: raw) ?? .none
+    }
+
+    public static func commandResult(_ raw: Int32) -> TabletopEngineCommandResult {
+        TabletopEngineCommandResult(rawValue: raw) ?? .rejectedUnsupported
     }
 }

@@ -1476,7 +1476,7 @@ static int SendSpellCast(const Vec2i &tilePos)
 **
 **  @param tilePos  tile map position.
 */
-static void SendCommand(const Vec2i &tilePos)
+static bool SendCommand(const Vec2i &tilePos)
 {
 	int ret = 0;
 
@@ -1535,6 +1535,78 @@ static void SendCommand(const Vec2i &tilePos)
 		}
 		ShowOrdersCount = GameCycle + Preference.ShowOrders * CYCLES_PER_SECOND;
 	}
+	return ret != 0;
+}
+
+bool SubmitButtonTarget(const Vec2i &tilePos)
+{
+	if (GameObserve || GamePaused || GameEstablishing || Selected.empty()
+	    || !Map.Info.IsPointOnMap(tilePos)) {
+		return false;
+	}
+
+	if (CursorBuilding) {
+		const int width = std::max(Selected[0]->Type->TileWidth,
+		                           CursorBuilding->TileWidth);
+		const int height = std::max(Selected[0]->Type->TileHeight,
+		                            CursorBuilding->TileHeight);
+		const Vec2i bottomRight(tilePos.x + width - 1, tilePos.y + height - 1);
+		if (!Map.Info.IsPointOnMap(bottomRight)) {
+			return false;
+		}
+		const bool explored = CanBuildOnArea(*Selected[0], tilePos);
+		if (!CanBuildUnitType(Selected[0], *CursorBuilding, tilePos, 0)
+		    || (!explored && !ReplayRevealMap)) {
+			return false;
+		}
+		for (CUnit *unit : Selected) {
+			SendCommandBuildBuilding(*unit, tilePos, *CursorBuilding,
+			                         EFlushMode::On);
+		}
+		CancelBuildingMode();
+		return true;
+	}
+
+	if (CursorState != CursorStates::Select) {
+		return false;
+	}
+	bool show = ReplayRevealMap;
+	if (!show) {
+		CMapField &mf = *Map.Field(tilePos);
+		for (int i = 0; i < PlayerMax; ++i) {
+			if (mf.playerInfo.IsExplored(Players[i])
+			    && (i == ThisPlayer->Index
+			        || Players[i].HasSharedVisionWith(*ThisPlayer))) {
+				show = true;
+				break;
+			}
+		}
+	}
+	UnitUnderCursor = show ? UnitOnMapTile(tilePos, std::nullopt) : nullptr;
+	if (UnitUnderCursor != nullptr && !UnitUnderCursor->IsVisibleAsGoal(*ThisPlayer)
+	    && !ReplayRevealMap) {
+		UnitUnderCursor = nullptr;
+	}
+	CursorState = CursorStates::Point;
+	GameCursor = UI.Point.Cursor;
+	CustomCursor.clear();
+	const bool accepted = SendCommand(tilePos);
+	UnitUnderCursor = nullptr;
+	return accepted;
+}
+
+void CancelButtonTarget()
+{
+	if (CursorBuilding) {
+		CancelBuildingMode();
+	}
+	UI.StatusLine.Clear();
+	UI.StatusLine.ClearCosts();
+	CursorState = CursorStates::Point;
+	GameCursor = UI.Point.Cursor;
+	CustomCursor.clear();
+	CurrentButtonLevel = 0;
+	UI.ButtonPanel.Update();
 }
 
 //.............................................................................

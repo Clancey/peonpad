@@ -19,7 +19,8 @@ public enum EngineCommandEncoder {
     ///   limit. `deselectAll` always succeeds.
     public static func encode(
         _ command: TabletopGameplayCommand,
-        maxMapDim: Int32 = 1024
+        maxMapDim: Int32 = 1024,
+        requestID: UInt64 = 0
     ) -> EngineCommand? {
         switch command {
         case .deselectAll:
@@ -38,6 +39,28 @@ public enum EngineCommandEncoder {
             guard let tx = clampTile(toTileX, maxMapDim: maxMapDim),
                   let tz = clampTile(toTileZ, maxMapDim: maxMapDim) else { return nil }
             return EngineCommand(kind: .move, unitID: unitID, tileX: tx, tileY: tz)
+
+        case .activateAction(let id, let slot):
+            guard id != 0, slot < 64 else { return nil }
+            return EngineCommand(
+                kind: .activateAction, actionID: id,
+                requestID: requestID, actionSlot: slot)
+
+        case .submitActionTarget(let tileX, let tileZ):
+            guard let tx = clampTile(tileX, maxMapDim: maxMapDim),
+                  let tz = clampTile(tileZ, maxMapDim: maxMapDim) else { return nil }
+            return EngineCommand(
+                kind: .targetAction, tileX: tx, tileY: tz,
+                requestID: requestID)
+
+        case .cancelAction:
+            return EngineCommand(kind: .cancelAction, requestID: requestID)
+
+        case .pause:
+            return EngineCommand(kind: .pause, requestID: requestID)
+
+        case .resume:
+            return EngineCommand(kind: .resume, requestID: requestID)
         }
     }
 

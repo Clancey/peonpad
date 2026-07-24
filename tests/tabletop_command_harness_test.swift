@@ -30,13 +30,16 @@ func makeUnit(id: String, owner: Int, x: Int, z: Int, selected: Bool = false)
 }
 
 func makeSnapshot(
-    units: [TabletopGameplayUnit], selectedID: String? = nil, size: Int = 8
+    units: [TabletopGameplayUnit], selectedID: String? = nil, size: Int = 8,
+    actions: [TabletopEngineAction] = [],
+    actionState: TabletopEngineActionState = TabletopEngineActionState()
 ) -> TabletopGameplaySnapshot {
     TabletopGameplaySnapshot(
         version: TabletopGameplaySnapshot.currentVersion,
         mapSize: TabletopMapSize(width: size, height: size),
         terrain: [], fogMask: [], units: units,
-        selection: TabletopGameplaySelection(selectedUnitID: selectedID))
+        selection: TabletopGameplaySelection(selectedUnitID: selectedID),
+        actions: actions, actionState: actionState)
 }
 
 // MARK: - Gating
@@ -54,11 +57,16 @@ func testGating() {
         environment: [TabletopCommandHarness.environmentKey: "YES"]), "enabled for YES")
 }
 
-// MARK: - Happy-path select → move → stop
+// MARK: - Happy-path authoritative action round-trip
 
 func testFullRoundTrip() {
     let harness = TabletopCommandHarness()
     let unit = makeUnit(id: "7", owner: 0, x: 3, z: 3)
+    let move = TabletopEngineAction(
+        id: 0x100, slot: 0, kind: .move, targetKind: .map, text: "Move")
+    let submenu = TabletopEngineAction(
+        id: 0x200, slot: 5, kind: .submenu, value: 2, text: "Build")
+    let rootActions = [move, submenu]
 
     // 1) First snapshot: harness picks the unit and submits a select.
     var (cmds, reports) = harness.advance(with: makeSnapshot(units: [unit]))
@@ -66,46 +74,96 @@ func testFullRoundTrip() {
     expect(reports.isEmpty, "no verdict until the engine reflects the selection")
     expectEqual(harness.phase, .selecting, "still selecting until observed")
 
-    // 2) Engine reflects the selection: harness passes select and submits move.
+    // 2) Engine reflects selection and publishes authoritative root actions.
     (cmds, reports) = harness.advance(
-        with: makeSnapshot(units: [unit], selectedID: "7"))
+        with: makeSnapshot(units: [unit], selectedID: "7", actions: rootActions))
     expect(reports.contains(where: { $0.step == "select" && $0.passed }),
            "select verdict passes once engine shows the unit selected")
-    expectEqual(harness.phase, .moving, "advanced to moving")
-    expectEqual(cmds.count, 1, "submits exactly one move command")
-    if case .moveUnit(let id, let tx, let tz)? = cmds.first {
-        expectEqual(id, "7", "move targets the selected unit")
-        expect((tx, tz) != (3, 3), "move target differs from the baseline tile")
-        expect(tx >= 0 && tx < 8 && tz >= 0 && tz < 8, "move target in bounds")
+    expectEqual(cmds, [.activateAction(id: 0x100, slot: 0)],
+               "activates the exact engine move slot")
+    expectEqual(harness.phase, .activatingTargetForCancel,
+               "waits for explicit engine target state")
+
+    // 3) Exact activation enters targeting; first exercise cancellation.
+    let pending = TabletopEngineActionState(
+        targetKind: .map, targetActionKind: .move,
+        targetSlot: 0, targetActionID: 0x100, lastResult: .accepted)
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [unit], selectedID: "7",
+                          actions: rootActions, actionState: pending))
+    expectEqual(cmds, [.cancelAction], "pending exact action is cancelled")
+    expect(reports.contains(where: { $0.step == "activate" && $0.passed }),
+           "exact activation is observed")
+
+    // 4) Cancellation clears targeting; activate the same descriptor again.
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [unit], selectedID: "7", actions: rootActions))
+    expectEqual(cmds, [.activateAction(id: 0x100, slot: 0)],
+               "re-activates exact slot for target submission")
+    expect(reports.contains(where: { $0.step == "cancel" && $0.passed }),
+           "target cancellation is observed")
+
+    // 5) Pending again: submit an in-bounds board tile.
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [unit], selectedID: "7",
+                          actions: rootActions, actionState: pending))
+    expectEqual(cmds.count, 1, "submits exactly one target command")
+    if case .submitActionTarget(let tx, let tz)? = cmds.first {
+        expect((tx, tz) != (3, 3), "target differs from the baseline tile")
+        expect(tx >= 0 && tx < 8 && tz >= 0 && tz < 8, "target is in bounds")
     } else {
-        expect(false, "expected a moveUnit command")
+        expect(false, "expected a submitActionTarget command")
     }
 
-    // 3) Engine has NOT moved the unit yet: no verdict, keep waiting.
-    (cmds, reports) = harness.advance(
-        with: makeSnapshot(units: [unit], selectedID: "7"))
-    expect(reports.isEmpty && cmds.isEmpty, "no move verdict until the unit moves")
-    expectEqual(harness.phase, .moving, "still moving while unit hasn't moved")
-
-    // 4) Engine moved the unit: pass move, submit stop.
+    // 6) Engine movement proves the targeted authoritative action executed.
     let movedUnit = makeUnit(id: "7", owner: 0, x: 4, z: 3)
     (cmds, reports) = harness.advance(
-        with: makeSnapshot(units: [movedUnit], selectedID: "7"))
-    expect(reports.contains(where: { $0.step == "move" && $0.passed }),
-           "move verdict passes once the engine repositions the unit")
-    expectEqual(cmds, [.stopUnit(id: "7")], "submits stop after move observed")
-    expectEqual(harness.phase, .stopping, "advanced to stopping")
+        with: makeSnapshot(units: [movedUnit], selectedID: "7",
+                          actions: rootActions))
+    expect(reports.contains(where: { $0.step == "target" && $0.passed }),
+           "target verdict passes once the engine repositions the unit")
+    expectEqual(cmds, [.activateAction(id: 0x200, slot: 5)],
+               "activates a nontrivial submenu through its exact slot")
+    expectEqual(harness.phase, .openingNontrivial,
+               "waits for authoritative submenu transition")
 
-    // 5) Unit still reconciled alive next snapshot: pass stop + complete.
+    // 7) Engine panel level changes; cancel/back returns to the root panel.
+    let submenuState = TabletopEngineActionState(panelLevel: 2, lastResult: .accepted)
     (cmds, reports) = harness.advance(
-        with: makeSnapshot(units: [movedUnit], selectedID: "7"))
+        with: makeSnapshot(units: [movedUnit], selectedID: "7",
+                          actionState: submenuState))
+    expectEqual(cmds, [.cancelAction], "submits cancel/back from submenu")
+    expect(reports.contains(where: { $0.step == "nontrivial" && $0.passed }),
+           "nontrivial submenu activation is observed")
+
+    // 8) Root panel restored: submit legacy stop to preserve old command coverage.
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [movedUnit], selectedID: "7",
+                          actions: rootActions))
+    expectEqual(cmds, [.stopUnit(id: "7")], "submits stop after action probe")
+    expect(reports.contains(where: { $0.step == "back" && $0.passed }),
+           "cancel/back transition is observed")
+
+    // 9) An uncorrelated snapshot cannot falsely pass stop.
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [movedUnit], selectedID: "7",
+                          actions: rootActions))
+    expect(reports.isEmpty, "stop waits for a correlated engine result")
+    expectEqual(harness.phase, .stopping, "uncorrelated stop remains pending")
+
+    // 10) Correlated accepted result passes stop + complete.
+    let stoppedState = TabletopEngineActionState(
+        lastRequestID: 9, lastResult: .accepted)
+    (cmds, reports) = harness.advance(
+        with: makeSnapshot(units: [movedUnit], selectedID: "7",
+                          actions: rootActions, actionState: stoppedState))
     expect(reports.contains(where: { $0.step == "stop" && $0.passed }), "stop passes")
     expect(reports.contains(where: { $0.step == "complete" && $0.passed }),
            "overall round-trip reported complete")
     expectEqual(harness.phase, .finished, "harness finished")
     expect(harness.isComplete, "isComplete true when finished")
 
-    // 6) Further snapshots are inert.
+    // 11) Further snapshots are inert.
     (cmds, reports) = harness.advance(with: makeSnapshot(units: [movedUnit]))
     expect(cmds.isEmpty && reports.isEmpty, "finished harness ignores further snapshots")
 }

@@ -126,23 +126,39 @@ public final class WargusTabletopMaterialProvider {
 
     // MARK: - Atlas material
 
-    /// Asynchronously builds a horizontal-strip atlas `UnlitMaterial` that packs
+    /// Asynchronously builds a bounded multi-row atlas material that packs
     /// all terrain graphicIndices defined in `slotMap` into one texture.
     ///
-    /// Each slot s (0-based) occupies u ∈ [s/N, (s+1)/N] so the same UV layout
-    /// used by `TabletopTerrainChunkMeshBuilder` applies to both the tiny
-    /// procedural-colour placeholder and this real-art atlas.
+    /// Each slot uses the padded content bounds supplied by `atlasLayout`, the
+    /// same UV layout used by `TabletopTerrainChunkMeshBuilder`.
     ///
     /// Fires `completion` on the main actor with a non-nil material when at least
     /// one slot decoded successfully; `nil` otherwise (caller keeps procedural).
     ///
-    /// Atlas width is bounded by `maxAtlasPixelWidth` to stay within Metal's
-    /// maximum 2D texture limit (typically 16 384 px). When the computed width
-    /// would exceed this limit the atlas is not created and `nil` is returned.
-    public static nonisolated let maxAtlasPixelWidth = 8_192   // conservative; Metal allows 16384
+    /// Both atlas dimensions are bounded by Metal's maximum 2D texture size.
+    public static nonisolated let maxAtlasPixelDimension =
+        TabletopTerrainAtlasLayout.maximumTextureDimension
+
+    /// Backward-compatible entry point for callers that do not need to share an
+    /// explicit padded layout with prebuilt geometry.
+    public func buildTerrainAtlas(
+        slotMap: TabletopAtlasSlotMap,
+        tileset: TabletopTilesetInfo?,
+        completion: @escaping (PhysicallyBasedMaterial?) -> Void
+    ) {
+        let layout = TabletopTerrainAtlasLayout(
+            slotCount: slotMap.slotCount,
+            cellWidth: max(1, tileset?.pixelTileWidth ?? 1),
+            cellHeight: max(1, tileset?.pixelTileHeight ?? 1),
+            gutterPixels: 0)
+        buildTerrainAtlas(
+            slotMap: slotMap, atlasLayout: layout,
+            tileset: tileset, completion: completion)
+    }
 
     public func buildTerrainAtlas(
         slotMap:  TabletopAtlasSlotMap,
+        atlasLayout: TabletopTerrainAtlasLayout,
         tileset:  TabletopTilesetInfo?,
         completion: @escaping (PhysicallyBasedMaterial?) -> Void
     ) {
@@ -178,46 +194,28 @@ public final class WargusTabletopMaterialProvider {
             let cellW   = firstImg.width
             let cellH   = firstImg.height
             let N       = slotMap.slotCount
-            let atlasW  = N * cellW
-            let atlasH  = cellH
-            // Guard against exceeding Metal's maximum texture dimension.
+            guard atlasLayout.isValid,
+                  atlasLayout.slotCount == N,
+                  atlasLayout.cellWidth == cellW,
+                  atlasLayout.cellHeight == cellH else {
+                Task { @MainActor in completion(nil) }
+                return
+            }
+            let atlasW  = atlasLayout.atlasWidth
+            let atlasH  = atlasLayout.atlasHeight
             guard atlasW > 0, atlasH > 0,
-                  atlasW <= WargusTabletopMaterialProvider.maxAtlasPixelWidth else {
+                  atlasW <= WargusTabletopMaterialProvider.maxAtlasPixelDimension,
+                  atlasH <= WargusTabletopMaterialProvider.maxAtlasPixelDimension else {
                 tabletopEngineLog(
-                    "[Tabletop] atlas skipped: \(N) slots × \(cellW)px = \(atlasW)px "
-                    + "(limit \(WargusTabletopMaterialProvider.maxAtlasPixelWidth)px)")
+                    "[Tabletop] atlas skipped: \(N) padded slots = "
+                    + "\(atlasW)x\(atlasH)px (limit "
+                    + "\(WargusTabletopMaterialProvider.maxAtlasPixelDimension)px)")
                 Task { @MainActor in completion(nil) }
                 return
             }
 
-            // Pack all slot images into a single horizontal-strip atlas.
-            let colorSpace = CGColorSpaceCreateDeviceRGB()
-            let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-            guard let ctx = CGContext(
-                data: nil, width: atlasW, height: atlasH,
-                bitsPerComponent: 8, bytesPerRow: 0,
-                space: colorSpace, bitmapInfo: bitmapInfo) else {
-                Task { @MainActor in completion(nil) }
-                return
-            }
-            ctx.interpolationQuality = .none
-            // Flood the entire atlas with a neutral fallback before drawing
-            // decoded tiles.  This prevents transparent holes for any slot
-            // whose graphicIndex is nil or whose image failed to decode —
-            // those slots show a neutral grey rather than a transparent cutout
-            // that would expose the RealityKit background.
-            ctx.setFillColor(CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 1.0))
-            ctx.fill(CGRect(x: 0, y: 0, width: CGFloat(atlasW), height: CGFloat(atlasH)))
-            // Match the y-flip applied by decode() so atlas tiles are not
-            // inverted relative to tiles decoded by the single-material path.
-            ctx.translateBy(x: 0, y: CGFloat(atlasH))
-            ctx.scaleBy(x: 1, y: -1)
-            for (slot, img) in slotImages {
-                let x = CGFloat(slot * cellW)
-                ctx.draw(img, in: CGRect(x: x, y: 0,
-                                        width: CGFloat(cellW), height: CGFloat(cellH)))
-            }
-            guard let atlasImage = ctx.makeImage() else {
+            guard let atlasImage = TabletopTerrainAtlasImageBuilder.build(
+                slotImages: slotImages, layout: atlasLayout) else {
                 Task { @MainActor in completion(nil) }
                 return
             }

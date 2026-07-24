@@ -47,6 +47,12 @@ public struct TabletopChunkReadinessTracker {
         self.totalChunks = totalChunks
     }
 
+    public mutating func reset(totalChunks: Int) {
+        self.totalChunks = totalChunks
+        readyKeys.removeAll(keepingCapacity: true)
+        didLogStable = false
+    }
+
     public var atlasReadyCount: Int { readyKeys.count }
     public var isStable: Bool { totalChunks > 0 && atlasReadyCount >= totalChunks }
 

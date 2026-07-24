@@ -7,7 +7,7 @@
 # ──────────────
 # 1. The bridge library (peonpad_tabletop_bridge) and its contract test
 #    (peonpad_tabletop_bridge_test) build cleanly without PEONPAD_TABLETOP.
-# 2. All 31 bridge contract tests pass.
+# 2. All 36 bridge contract tests pass.
 # 3. The bridge header contains no engine or SDL includes (language-neutrality).
 # 4. The mainloop patch applies and reverses cleanly against a temp copy of
 #    engine/stratagus.
@@ -60,8 +60,8 @@ pass "bridge-build"
 
 # ── 2. Run the contract tests ─────────────────────────────────────────────────
 printf "==> Running bridge contract tests...\n"
-"$BUILD_DIR/peonpad_tabletop_bridge_test" | grep -c "^PASS" | grep -q "^31$" \
-  || fail "bridge-test-count" "expected 31 PASS lines"
+"$BUILD_DIR/peonpad_tabletop_bridge_test" | grep -c "^PASS" | grep -q "^36$" \
+  || fail "bridge-test-count" "expected 36 PASS lines"
 "$BUILD_DIR/peonpad_tabletop_bridge_test" | grep "^FAIL" && \
   fail "bridge-test-failures" "one or more FAIL lines in output"
 RESULT=$("$BUILD_DIR/peonpad_tabletop_bridge_test"; echo "EXIT:$?")
@@ -119,6 +119,7 @@ else
   for sym in \
     peonpad_tabletop_init \
     peonpad_tabletop_cleanup \
+    peonpad_tabletop_begin_visibility_epoch \
     peonpad_tabletop_publish_snapshot \
     peonpad_tabletop_drain_commands \
     peonpad_tabletop_publish_synthetic \

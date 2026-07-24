@@ -85,6 +85,27 @@ func testAtlasGeometry() {
     expect(TabletopAtlasGeometry.sourceRect(
         frame: 0, frameWidth: 72, frameHeight: 72, imageWidth: 10, imageHeight: 10) == nil,
         "image smaller than a cell => nil")
+    let paddedSheet = TabletopAtlasGeometry.sourceRect(
+        frame: 17, frameWidth: 32, frameHeight: 32,
+        imageWidth: 514, imageHeight: 770)
+    expectEqual(paddedSheet, TabletopSourceRect(
+        x: 32, y: 32, width: 32, height: 32),
+        "trailing sheet padding preserves canonical floor-division frame addressing")
+
+    // Representative Warcraft II transition and terrain frames use the same
+    // canonical left-to-right, top-to-bottom addressing as CGraphic::GenFramesMap.
+    let transition = TabletopAtlasGeometry.sourceRect(
+        frame: 206, frameWidth: 32, frameHeight: 32,
+        imageWidth: 512, imageHeight: 768)
+    expectEqual(transition, TabletopSourceRect(
+        x: 14 * 32, y: 12 * 32, width: 32, height: 32),
+        "transition frame 206 preserves canonical row and column")
+    let forest = TabletopAtlasGeometry.sourceRect(
+        frame: 125, frameWidth: 32, frameHeight: 32,
+        imageWidth: 512, imageHeight: 768)
+    expectEqual(forest, TabletopSourceRect(
+        x: 13 * 32, y: 7 * 32, width: 32, height: 32),
+        "forest frame 125 preserves canonical row and column")
 }
 
 // MARK: - Extended (procedurally-generated) tileset frames

@@ -43,6 +43,21 @@ public struct TabletopMapFit: Equatable {
         return (originX + Float(tileX) * ts, originZ + Float(tileZ) * ts)
     }
 
+    /// Shared tile-edge coordinates. Computing an edge from its integer grid
+    /// coordinate makes the east edge of tile x bit-identical to the west edge
+    /// of tile x+1, including across independently-built chunk meshes.
+    public func tileBounds(
+        tileX: Int, tileZ: Int
+    ) -> (minX: Float, maxX: Float, minZ: Float, maxZ: Float) {
+        let ts = tileSize
+        let mapMinX = -Float(width) * ts / 2
+        let mapMinZ = -Float(height) * ts / 2
+        let minX = mapMinX + Float(tileX) * ts
+        let minZ = mapMinZ + Float(tileZ) * ts
+        return (minX, mapMinX + Float(tileX + 1) * ts,
+                minZ, mapMinZ + Float(tileZ + 1) * ts)
+    }
+
     /// Converts a board-local position back to the nearest tile coordinate.
     /// Used to translate a "tap empty tile" gesture into a move target.
     public func tile(atX x: Float, z: Float) -> (tileX: Int, tileZ: Int) {

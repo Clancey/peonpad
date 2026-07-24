@@ -449,6 +449,7 @@ extension TabletopTerrainKind {
         case .grass:  return UIColor(white: 0.70, alpha: 1)
         case .dirt:   return UIColor(white: 0.45, alpha: 1)
         case .water:  return UIColor(hue: 0.57, saturation: 0.65, brightness: 0.45, alpha: 1)
+        case .coast:  return UIColor(red: 0.59, green: 0.57, blue: 0.41, alpha: 1)
         case .rock:   return UIColor(white: 0.22, alpha: 1)
         case .forest: return UIColor(hue: 0.34, saturation: 0.55, brightness: 0.30, alpha: 1)
         }
@@ -694,4 +695,3 @@ enum TabletopBoardBuilder {
     /// Stable dictionary key for a per-tile fog overlay `ModelEntity`.
     static func fogEntityKey(tileX: Int, tileZ: Int) -> String { "fog.\(tileX).\(tileZ)" }
 }
-

@@ -64,6 +64,7 @@
 // and is only compiled into the SDL3 peonpad_tabletop_bridge target.
 // The header is found via the PEONPAD_APPLE_PLATFORM_DIR include path.
 extern "C" void peonpad_tabletop_drain_commands(void);
+extern "C" void peonpad_tabletop_begin_visibility_epoch(void);
 extern "C" void peonpad_tabletop_publish_snapshot(void);
 #endif
 
@@ -380,6 +381,9 @@ static void DisplayLoop()
 
 static void SingleGameLoop()
 {
+#ifdef PEONPAD_TABLETOP
+	peonpad_tabletop_begin_visibility_epoch();
+#endif
 	while (GameRunning) {
 		DisplayLoop();
 #ifdef PEONPAD_TABLETOP

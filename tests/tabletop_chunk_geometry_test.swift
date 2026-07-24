@@ -115,6 +115,12 @@ func testTilesIn() {
         }
     }
     expectEq(total, 128 * 128, "all chunks together cover all 16384 tiles")
+
+    let asymmetric = TabletopChunkLayout.tilesIn(
+        chunkX: 0, chunkZ: 0, mapWidth: 3, mapHeight: 2, chunkTiles: 32)
+    expectEq(asymmetric.map { "\($0.tileX),\($0.tileZ)" },
+             ["0,0", "1,0", "2,0", "0,1", "1,1", "2,1"],
+             "asymmetric map stays row-major without transpose or row reversal")
 }
 
 func testTileKey() {
@@ -164,6 +170,427 @@ func testAtlasSlotMapEntries() {
     expectEq(m.slotEntries[0].slotIndex, 0,    "entry[0].slotIndex=0")
     expectEq(m.slotEntries[1].graphicIndex, 2,  "entry[1].graphicIndex=2")
     expectEq(m.slotEntries[2].graphicIndex, nil,"entry[2].graphicIndex=nil")
+}
+
+func testPaddedAtlasLayout() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 3, cellWidth: 32, cellHeight: 32, gutterPixels: 2)
+    expectEq(layout.slotStride, 36, "32px frame plus two 2px gutters")
+    expectEq(layout.atlasWidth, 108, "three padded slots have bounded width")
+    expectEq(layout.atlasHeight, 36, "single padded row has bounded height")
+    expectEq(layout.contentOriginX(1), 38, "slot 1 content follows its left gutter")
+    let uv = layout.contentUVBounds(1)
+    expect(abs(uv.u0 - Float(38.0 / 108.0)) < 1e-6,
+           "slot 1 starts at its content edge, not neighbouring padding")
+    expect(abs(uv.u1 - Float(70.0 / 108.0)) < 1e-6,
+           "slot 1 ends before its replicated right gutter")
+    expect(abs(uv.v0 - Float(2.0 / 36.0)) < 1e-6,
+           "content starts below its replicated top gutter")
+    expect(abs(uv.v1 - Float(34.0 / 36.0)) < 1e-6,
+           "content ends above its replicated bottom gutter")
+    expect(uv.u0 > Float(1) / 3 && uv.u1 < Float(2) / 3,
+           "content UVs are inset from adjacent atlas slots")
+}
+
+func testAtlasLayoutMetalDimensionBoundaries() {
+    let below = TabletopTerrainAtlasLayout(
+        slotCount: 511, cellWidth: 32, cellHeight: 32, gutterPixels: 0)
+    expect(below.isValid, "511 slots fit below the 16384px boundary")
+    expectEq(below.atlasWidth, 16_352, "511x32 = 16352px")
+    expectEq(below.rows, 1, "below-boundary atlas stays one row")
+
+    let at = TabletopTerrainAtlasLayout(
+        slotCount: 512, cellWidth: 32, cellHeight: 32, gutterPixels: 0)
+    expect(at.isValid, "512 slots fit exactly at 16384px")
+    expectEq(at.atlasWidth, 16_384, "512x32 reaches the Metal limit exactly")
+    expectEq(at.rows, 1, "at-boundary atlas stays one row")
+
+    let above = TabletopTerrainAtlasLayout(
+        slotCount: 513, cellWidth: 32, cellHeight: 32, gutterPixels: 0)
+    expect(above.isValid, "513 slots wrap instead of exceeding the limit")
+    expectEq(above.atlasWidth, 16_384, "wrapped atlas width remains bounded")
+    expectEq(above.atlasHeight, 64, "513th slot starts a second 32px row")
+    expectEq(above.rows, 2, "above-boundary atlas uses two rows")
+}
+
+func testAtlasLayoutExtremeInputsNeverTrap() {
+    let layouts = [
+        TabletopTerrainAtlasLayout(
+            slotCount: 1_024, cellWidth: Int.max,
+            cellHeight: 32, gutterPixels: 1),
+        TabletopTerrainAtlasLayout(
+            slotCount: 1_024, cellWidth: 32,
+            cellHeight: 32, gutterPixels: Int.max),
+        TabletopTerrainAtlasLayout(
+            slotCount: Int.max, cellWidth: 1,
+            cellHeight: 1, gutterPixels: 0),
+        TabletopTerrainAtlasLayout(
+            slotCount: Int.max, cellWidth: Int.max,
+            cellHeight: Int.max, gutterPixels: Int.max,
+            maximumDimension: Int.max),
+    ]
+    for (index, layout) in layouts.enumerated() {
+        expect(!layout.isValid, "extreme layout \(index) is safely invalid")
+        expectEq(layout.slotStrideX, 1, "invalid layout \(index) safe x stride")
+        expectEq(layout.slotStrideY, 1, "invalid layout \(index) safe y stride")
+        expectEq(layout.atlasWidth, 1, "invalid layout \(index) safe width")
+        expectEq(layout.atlasHeight, 1, "invalid layout \(index) safe height")
+        expectEq(layout.slotOriginX(Int.max), 0,
+                 "invalid layout \(index) safe slot x")
+        expectEq(layout.slotOriginY(Int.max), 0,
+                 "invalid layout \(index) safe slot y")
+        expectEq(layout.contentOriginX(Int.max), 0,
+                 "invalid layout \(index) safe content x")
+        expectEq(layout.contentOriginY(Int.max), 0,
+                 "invalid layout \(index) safe content y")
+        expectEq(
+            layout.contentUVBounds(Int.max),
+            TabletopAtlasUVBounds(u0: 0, u1: 1, v0: 0, v1: 1),
+            "invalid layout \(index) returns neutral UV bounds")
+    }
+}
+
+func testInvalidMetadataSelectsBoundedProceduralFallback() {
+    let invalid = TabletopTerrainAtlasLayout(
+        slotCount: 1_024, cellWidth: Int.max,
+        cellHeight: 32, gutterPixels: 4)
+    let fallback = invalid.proceduralFallback()
+    expect(!invalid.isValid, "adversarial frame metadata is rejected")
+    expect(fallback.isValid, "1024-slot procedural fallback remains valid")
+    expect(fallback.atlasWidth <=
+           TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "procedural fallback width is bounded")
+    expect(fallback.atlasHeight <=
+           TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "procedural fallback height is bounded")
+}
+
+func testPaddedAtlasWrapAndUVOrientation() {
+    // 32px frame + 4px gutters = 40px stride; only 409 slots fit per
+    // 16384px row, so slot 409 must begin row 1 without rotating/mirroring.
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 410, cellWidth: 32, cellHeight: 32, gutterPixels: 4)
+    expect(layout.isValid, "410 padded slots fit in a bounded two-row atlas")
+    expectEq(layout.columns, 409, "409 padded frames per row")
+    expectEq(layout.rows, 2, "slot 409 wraps to row 1")
+    expectEq(layout.atlasWidth, 16_360, "padded width stays below Metal limit")
+    expectEq(layout.atlasHeight, 80, "two 40px padded rows")
+    expectEq(layout.slotOriginX(408), 16_320, "last row-0 slot x")
+    expectEq(layout.slotOriginY(408), 0, "last row-0 slot y")
+    expectEq(layout.slotOriginX(409), 0, "first row-1 slot wraps to x=0")
+    expectEq(layout.slotOriginY(409), 40, "first row-1 slot advances by stride")
+
+    let row0 = layout.contentUVBounds(408)
+    let row1 = layout.contentUVBounds(409)
+    expect(row0.u0 < row0.u1 && row0.v0 < row0.v1,
+           "row-0 source frame preserves left-to-right/top-to-bottom UVs")
+    expect(row1.u0 < row1.u1 && row1.v0 < row1.v1,
+           "row-1 source frame preserves left-to-right/top-to-bottom UVs")
+    expect(row1.u0 < row0.u0, "wrapped slot returns to the left atlas edge")
+    expect(row1.v0 > row0.v0, "wrapped slot advances downward one atlas row")
+}
+
+func testAtlasLayoutSupportsFullDistinctChunk() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 1_024, cellWidth: 32, cellHeight: 32, gutterPixels: 4)
+    expect(layout.isValid, "1024 distinct chunk slots fit in one bounded atlas")
+    expectEq(layout.columns, 409, "full chunk uses bounded column count")
+    expectEq(layout.rows, 3, "full chunk wraps across three rows")
+    expect(layout.atlasWidth <= TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "full chunk atlas width is Metal-safe")
+    expect(layout.atlasHeight <= TabletopTerrainAtlasLayout.maximumTextureDimension,
+           "full chunk atlas height is Metal-safe")
+
+    let fit = TabletopMapFit(width: 32, height: 32, boardExtent: 0.8)
+    var tiles: [(tileX: Int, tileZ: Int, graphicIndex: Int?)] = []
+    for z in 0..<32 {
+        for x in 0..<32 {
+            tiles.append((x, z, z * 32 + x))
+        }
+    }
+    let slotMap = TabletopAtlasSlotMap(
+        graphicIndices: tiles.map(\.graphicIndex))
+    let geo = TabletopTerrainChunkMeshBuilder.build(
+        tiles: tiles, fit: fit, slotMap: slotMap, atlasLayout: layout)
+    expectEq(geo.tileCount, 1_024, "full distinct chunk preserves every tile")
+    expect(geo.textureCoordinates.allSatisfy {
+        $0.x >= 0 && $0.x <= 1 && $0.y >= 0 && $0.y <= 1
+    }, "all full-chunk multi-row UVs remain normalized")
+    let last = Array(geo.textureCoordinates.suffix(4))
+    expect(last[0].x < last[1].x && last[0].y < last[3].y,
+           "last wrapped frame is neither mirrored nor vertically inverted")
+}
+
+private func makeSolidTile(
+    width: Int, height: Int, r: UInt8, g: UInt8, b: UInt8
+) -> CGImage? {
+    var pixels = [UInt8](repeating: 255, count: width * height * 4)
+    for index in 0..<(width * height) {
+        pixels[index * 4 + 0] = r
+        pixels[index * 4 + 1] = g
+        pixels[index * 4 + 2] = b
+    }
+
+    let data = Data(pixels)
+    guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+    return CGImage(
+        width: width, height: height,
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false,
+        intent: .defaultIntent)
+}
+
+private func makeCornerTile() -> CGImage? {
+    // Material-provider decode output is pre-flipped for TextureResource:
+    // memory top row is the source bottom (blue/yellow), then the atlas packer's
+    // matching context transform restores visual top (red/green).
+    let pixels: [UInt8] = [
+        20, 40, 230, 255,   230, 220, 20, 255,
+        240, 20, 30, 255,   20, 230, 40, 255,
+    ]
+    let data = Data(pixels)
+    guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+    return CGImage(
+        width: 2, height: 2,
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 8,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false,
+        intent: .defaultIntent)
+}
+
+private func gradientRGB(x: Int, y: Int) -> (UInt8, UInt8, UInt8) {
+    (UInt8(10 + x * 20), UInt8(20 + y * 30), UInt8(30 + x + y * 5))
+}
+
+private func makeGradientTile(width: Int, height: Int) -> CGImage? {
+    var pixels = [UInt8](repeating: 255, count: width * height * 4)
+    for memoryY in 0..<height {
+        let visualY = height - 1 - memoryY
+        for x in 0..<width {
+            let (r, g, b) = gradientRGB(x: x, y: visualY)
+            let offset = (memoryY * width + x) * 4
+            pixels[offset + 0] = r
+            pixels[offset + 1] = g
+            pixels[offset + 2] = b
+        }
+    }
+    let data = Data(pixels)
+    guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+    return CGImage(
+        width: width, height: height,
+        bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(
+            rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+        provider: provider, decode: nil, shouldInterpolate: false,
+        intent: .defaultIntent)
+}
+
+private func pixelRGB(
+    _ image: CGImage, x: Int, y: Int
+) -> (r: UInt8, g: UInt8, b: UInt8)? {
+    guard let pixelImage = image.cropping(to: CGRect(
+        x: x, y: y, width: 1, height: 1)) else { return nil }
+    var pixel = [UInt8](repeating: 0, count: 4)
+    let drew = pixel.withUnsafeMutableBytes { bytes -> Bool in
+        guard let base = bytes.baseAddress,
+              let ctx = CGContext(
+                data: base, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { return false }
+        ctx.translateBy(x: 0, y: 1)
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.draw(pixelImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return true
+    }
+    return drew ? (pixel[0], pixel[1], pixel[2]) : nil
+}
+
+func testSyntheticMultiRowAtlasPacking() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 1_024, cellWidth: 32, cellHeight: 32, gutterPixels: 4)
+    guard let red = makeSolidTile(
+        width: 32, height: 32, r: 240, g: 20, b: 30),
+          let green = makeSolidTile(
+            width: 32, height: 32, r: 20, g: 230, b: 40),
+          let atlas = TabletopTerrainAtlasImageBuilder.build(
+            slotImages: [408: red, 409: green], layout: layout)
+    else {
+        expect(false, "synthetic 1024-slot multi-row atlas packs successfully")
+        return
+    }
+
+    expectEq(atlas.width, layout.atlasWidth,
+             "synthetic atlas uses bounded multi-row width")
+    expectEq(atlas.height, layout.atlasHeight,
+             "synthetic atlas uses bounded multi-row height")
+
+    let redContent = pixelRGB(
+        atlas, x: layout.contentOriginX(408), y: layout.contentOriginY(408))
+    let redGutter = pixelRGB(
+        atlas, x: layout.slotOriginX(408), y: layout.slotOriginY(408))
+    let greenContent = pixelRGB(
+        atlas, x: layout.contentOriginX(409), y: layout.contentOriginY(409))
+    let greenGutter = pixelRGB(
+        atlas, x: layout.slotOriginX(409), y: layout.slotOriginY(409))
+    expect(redContent.map { $0.r > $0.g && $0.r > $0.b } == true,
+           "row-0 content retains its source frame color")
+    expect(redGutter.map { $0.r > $0.g && $0.r > $0.b } == true,
+           "row-0 corner gutter replicates its source edge")
+    expect(greenContent.map { $0.g > $0.r && $0.g > $0.b } == true,
+           "wrapped row-1 content retains its source frame color")
+    expect(greenGutter.map { $0.g > $0.r && $0.g > $0.b } == true,
+           "wrapped row-1 corner gutter replicates its source edge")
+}
+
+func testSyntheticWrappedFrameOrientation() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 11, cellWidth: 2, cellHeight: 2,
+        gutterPixels: 1, maximumDimension: 40)
+    guard let corners = makeCornerTile(),
+          let atlas = TabletopTerrainAtlasImageBuilder.build(
+            slotImages: [10: corners], layout: layout)
+    else {
+        expect(false, "asymmetric wrapped frame packs")
+        return
+    }
+
+    expectEq(layout.columns, 10, "synthetic limit forces slot 10 to row 1")
+    let x = layout.contentOriginX(10)
+    let y = layout.contentOriginY(10)
+    let topLeft = pixelRGB(atlas, x: x, y: y)
+    let topRight = pixelRGB(atlas, x: x + 1, y: y)
+    let bottomLeft = pixelRGB(atlas, x: x, y: y + 1)
+    let topGutterLeft = pixelRGB(
+        atlas, x: layout.slotOriginX(10), y: layout.slotOriginY(10))
+    let topGutterRight = pixelRGB(
+        atlas,
+        x: layout.slotOriginX(10) + layout.slotStrideX - 1,
+        y: layout.slotOriginY(10))
+    let bottomGutterLeft = pixelRGB(
+        atlas,
+        x: layout.slotOriginX(10),
+        y: layout.slotOriginY(10) + layout.slotStrideY - 1)
+    expect(topLeft.map { $0.r > $0.g && $0.r > $0.b } == true,
+           "wrapped frame keeps red at top-left, got \(String(describing: topLeft))")
+    expect(topRight.map { $0.g > $0.r && $0.g > $0.b } == true,
+           "wrapped frame keeps green at top-right, got \(String(describing: topRight))")
+    expect(bottomLeft.map { $0.b > $0.r && $0.b > $0.g } == true,
+           "wrapped frame keeps blue at bottom-left, got \(String(describing: bottomLeft))")
+    expect(topGutterLeft.map { $0.r > $0.g && $0.r > $0.b } == true,
+           "top-left gutter replicates visual top-left")
+    expect(topGutterRight.map { $0.g > $0.r && $0.g > $0.b } == true,
+           "top-right gutter replicates visual top-right")
+    expect(bottomGutterLeft.map { $0.b > $0.r && $0.b > $0.g } == true,
+           "bottom-left gutter replicates visual bottom-left")
+}
+
+func testSyntheticSingleRowVerticalGutters() {
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 1, cellWidth: 2, cellHeight: 2, gutterPixels: 1)
+    guard let corners = makeCornerTile(),
+          let atlas = TabletopTerrainAtlasImageBuilder.build(
+            slotImages: [0: corners], layout: layout)
+    else {
+        expect(false, "asymmetric single-row frame packs")
+        return
+    }
+
+    let topLeft = pixelRGB(
+        atlas, x: layout.slotOriginX(0), y: layout.slotOriginY(0))
+    let bottomLeft = pixelRGB(
+        atlas,
+        x: layout.slotOriginX(0),
+        y: layout.slotOriginY(0) + layout.slotStrideY - 1)
+    expect(topLeft.map { $0.r > $0.g && $0.r > $0.b } == true,
+           "single-row top gutter replicates visual top edge")
+    expect(bottomLeft.map { $0.b > $0.r && $0.b > $0.g } == true,
+           "single-row bottom gutter replicates visual bottom edge")
+}
+
+func testGradientAtlasCopiesEveryPixelAndGutterExactly() {
+    let width = 5, height = 4, gutter = 4
+    let layout = TabletopTerrainAtlasLayout(
+        slotCount: 2, cellWidth: width, cellHeight: height,
+        gutterPixels: gutter)
+    guard let gradient = makeGradientTile(width: width, height: height),
+          let atlas = TabletopTerrainAtlasImageBuilder.build(
+            slotImages: [1: gradient], layout: layout)
+    else {
+        expect(false, "gradient production atlas packs")
+        return
+    }
+    let originX = layout.slotOriginX(1)
+    let originY = layout.slotOriginY(1)
+    let contentX = layout.contentOriginX(1)
+    let contentY = layout.contentOriginY(1)
+
+    func expectPixel(
+        atlasX: Int, atlasY: Int, sourceX: Int, sourceY: Int,
+        _ message: String
+    ) {
+        let actual = pixelRGB(atlas, x: atlasX, y: atlasY)
+        let expected = gradientRGB(x: sourceX, y: sourceY)
+        expect(actual.map {
+            $0.r == expected.0 && $0.g == expected.1 && $0.b == expected.2
+        } == true, "\(message), got \(String(describing: actual))")
+    }
+
+    for y in 0..<height {
+        for x in 0..<width {
+            expectPixel(
+                atlasX: contentX + x, atlasY: contentY + y,
+                sourceX: x, sourceY: y,
+                "content pixel \(x),\(y) copied exactly")
+        }
+        for gx in 0..<gutter {
+            expectPixel(
+                atlasX: originX + gx, atlasY: contentY + y,
+                sourceX: 0, sourceY: y,
+                "left gutter row \(y) copied exactly")
+            expectPixel(
+                atlasX: contentX + width + gx, atlasY: contentY + y,
+                sourceX: width - 1, sourceY: y,
+                "right gutter row \(y) copied exactly")
+        }
+    }
+    for x in 0..<width {
+        for gy in 0..<gutter {
+            expectPixel(
+                atlasX: contentX + x, atlasY: originY + gy,
+                sourceX: x, sourceY: 0,
+                "top gutter column \(x) copied without stretch")
+            expectPixel(
+                atlasX: contentX + x, atlasY: contentY + height + gy,
+                sourceX: x, sourceY: height - 1,
+                "bottom gutter column \(x) copied without stretch")
+        }
+    }
+    for gy in 0..<gutter {
+        for gx in 0..<gutter {
+            expectPixel(
+                atlasX: originX + gx, atlasY: originY + gy,
+                sourceX: 0, sourceY: 0, "top-left corner exact")
+            expectPixel(
+                atlasX: contentX + width + gx, atlasY: originY + gy,
+                sourceX: width - 1, sourceY: 0, "top-right corner exact")
+            expectPixel(
+                atlasX: originX + gx, atlasY: contentY + height + gy,
+                sourceX: 0, sourceY: height - 1, "bottom-left corner exact")
+            expectPixel(
+                atlasX: contentX + width + gx,
+                atlasY: contentY + height + gy,
+                sourceX: width - 1, sourceY: height - 1,
+                "bottom-right corner exact")
+        }
+    }
 }
 
 // MARK: - TabletopTerrainChunkMeshBuilder tests
@@ -518,6 +945,28 @@ func testReliefSkirtWhenNeighborLower() {
     // The skirt drops from 0.02 to 0.0 and faces +X (east).
     expect(geo.normals.contains { $0.x > 0.9 }, "east skirt faces +X")
     expect(geo.positions.contains { abs($0.y - 0.0) < 1e-6 }, "skirt reaches the lower neighbour height")
+    let topUVs = Array(geo.textureCoordinates[0..<4])
+    let sideUVs = Array(geo.textureCoordinates[4..<8])
+    expect(Set(topUVs.map { "\($0.x),\($0.y)" }).count == 4,
+           "top quad preserves all four frame corners")
+    expect(Set(sideUVs.map { "\($0.x),\($0.y)" }).count == 1,
+           "side skirt samples one neutral frame point instead of stretching tile art")
+    expect(topUVs != sideUVs, "top and side vertices keep independent UV domains")
+}
+
+func testChunkEdgeContinuity() {
+    let fit = TabletopMapFit(width: 64, height: 1, boardExtent: 0.64)
+    let slotMap = TabletopAtlasSlotMap(graphicIndices: [10, 20] as [Int?])
+    let left = TabletopTerrainChunkMeshBuilder.build(
+        tiles: [(31, 0, 10)], fit: fit, slotMap: slotMap)
+    let right = TabletopTerrainChunkMeshBuilder.build(
+        tiles: [(32, 0, 20)], fit: fit, slotMap: slotMap)
+    let leftEast = left.positions.filter { $0.x == left.positions.map(\.x).max()! }
+    let rightWest = right.positions.filter { $0.x == right.positions.map(\.x).min()! }
+    expectEq(Set(leftEast.map(\.x)), Set(rightWest.map(\.x)),
+             "adjacent chunk tile edges share the exact X boundary")
+    expectEq(Set(leftEast.map(\.z)), Set(rightWest.map(\.z)),
+             "adjacent chunk tile edges share both Z endpoints")
 }
 
 func testReliefSkirtsAllFrontFacing() {
@@ -721,6 +1170,19 @@ func testReadinessTrackerMarkPendingIsIdempotentForUnknownKey() {
     expectEq(tracker.atlasReadyCount, 0, "marking an unknown key pending is a harmless no-op")
 }
 
+func testReadinessTrackerResetStartsNewBoardRound() {
+    var tracker = TabletopChunkReadinessTracker(totalChunks: 1)
+    let old = TabletopChunkKey(chunkX: 0, chunkZ: 0)
+    _ = tracker.markReady(old)
+    expect(tracker.isStable, "precondition: first board reaches stable")
+
+    tracker.reset(totalChunks: 4)
+    expectEq(tracker.totalChunks, 4, "reset adopts the new board chunk count")
+    expectEq(tracker.atlasReadyCount, 0, "reset discards prior-board readiness")
+    expect(!tracker.isStable, "new board starts pending")
+    expect(!tracker.didLogStable, "new board may log its own stable transition")
+}
+
 // MARK: - Run all tests
 
 @main
@@ -734,6 +1196,16 @@ struct TabletopChunkGeometryTests {
 
         testAtlasSlotMap()
         testAtlasSlotMapEntries()
+        testPaddedAtlasLayout()
+        testAtlasLayoutMetalDimensionBoundaries()
+        testAtlasLayoutExtremeInputsNeverTrap()
+        testInvalidMetadataSelectsBoundedProceduralFallback()
+        testPaddedAtlasWrapAndUVOrientation()
+        testAtlasLayoutSupportsFullDistinctChunk()
+        testSyntheticMultiRowAtlasPacking()
+        testSyntheticWrappedFrameOrientation()
+        testSyntheticSingleRowVerticalGutters()
+        testGradientAtlasCopiesEveryPixelAndGutterExactly()
 
         testChunkMeshBuilderBasic()
         testChunkMeshBuilderUVs()
@@ -758,6 +1230,7 @@ struct TabletopChunkGeometryTests {
 
         testReliefTopAtTileHeight()
         testReliefSkirtWhenNeighborLower()
+        testChunkEdgeContinuity()
         testReliefSkirtsAllFrontFacing()
         testReliefBoundedForFlatGround()
         testReliefChunkEdgeContinuity()
@@ -769,6 +1242,7 @@ struct TabletopChunkGeometryTests {
         testReadinessTrackerMarkReadyOnlyReportsStableOnce()
         testReadinessTrackerWholesaleRefreshResetsToZeroThenProgresses()
         testReadinessTrackerMarkPendingIsIdempotentForUnknownKey()
+        testReadinessTrackerResetStartsNewBoardRound()
 
         // MARK: - Summary
 

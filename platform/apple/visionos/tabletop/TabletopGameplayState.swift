@@ -32,6 +32,7 @@ public enum TabletopTerrainKind: String, Codable, Equatable, CaseIterable {
     case grass
     case dirt
     case water
+    case coast
     case rock
     case forest
 }
@@ -41,16 +42,21 @@ public struct TabletopTerrainTile: Codable, Equatable {
     public var tileX: Int
     public var tileZ: Int
     public var kind: TabletopTerrainKind
+    /// Engine tileset slot index. Warcraft II reserves indices below 0x100 for
+    /// solid tiles and uses higher slots for mixed transition art.
+    public var tileIndex: Int?
     /// Pixel-grid frame index of this tile within the tileset image (from the
     /// engine snapshot, ABI v3). `nil` for procedural/demo content. The render
     /// layer combines this with the snapshot's `assets.tileset` to crop the
     /// real tile art, falling back to a solid color when either is missing.
     public var graphicIndex: Int?
     public init(tileX: Int, tileZ: Int, kind: TabletopTerrainKind,
+                tileIndex: Int? = nil,
                 graphicIndex: Int? = nil) {
         self.tileX = tileX
         self.tileZ = tileZ
         self.kind = kind
+        self.tileIndex = tileIndex
         self.graphicIndex = graphicIndex
     }
 }

@@ -8,7 +8,7 @@
 //   Terrain — 1 ModelEntity per 32 × 32-tile chunk.
 //             • Initial material: a tiny N × 1-pixel procedural colour texture
 //               (N = unique graphicIndex count in the chunk), visible immediately.
-//             • Progressive upgrade: a decoded horizontal-strip atlas applied
+//             • Progressive upgrade: a decoded bounded multi-row atlas applied
 //               asynchronously so the board never blocks the main thread.
 //   Fog     — 1 ModelEntity covering the entire board with a mapWidth × mapHeight
 //             RGBA texture (1 pixel per tile).  Rebuilt on every snapshot update.
@@ -38,6 +38,7 @@ extension TabletopTerrainKind {
         case .grass:  return (179, 179, 179)
         case .dirt:   return (115, 115, 115)
         case .water:  return ( 29,  50, 115)
+        case .coast:  return (151, 145, 105)
         case .rock:   return ( 56,  56,  56)
         case .forest: return ( 38,  76,  38)
         }
@@ -137,7 +138,6 @@ public final class TabletopChunkBoard {
     public var readiness: TabletopBoardReadiness {
         TabletopBoardReadiness(totalChunks: totalChunks, atlasReadyCount: atlasReadyCount)
     }
-
     // Background queue for all CGImage / atlas work.
     private let decodeQueue = DispatchQueue(
         label: "org.peonpad.visionos.tabletop.chunkboard", qos: .userInitiated)
@@ -176,7 +176,7 @@ public final class TabletopChunkBoard {
         let mapH = snapshot.mapSize.height
         let (cx, cz) = TabletopChunkLayout.chunkCount(
             mapWidth: mapW, mapHeight: mapH, chunkTiles: chunkTiles)
-        readinessTracker.totalChunks = cx * cz
+        readinessTracker.reset(totalChunks: cx * cz)
 
         tabletopEngineLog("[Tabletop] build: map=\(mapW)x\(mapH) chunks=\(cx)x\(cz)=\(totalChunks) terrain=\(snapshot.terrain.count) assets=\(snapshot.assets != nil ? "real" : "none")")
 
@@ -262,12 +262,23 @@ public final class TabletopChunkBoard {
               let fit = mapFit,
               let current = snapshot else { return }
 
-        // Determine which chunks need rebuilding.
+        let mapW = current.mapSize.width
+        let mapH = current.mapSize.height
+
+        // Determine which chunks need rebuilding. Include cardinal neighbours
+        // because a changed elevation also changes which tile owns the shared
+        // relief skirt, including across chunk boundaries.
         var dirtyChunks = Set<TabletopChunkKey>()
         for tile in changedTiles {
-            let (cx, cz) = TabletopChunkLayout.chunkFor(
-                tileX: tile.tileX, tileZ: tile.tileZ, chunkTiles: chunkTiles)
-            dirtyChunks.insert(TabletopChunkKey(chunkX: cx, chunkZ: cz))
+            for (x, z) in [
+                (tile.tileX, tile.tileZ),
+                (tile.tileX - 1, tile.tileZ), (tile.tileX + 1, tile.tileZ),
+                (tile.tileX, tile.tileZ - 1), (tile.tileX, tile.tileZ + 1),
+            ] where x >= 0 && x < mapW && z >= 0 && z < mapH {
+                let (cx, cz) = TabletopChunkLayout.chunkFor(
+                    tileX: x, tileZ: z, chunkTiles: chunkTiles)
+                dirtyChunks.insert(TabletopChunkKey(chunkX: cx, chunkZ: cz))
+            }
         }
 
         // Merge the changes into the current snapshot terrain index.
@@ -281,20 +292,27 @@ public final class TabletopChunkBoard {
 
         // Refresh relief heights for the changed tiles so the rebuilt chunk
         // meshes (and adjacent skirts) use the new elevation.
+        var reliefChanged = false
         for tile in changedTiles {
-            heightByKey[TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)] =
-                TabletopTerrainRelief.height(tile.kind)
+            let key = TabletopChunkLayout.tileKey(tile.tileX, tile.tileZ)
+            let nextHeight = TabletopTerrainRelief.height(
+                tile.kind, tileIndex: tile.tileIndex)
+            if heightByKey[key] != nextHeight {
+                reliefChanged = true
+                heightByKey[key] = nextHeight
+            }
         }
-
-        let mapW = current.mapSize.width
-        let mapH = current.mapSize.height
+        if reliefChanged {
+            fogEntity?.model?.mesh = makeFogReliefMesh(
+                mapWidth: mapW, mapHeight: mapH, fit: fit)
+        }
 
         for key in dirtyChunks {
             guard let entity = chunkEntities[key] else { continue }
-            let (mesh, slotMap, slotToKind) = buildChunkMeshAndSlotMap(
+            let (mesh, slotMap, atlasLayout, slotToKind) = buildChunkMeshAndSlotMap(
                 chunkX: key.chunkX, chunkZ: key.chunkZ,
                 mapWidth: mapW, mapHeight: mapH,
-                fit: fit, terrainByKey: terrainByKey)
+                fit: fit, terrainByKey: terrainByKey, tileset: tileset)
             guard let mesh else { continue }
             // Increment generation so any in-flight atlas for this chunk is
             // considered stale when it completes, and mark it pending (not
@@ -302,23 +320,25 @@ public final class TabletopChunkBoard {
             chunkGeneration[key] = (chunkGeneration[key] ?? 0) + 1
             let gen = chunkGeneration[key]!
             readinessTracker.markPending(key)
-            // Apply procedural material immediately.
-            if let procMat = makeProceduralAtlasMaterial(
-                slotMap: slotMap, slotToKind: slotToKind) {
-                entity.model = ModelComponent(mesh: mesh, materials: [procMat])
-            }
+            // Apply a current-geometry procedural material immediately. Never
+            // retain a stale atlas if real or procedural texture creation fails.
+            let procedural = makeProceduralAtlasMaterial(
+                slotMap: slotMap, atlasLayout: atlasLayout,
+                slotToKind: slotToKind)
+            let fallback: Material = procedural
+                ?? SimpleMaterial(color: .gray, roughness: 1, isMetallic: false)
+            entity.model = ModelComponent(mesh: mesh, materials: [fallback])
             // Kick off real-art atlas upgrade.
             if let materialProvider {
                 materialProvider.buildTerrainAtlas(
-                    slotMap: slotMap, tileset: tileset
+                    slotMap: slotMap, atlasLayout: atlasLayout, tileset: tileset
                 ) { [weak entity, weak self] material in
                     guard let entity, let material, let self else { return }
                     guard TabletopAtlasCompletionGate.accepts(
                         requestGeneration: gen,
                         currentGeneration: self.chunkGeneration[key] ?? 0) else { return }  // stale guard
                     entity.model?.materials = [material]
-                    self.noteAtlasReady(chunkX: key.chunkX, chunkZ: key.chunkZ,
-                                        reason: "terrain change")
+                    self.noteAtlasReady(key: key, reason: "terrain change")
                 }
             }
         }
@@ -388,12 +408,13 @@ public final class TabletopChunkBoard {
         tileset: TabletopTilesetInfo?,
         materialProvider: WargusTabletopMaterialProvider?
     ) -> ModelEntity {
-        let (mesh, slotMap, slotToKind) = buildChunkMeshAndSlotMap(
+        let (mesh, slotMap, atlasLayout, slotToKind) = buildChunkMeshAndSlotMap(
             chunkX: chunkX, chunkZ: chunkZ,
             mapWidth: mapWidth, mapHeight: mapHeight,
-            fit: fit, terrainByKey: terrainByKey)
+            fit: fit, terrainByKey: terrainByKey, tileset: tileset)
 
-        let procMat = makeProceduralAtlasMaterial(slotMap: slotMap, slotToKind: slotToKind)
+        let procMat = makeProceduralAtlasMaterial(
+            slotMap: slotMap, atlasLayout: atlasLayout, slotToKind: slotToKind)
 
         let entity: ModelEntity
         if let mesh {
@@ -408,14 +429,16 @@ public final class TabletopChunkBoard {
         // newer rebuild has superseded this request (prevents stale overwrites).
         if let materialProvider, let tileset {
             let gen = chunkGeneration[key] ?? 0
-            materialProvider.buildTerrainAtlas(slotMap: slotMap, tileset: tileset) {
+            materialProvider.buildTerrainAtlas(
+                slotMap: slotMap, atlasLayout: atlasLayout, tileset: tileset
+            ) {
                 [weak entity, weak self] material in
                 guard let entity, let material, let self else { return }
                 guard TabletopAtlasCompletionGate.accepts(
                     requestGeneration: gen,
                     currentGeneration: self.chunkGeneration[key] ?? 0) else { return }  // stale guard
                 entity.model?.materials = [material]
-                self.noteAtlasReady(chunkX: key.chunkX, chunkZ: key.chunkZ, reason: nil)
+                self.noteAtlasReady(key: key, reason: nil)
             }
         }
 
@@ -428,8 +451,14 @@ public final class TabletopChunkBoard {
         chunkX: Int, chunkZ: Int,
         mapWidth: Int, mapHeight: Int,
         fit: TabletopMapFit,
-        terrainByKey: [Int: TabletopTerrainTile]
-    ) -> (MeshResource?, TabletopAtlasSlotMap, [Int: TabletopTerrainKind]) {
+        terrainByKey: [Int: TabletopTerrainTile],
+        tileset: TabletopTilesetInfo?
+    ) -> (
+        MeshResource?,
+        TabletopAtlasSlotMap,
+        TabletopTerrainAtlasLayout,
+        [Int: TabletopTerrainKind]
+    ) {
         let tileCoords = TabletopChunkLayout.tilesIn(
             chunkX: chunkX, chunkZ: chunkZ,
             mapWidth: mapWidth, mapHeight: mapHeight, chunkTiles: chunkTiles)
@@ -439,6 +468,23 @@ public final class TabletopChunkBoard {
             return (tileX: $0.tileX, tileZ: $0.tileZ, graphicIndex: t?.graphicIndex)
         }
         let slotMap = TabletopAtlasSlotMap(graphicIndices: tiles.map { $0.graphicIndex })
+        let requestedLayout = TabletopTerrainAtlasLayout(
+            slotCount: slotMap.slotCount,
+            cellWidth: max(1, tileset?.pixelTileWidth ?? 1),
+            cellHeight: max(1, tileset?.pixelTileHeight ?? 1),
+            gutterPixels: tileset == nil ? 0 : TabletopTerrainAtlasLayout.defaultGutterPixels)
+        let atlasLayout: TabletopTerrainAtlasLayout
+        if requestedLayout.isValid {
+            atlasLayout = requestedLayout
+        } else {
+            // Real art cannot fit in one bounded Metal texture. Keep geometry
+            // and the immediate procedural material valid and bounded rather
+            // than retaining stale art or failing mesh material creation.
+            atlasLayout = requestedLayout.proceduralFallback()
+            tabletopEngineLog(
+                "[Tabletop] atlas layout fallback: slots=\(slotMap.slotCount) "
+                + "cell=\(requestedLayout.cellWidth)x\(requestedLayout.cellHeight)")
+        }
 
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): tiles=\(tiles.count) slots=\(slotMap.slotCount)")
 
@@ -452,7 +498,7 @@ public final class TabletopChunkBoard {
         }
 
         guard !tiles.isEmpty else {
-            return (nil, slotMap, slotToKind)
+            return (nil, slotMap, atlasLayout, slotToKind)
         }
 
         // Relief tiles carry a per-tile height; skirts are emitted where a
@@ -466,43 +512,62 @@ public final class TabletopChunkBoard {
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): building relief geometry")
         let geo = TabletopTerrainChunkMeshBuilder.buildRelief(
             tiles: reliefTiles, fit: fit, slotMap: slotMap,
+            atlasLayout: atlasLayout,
             heightAt: { [heightByKey] x, z in heightByKey[TabletopChunkLayout.tileKey(x, z)] },
             edgeFloorY: TabletopBoardElevation.substrateTopY)
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): geo verts=\(geo.positions.count) tris=\(geo.triangleIndices.count/3)")
         let mesh = try? MeshResource.generate(from: [geo.meshDescriptor(
             name: "chunk.\(chunkX).\(chunkZ)")])
         tabletopEngineLog("[Tabletop] chunk \(chunkX).\(chunkZ): mesh=\(mesh != nil ? "ok" : "nil")")
-        return (mesh, slotMap, slotToKind)
+        return (mesh, slotMap, atlasLayout, slotToKind)
     }
 
     // MARK: - Private: procedural atlas material
 
-    /// Builds a tiny N × 1-pixel texture (one colour per atlas slot) and wraps
+    /// Builds a tiny padded-strip texture (one colour per atlas slot) and wraps
     /// it in a **lit** `PhysicallyBasedMaterial`.  Used as an immediate
     /// procedural placeholder while real tile art is decoded in the background.
     /// Lit (not unlit) so the relief cliffs already shade before real art lands.
     private func makeProceduralAtlasMaterial(
         slotMap:    TabletopAtlasSlotMap,
+        atlasLayout: TabletopTerrainAtlasLayout,
         slotToKind: [Int: TabletopTerrainKind]
     ) -> PhysicallyBasedMaterial? {
-        let N = slotMap.slotCount
-        var raw = [UInt8](repeating: 255, count: N * 4)
+        guard atlasLayout.isValid else { return nil }
+        // The placeholder only needs the same normalized slot grid, not the
+        // real frame's pixel dimensions. A 3x3 solid-color cell per slot keeps
+        // linear filtering inside that slot while avoiding multi-megabyte
+        // temporary buffers for a 1024-distinct-frame chunk.
+        let placeholderCell = 3
+        let atlasWidth = atlasLayout.columns * placeholderCell
+        let atlasHeight = atlasLayout.rows * placeholderCell
+        var raw = [UInt8](
+            repeating: 255, count: atlasWidth * atlasHeight * 4)
         for (slot, kind) in slotToKind {
-            guard slot < N else { continue }
+            guard slot < slotMap.slotCount else { continue }
             let (r, g, b) = kind.rgbaPM
-            raw[slot*4 + 0] = r
-            raw[slot*4 + 1] = g
-            raw[slot*4 + 2] = b
-            raw[slot*4 + 3] = 255
+            let startX = (slot % atlasLayout.columns) * placeholderCell
+            let endX = startX + placeholderCell
+            let startY = (slot / atlasLayout.columns) * placeholderCell
+            let endY = startY + placeholderCell
+            for y in startY..<endY {
+                for x in startX..<endX {
+                    let pixel = (y * atlasWidth + x) * 4
+                    raw[pixel + 0] = r
+                    raw[pixel + 1] = g
+                    raw[pixel + 2] = b
+                    raw[pixel + 3] = 255
+                }
+            }
         }
         let data = Data(raw)
         let cs   = CGColorSpaceCreateDeviceRGB()
         let bi   = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         guard let provider = CGDataProvider(data: data as CFData),
               let cgImage  = CGImage(
-                  width: N, height: 1,
+                  width: atlasWidth, height: atlasHeight,
                   bitsPerComponent: 8, bitsPerPixel: 32,
-                  bytesPerRow: N * 4,
+                  bytesPerRow: atlasWidth * 4,
                   space: cs, bitmapInfo: bi,
                   provider: provider,
                   decode: nil, shouldInterpolate: false,
@@ -690,12 +755,12 @@ public final class TabletopChunkBoard {
     /// transition exactly once per round, when the last pending chunk settles.
     /// Idempotent: a duplicate callback invocation for an already-ready chunk
     /// never double-counts `atlasReadyCount` (see `TabletopChunkReadinessTracker`).
-    private func noteAtlasReady(chunkX: Int, chunkZ: Int, reason: String?) {
-        let becameStable = readinessTracker.markReady(TabletopChunkKey(chunkX: chunkX, chunkZ: chunkZ))
+    private func noteAtlasReady(key: TabletopChunkKey, reason: String?) {
+        let becameStable = readinessTracker.markReady(key)
         let suffix = reason.map { " (\($0))" } ?? ""
         tabletopEngineLog(
             "[Tabletop] atlas ready chunk \(atlasReadyCount)/\(totalChunks) "
-            + "(\(chunkX).\(chunkZ))\(suffix)")
+            + "(\(key.chunkX).\(key.chunkZ))\(suffix)")
         if becameStable {
             tabletopEngineLog(
                 "[Tabletop] board stable-ready: all \(totalChunks) chunks upgraded to real art")
@@ -768,21 +833,20 @@ public final class TabletopChunkBoard {
         var normals:   [SIMD3<Float>] = []
         var uvs:       [SIMD2<Float>] = []
         var indices:   [UInt32]       = []
-        let ht  = fit.tileSize / 2
         let up  = SIMD3<Float>(0, 1, 0)
         let gap = TabletopBoardElevation.fogGap
         positions.reserveCapacity(mapWidth * mapHeight * 4)
 
         for tz in 0..<mapHeight {
             for tx in 0..<mapWidth {
-                let c = fit.tileCenter(tileX: tx, tileZ: tz)
+                let bounds = fit.tileBounds(tileX: tx, tileZ: tz)
                 let y = (heightByKey[TabletopChunkLayout.tileKey(tx, tz)]
                          ?? TabletopBoardElevation.terrainSurfaceY) + gap
                 let base = UInt32(positions.count)
-                positions.append(SIMD3<Float>(c.x - ht, y, c.z - ht)) // NW
-                positions.append(SIMD3<Float>(c.x + ht, y, c.z - ht)) // NE
-                positions.append(SIMD3<Float>(c.x + ht, y, c.z + ht)) // SE
-                positions.append(SIMD3<Float>(c.x - ht, y, c.z + ht)) // SW
+                positions.append(SIMD3<Float>(bounds.minX, y, bounds.minZ)) // NW
+                positions.append(SIMD3<Float>(bounds.maxX, y, bounds.minZ)) // NE
+                positions.append(SIMD3<Float>(bounds.maxX, y, bounds.maxZ)) // SE
+                positions.append(SIMD3<Float>(bounds.minX, y, bounds.maxZ)) // SW
                 normals.append(contentsOf: [up, up, up, up])
                 // All four corners sample this tile's own texel centre.
                 let u = (Float(tx) + 0.5) / Float(mapWidth)
@@ -814,7 +878,8 @@ public final class TabletopChunkBoard {
         var heights: [Int: Float] = [:]
         heights.reserveCapacity(terrainByKey.count)
         for (key, tile) in terrainByKey {
-            heights[key] = TabletopTerrainRelief.height(tile.kind)
+            heights[key] = TabletopTerrainRelief.height(
+                tile.kind, tileIndex: tile.tileIndex)
         }
         return heights
     }

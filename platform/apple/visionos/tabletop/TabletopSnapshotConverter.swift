@@ -61,6 +61,7 @@ public enum TabletopSnapshotConverter {
                 let cell = engine.terrain[y * width + x]
                 terrain.append(TabletopTerrainTile(
                     tileX: x, tileZ: y, kind: terrainKind(cell.terrainClass),
+                    tileIndex: Int(cell.tileIndex),
                     graphicIndex: Int(cell.graphicIndex)))
                 fog.append(TabletopFogTile(
                     tileX: x, tileZ: y, visibility: fogVisibility(cell.fogState)))
@@ -184,8 +185,9 @@ public enum TabletopSnapshotConverter {
     }
 
     /// Maps the engine terrain class to the UI's terrain palette. Classes with
-    /// no direct UI equivalent fold onto the nearest kind (coast→water,
-    /// wall→rock, unknown→grass).
+    /// no direct UI equivalent fold onto the nearest kind (wall→rock,
+    /// unknown→grass). Coast remains distinct so mixed shoreline frames are
+    /// not recessed as whole water tiles by the 2.5D renderer.
     public static func terrainKind(_ terrainClass: UInt8) -> TabletopTerrainKind {
         switch EngineTerrainClass(rawValue: terrainClass) {
         case .grass:   return .grass
@@ -193,7 +195,7 @@ public enum TabletopSnapshotConverter {
         case .water:   return .water
         case .rock:    return .rock
         case .forest:  return .forest
-        case .coast:   return .water
+        case .coast:   return .coast
         case .wall:    return .rock
         case .unknown, .none: return .grass
         }

@@ -76,9 +76,13 @@ public enum TabletopTerrainRelief {
 
     /// Height in discrete steps relative to the ground baseline (0).
     /// Negative = recessed, positive = raised.
-    public static func level(_ kind: TabletopTerrainKind) -> Int {
+    public static func level(_ kind: TabletopTerrainKind, tileIndex: Int? = nil) -> Int {
+        if isMixedTransition(tileIndex: tileIndex), kind != .water {
+            return 0
+        }
         switch kind {
         case .water:  return -1   // recessed basin
+        case .coast:  return  0   // shoreline art stays on the ground plane
         case .dirt:   return  0   // ground baseline
         case .grass:  return  0   // ground baseline
         case .forest: return  1   // raised
@@ -91,8 +95,21 @@ public enum TabletopTerrainRelief {
     public static let stepMeters: Float = 0.010
 
     /// Board-local Y (meters) of a terrain class's top surface.
-    public static func height(_ kind: TabletopTerrainKind) -> Float {
-        Float(level(kind)) * stepMeters
+    public static func height(
+        _ kind: TabletopTerrainKind,
+        tileIndex: Int? = nil
+    ) -> Float {
+        Float(level(kind, tileIndex: tileIndex)) * stepMeters
+    }
+
+    /// Warcraft II tileset slots 0x100 and above contain mixed transition
+    /// frames. Mixed feature/ground frames (coast/grass, forest/grass,
+    /// rock/coast, walls, and similar) stay on the ground baseline so their art
+    /// does not become a square block. Water-to-water mixed frames retain the
+    /// water level because both sides belong to the same recessed surface.
+    public static func isMixedTransition(tileIndex: Int?) -> Bool {
+        guard let tileIndex else { return false }
+        return tileIndex >= 0x100
     }
 
     /// Height (meters) of the upright viewer-facing tree billboard drawn on a

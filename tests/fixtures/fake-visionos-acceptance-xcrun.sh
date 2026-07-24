@@ -19,12 +19,36 @@ fi
 [[ "$1" == simctl ]] || exit 2
 case "$2" in
   list)
-    [[ "$3" == devices && "$4" == available ]] || exit 2
-    if [[ -f "$STATE_DIR/booted" ]]; then
-      sed 's/(Shutdown)/(Booted)/g' "$DEVICES_FILE"
-    else
-      /bin/cat "$DEVICES_FILE"
-    fi
+    case "$3" in
+      runtimes)
+        print "visionOS 26.5 (23O123) - com.apple.CoreSimulator.SimRuntime.xrOS-26-5"
+        ;;
+      devicetypes)
+        print "Apple Vision Pro (com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro)"
+        ;;
+      devices)
+        if [[ -f "$STATE_DIR/booted" ]]; then
+          sed 's/(Shutdown)/(Booted)/g' "$DEVICES_FILE"
+        else
+          /bin/cat "$DEVICES_FILE"
+        fi
+        if [[ -f "$STATE_DIR/created-device" ]]; then
+          if [[ -f "$STATE_DIR/booted" ]]; then
+            sed 's/(Shutdown)/(Booted)/g' "$STATE_DIR/created-device"
+          else
+            /bin/cat "$STATE_DIR/created-device"
+          fi
+        fi
+        ;;
+      *)
+        exit 2
+        ;;
+    esac
+    ;;
+  create)
+    CREATED_UDID=77777777-7777-4777-8777-777777777777
+    print "    $3 ($CREATED_UDID) (Shutdown)" > "$STATE_DIR/created-device"
+    print -r -- "$CREATED_UDID"
     ;;
   boot)
     print booted > "$STATE_DIR/booted"
@@ -32,7 +56,14 @@ case "$2" in
   bootstatus)
     [[ -f "$STATE_DIR/booted" ]] || grep -q '(Booted)' "$DEVICES_FILE"
     ;;
+  shutdown)
+    rm -f "$STATE_DIR/booted"
+    ;;
+  delete)
+    rm -f "$STATE_DIR/created-device" "$STATE_DIR/booted"
+    ;;
   install)
+    [[ "$MODE" != install-failure ]] || exit 1
     APP=$4
     CONTAINER="$STATE_DIR/installed/Fake Vision Installed.app"
     rm -rf "$STATE_DIR/installed"

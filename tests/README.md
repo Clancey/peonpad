@@ -67,3 +67,10 @@ It also covers spaces in paths, default cleanup, retained evidence, startup-only
 positive readiness, unwritable result destinations, failed or invalid JSON
 conversion/moves, and pass/fail result validation without requiring an
 installed simulator.
+
+`tests/visionos-simulator-isolation.sh` exercises the simulator ownership
+manager with a fake `simctl`. It covers unowned-device refusal, explicit
+user-device opt-in, unique concurrent runs, scoped `SIMCTL_CHILD_*` launch
+environment, exact ownership checks, deletion-failure retention, interrupted
+cleanup, stale-run reaping, screenshots, and proof that cleanup leaves the
+user's booted simulator untouched.

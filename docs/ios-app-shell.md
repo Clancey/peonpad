@@ -123,6 +123,12 @@ advertise the Designed-for-iPad destination:
 ./scripts/build-vision-compat-simulator.sh --launch
 ```
 
+The compatibility build uses an isolated PeonPad-owned Vision Pro destination
+by default and deletes only that device on exit. Reusing a user simulator
+requires an explicit UDID and `--allow-user-simulator`; automation does not
+foreground it. See
+[`visionos-simulator-automation.md`](visionos-simulator-automation.md).
+
 On 2026-07-15, the compatibility app built, installed, and remained running on
 the visionOS 26.5 Apple Vision Pro simulator with a generated non-game probe
 payload; no proprietary data was accessed. This proves only build and

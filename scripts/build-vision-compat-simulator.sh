@@ -11,25 +11,55 @@ DATA_DIR=${PEONPAD_IOS_DATA_DIR:-$ROOT_DIR/build/ios-wc2-data}
 TOOLCHAIN="$ROOT_DIR/cmake/toolchains/ios-simulator-arm64.cmake"
 HOST_TOLUA=${STRATAGUS_HOST_TOLUAPP:-$ROOT_DIR/build/macos/engine/lua/src/lua-build/toluapp}
 LAUNCH=0
+VISION_UDID=""
+ALLOW_USER_SIMULATOR=0
 
-if (( $# > 1 )); then
-  print -u2 "Usage: ./scripts/build-vision-compat-simulator.sh [--launch]"
-  exit 2
-fi
-if (( $# == 1 )); then
+usage() {
+  print "Usage: ./scripts/build-vision-compat-simulator.sh [--launch]"
+  print "  [--simulator-udid UDID --allow-user-simulator]"
+}
+
+while (( $# > 0 )); do
   case "$1" in
     --help)
-      print "Usage: ./scripts/build-vision-compat-simulator.sh [--launch]"
+      usage
       exit 0
       ;;
     --launch)
       LAUNCH=1
       ;;
+    --simulator-udid)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      VISION_UDID=$2
+      shift
+      ;;
+    --allow-user-simulator)
+      ALLOW_USER_SIMULATOR=1
+      ;;
     *)
-      print -u2 "Usage: ./scripts/build-vision-compat-simulator.sh [--launch]"
+      usage >&2
       exit 2
       ;;
   esac
+  shift
+done
+
+if [[ -z "$VISION_UDID" && -n "${PEONPAD_VISION_SIMULATOR_UDID:-}" ]]; then
+  VISION_UDID=$PEONPAD_VISION_SIMULATOR_UDID
+fi
+if [[ "${PEONPAD_VISIONOS_ALLOW_USER_SIMULATOR:-0}" == 1 ]]; then
+  ALLOW_USER_SIMULATOR=1
+fi
+if [[ -n "$VISION_UDID" && $ALLOW_USER_SIMULATOR -ne 1 ]]; then
+  print -u2 "a user-selected simulator requires --allow-user-simulator"
+  exit 2
+fi
+if [[ -z "$VISION_UDID" && $ALLOW_USER_SIMULATOR -eq 1 ]]; then
+  print -u2 "--allow-user-simulator requires --simulator-udid"
+  exit 2
 fi
 
 case "$BUILD_DIR/" in
@@ -66,7 +96,46 @@ xcrun --sdk xrsimulator --show-sdk-path >/dev/null || {
   print -u2 "visionOS Simulator SDK is unavailable"
   exit 1
 }
-VISION_UDID=$("$SCRIPT_DIR/find-vision-pro-simulator.sh")
+
+SIMULATOR_STATE=""
+SIMULATOR_CREATED=0
+APP_LAUNCHED=0
+typeset -a TARGET_ARGS
+TARGET_ARGS=()
+
+finish_simulator() {
+  local exit_code=$?
+  local cleanup_failed=0
+  trap - EXIT INT TERM
+  set +e
+  if (( APP_LAUNCHED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" terminate --udid "$VISION_UDID" \
+      --bundle org.peonpad.ios "${TARGET_ARGS[@]}" \
+      >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  if (( SIMULATOR_CREATED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" cleanup \
+      --state "$SIMULATOR_STATE" >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  (( exit_code != 0 || cleanup_failed == 0 )) || exit_code=1
+  exit "$exit_code"
+}
+trap finish_simulator EXIT
+trap 'exit 130' INT TERM
+
+if [[ -z "$VISION_UDID" ]]; then
+  SIMULATOR_STATE=$("$SCRIPT_DIR/visionos-simulator.sh" create \
+    --label ipad-compat --owner-pid $$)
+  SIMULATOR_CREATED=1
+  DETAILS=$("$SCRIPT_DIR/visionos-simulator.sh" details \
+    --state "$SIMULATOR_STATE")
+  VISION_UDID=${DETAILS%%$'\t'*}
+  TARGET_ARGS=(--state "$SIMULATOR_STATE")
+else
+  TARGET_ARGS=(--allow-user-simulator)
+  "$SCRIPT_DIR/visionos-simulator.sh" assert --udid "$VISION_UDID" \
+    "${TARGET_ARGS[@]}"
+fi
 
 cmake -E remove_directory "$BUILD_DIR"
 cmake --fresh -S "$ROOT_DIR/engine/stratagus" -B "$BUILD_DIR" \
@@ -136,26 +205,13 @@ print "  destination:  $DESTINATION"
 print "  xros target:  no"
 
 if (( LAUNCH )); then
-  STATE=$(xcrun simctl list devices | awk -v id="$VISION_UDID" '
-    !found && index($0, id) {
-      found = 1
-      if ($0 ~ /\(Booted\)/) print "Booted"
-      else if ($0 ~ /\(Shutdown\)/) print "Shutdown"
-      else print "Unknown"
-    }
-  ')
-  case "$STATE" in
-    Booted) ;;
-    Shutdown) xcrun simctl boot "$VISION_UDID" ;;
-    *)
-      print -u2 "unexpected Vision Pro simulator state: ${STATE:-missing}"
-      exit 1
-      ;;
-  esac
-  xcrun simctl bootstatus "$VISION_UDID" -b
-  xcrun simctl install "$VISION_UDID" "$APP"
-  xcrun simctl launch --terminate-running-process \
-    "$VISION_UDID" org.peonpad.ios
+  "$SCRIPT_DIR/visionos-simulator.sh" boot --udid "$VISION_UDID" \
+    "${TARGET_ARGS[@]}"
+  "$SCRIPT_DIR/visionos-simulator.sh" install --udid "$VISION_UDID" \
+    --app "$APP" "${TARGET_ARGS[@]}"
+  "$SCRIPT_DIR/visionos-simulator.sh" launch --udid "$VISION_UDID" \
+    --bundle org.peonpad.ios "${TARGET_ARGS[@]}"
+  APP_LAUNCHED=1
   print "  launch:       requested successfully"
 fi
 

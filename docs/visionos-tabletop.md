@@ -211,6 +211,13 @@ Build, install, launch in the Vision Pro Simulator, and capture a screenshot
   --screenshot /tmp/peonpad-tabletop-evidence/tabletop.png
 ```
 
+This creates a disposable PeonPad-owned simulator and cleans it up after the
+launch check. It does not select or foreground the user's active Simulator.
+Pass command-harness variables with repeated `--child-env NAME=VALUE`; the build
+script scopes them through `SIMCTL_CHILD_*`. Authentic local Wargus data can be
+injected before launch with `--inject-wargus-data`. See
+[`visionos-simulator-automation.md`](visionos-simulator-automation.md).
+
 `--launch`/`--screenshot` are rejected for the `xros` target, matching the
 SDL3 shell's simulator-only evidence convention. The `xros` build prints an
 explicit "DEVICE GATE" reminder: the command-line binary is intentionally

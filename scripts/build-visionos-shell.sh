@@ -8,10 +8,14 @@ ROOT_DIR=${SCRIPT_DIR:h}
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-visionos-shell.sh <xrsimulator|xros> [--launch] [--screenshot PATH]
+Usage: ./scripts/build-visionos-shell.sh <xrsimulator|xros>
+  [--launch] [--screenshot PATH] [--child-env NAME=VALUE]
+  [--simulator-udid UDID --allow-user-simulator]
 
-Builds the complete native visionOS SDL3 smoke-shell configuration. --launch
-and --screenshot are supported only for xrsimulator. This is not gameplay.
+Builds the complete native visionOS SDL3 smoke-shell configuration. Simulator
+automation creates a disposable PeonPad-owned Vision Pro by default. A user
+simulator requires an explicit UDID plus --allow-user-simulator. Automation
+never foregrounds Simulator. This is not gameplay.
 EOF
 }
 
@@ -28,6 +32,10 @@ TARGET=$1
 shift
 LAUNCH=0
 SCREENSHOT=""
+VISION_UDID=""
+ALLOW_USER_SIMULATOR=0
+typeset -a CHILD_ENV
+CHILD_ENV=()
 while (( $# > 0 )); do
   case "$1" in
     --launch)
@@ -41,6 +49,25 @@ while (( $# > 0 )); do
       SCREENSHOT=${2:A}
       shift
       ;;
+    --child-env)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      CHILD_ENV+=("$2")
+      shift
+      ;;
+    --simulator-udid)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      VISION_UDID=$2
+      shift
+      ;;
+    --allow-user-simulator)
+      ALLOW_USER_SIMULATOR=1
+      ;;
     *)
       usage >&2
       exit 2
@@ -48,6 +75,21 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if [[ -z "$VISION_UDID" && -n "${PEONPAD_VISION_SIMULATOR_UDID:-}" ]]; then
+  VISION_UDID=$PEONPAD_VISION_SIMULATOR_UDID
+fi
+if [[ "${PEONPAD_VISIONOS_ALLOW_USER_SIMULATOR:-0}" == 1 ]]; then
+  ALLOW_USER_SIMULATOR=1
+fi
+if [[ -n "$VISION_UDID" && $ALLOW_USER_SIMULATOR -ne 1 ]]; then
+  print -u2 "a user-selected simulator requires --allow-user-simulator"
+  exit 2
+fi
+if [[ -z "$VISION_UDID" && $ALLOW_USER_SIMULATOR -eq 1 ]]; then
+  print -u2 "--allow-user-simulator requires --simulator-udid"
+  exit 2
+fi
 
 case "$TARGET" in
   xrsimulator)
@@ -154,27 +196,55 @@ if (( ! LAUNCH )); then
   exit 0
 fi
 
-VISION_UDID=$("$SCRIPT_DIR/find-vision-pro-simulator.sh")
-STATE=$(xcrun simctl list devices available | awk -v id="$VISION_UDID" '
-  index($0, "(" id ")") {
-    if ($0 ~ /\(Booted\)/) print "Booted"
-    else if ($0 ~ /\(Shutdown\)/) print "Shutdown"
-    else print "Unknown"
-    exit
-  }
-')
-case "$STATE" in
-  Booted) ;;
-  Shutdown) xcrun simctl boot "$VISION_UDID" ;;
-  *)
-    print -u2 "unexpected Vision Pro simulator state: ${STATE:-missing}"
-    exit 1
-    ;;
-esac
-xcrun simctl bootstatus "$VISION_UDID" -b
-xcrun simctl install "$VISION_UDID" "$APP"
-LAUNCH_RESULT=$(xcrun simctl launch --terminate-running-process \
-  "$VISION_UDID" org.peonpad.visionos)
+SIMULATOR_STATE=""
+SIMULATOR_CREATED=0
+APP_LAUNCHED=0
+typeset -a TARGET_ARGS
+TARGET_ARGS=()
+
+finish_simulator() {
+  local exit_code=$?
+  local cleanup_failed=0
+  trap - EXIT INT TERM
+  set +e
+  if (( APP_LAUNCHED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" terminate \
+      --udid "$VISION_UDID" --bundle org.peonpad.visionos \
+      "${TARGET_ARGS[@]}" >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  if (( SIMULATOR_CREATED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" cleanup \
+      --state "$SIMULATOR_STATE" >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  (( exit_code != 0 || cleanup_failed == 0 )) || exit_code=1
+  exit "$exit_code"
+}
+trap finish_simulator EXIT
+trap 'exit 130' INT TERM
+
+if [[ -z "$VISION_UDID" ]]; then
+  SIMULATOR_STATE=$("$SCRIPT_DIR/visionos-simulator.sh" create \
+    --label smoke-shell --owner-pid $$)
+  SIMULATOR_CREATED=1
+  DETAILS=$("$SCRIPT_DIR/visionos-simulator.sh" details \
+    --state "$SIMULATOR_STATE")
+  VISION_UDID=${DETAILS%%$'\t'*}
+  TARGET_ARGS=(--state "$SIMULATOR_STATE")
+else
+  TARGET_ARGS=(--allow-user-simulator)
+  "$SCRIPT_DIR/visionos-simulator.sh" boot --udid "$VISION_UDID" \
+    "${TARGET_ARGS[@]}"
+fi
+"$SCRIPT_DIR/visionos-simulator.sh" install --udid "$VISION_UDID" \
+  --app "$APP" "${TARGET_ARGS[@]}"
+typeset -a LAUNCH_ARGS
+LAUNCH_ARGS=(--udid "$VISION_UDID" --bundle org.peonpad.visionos)
+for assignment in "${CHILD_ENV[@]}"; do
+  LAUNCH_ARGS+=(--env "$assignment")
+done
+LAUNCH_RESULT=$("$SCRIPT_DIR/visionos-simulator.sh" launch \
+  "${LAUNCH_ARGS[@]}" "${TARGET_ARGS[@]}")
+APP_LAUNCHED=1
 print "$LAUNCH_RESULT"
 PID=$(awk -F ': ' '$1 == "org.peonpad.visionos" {print $2}' \
   <<< "$LAUNCH_RESULT")
@@ -184,15 +254,17 @@ PID=$(awk -F ': ' '$1 == "org.peonpad.visionos" {print $2}' \
 }
 sleep 3
 xcrun simctl spawn "$VISION_UDID" launchctl procinfo "$PID" >/dev/null
-CONTAINER=$(xcrun simctl get_app_container \
-  "$VISION_UDID" org.peonpad.visionos app)
+CONTAINER=$("$SCRIPT_DIR/visionos-simulator.sh" container \
+  --udid "$VISION_UDID" --bundle org.peonpad.visionos --kind app \
+  "${TARGET_ARGS[@]}")
 [[ -d "$CONTAINER" ]] || {
   print -u2 "installed visionOS smoke app container is unavailable"
   exit 1
 }
 
 if [[ -n "$SCREENSHOT" ]]; then
-  xcrun simctl io "$VISION_UDID" screenshot "$SCREENSHOT"
+  "$SCRIPT_DIR/visionos-simulator.sh" screenshot \
+    --udid "$VISION_UDID" --output "$SCREENSHOT" "${TARGET_ARGS[@]}"
   [[ -s "$SCREENSHOT" ]] || {
     print -u2 "simulator screenshot was not captured"
     exit 1

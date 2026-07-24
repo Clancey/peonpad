@@ -39,6 +39,8 @@ fi
 "$ROOT_DIR/scripts/build-sdl3-foundation.sh" --help >/dev/null
 "$ROOT_DIR/scripts/build-visionos-shell.sh" --help >/dev/null
 "$ROOT_DIR/scripts/accept-visionos.sh" --help >/dev/null
+"$ROOT_DIR/scripts/visionos-simulator.sh" --help >/dev/null
+"$ROOT_DIR/scripts/open-visionos-simulator.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-visionos-bundle.sh" --help >/dev/null
 "$ROOT_DIR/scripts/install-visionos-device.sh" --help >/dev/null
 "$ROOT_DIR/scripts/verify-sdl3-sources.sh" >/dev/null
@@ -111,19 +113,18 @@ if rg -q -- '--target peonpad_sdl3_smoke' "$VISIONOS_BUILD_SCRIPT"; then
   print -u2 "visionOS shell validation builds only the smoke target"
   exit 1
 fi
-rg -q 'find-vision-pro-simulator\.sh' "$VISIONOS_BUILD_SCRIPT"
-rg -q 'simctl bootstatus' "$VISIONOS_BUILD_SCRIPT"
-rg -q 'simctl install' "$VISIONOS_BUILD_SCRIPT"
-rg -q 'simctl launch --terminate-running-process' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'visionos-simulator\.sh.*create' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'visionos-simulator\.sh.*install' "$VISIONOS_BUILD_SCRIPT"
+rg -q 'visionos-simulator\.sh.*launch' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'launchctl procinfo' "$VISIONOS_BUILD_SCRIPT"
 rg -q 'native visionOS builds require CMake 3\.28' "$VISIONOS_BUILD_SCRIPT"
 VISIONOS_ACCEPTANCE_SCRIPT="$ROOT_DIR/scripts/accept-visionos.sh"
 rg -q 'build-visionos-shell\.sh' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -q 'verify-visionos-bundle\.sh' "$VISIONOS_ACCEPTANCE_SCRIPT"
-rg -q 'simctl launch --terminate-running-process' \
+rg -q 'visionos-simulator\.sh' \
   "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -q 'launchctl procinfo' "$VISIONOS_ACCEPTANCE_SCRIPT"
-rg -q 'simctl uninstall' "$VISIONOS_ACCEPTANCE_SCRIPT"
+rg -q 'SIMULATOR_SCRIPT.*uninstall' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -q 'plutil -convert json' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -Fq 'PEONPAD_VISIONOS_READY=1' "$VISIONOS_ACCEPTANCE_SCRIPT"
 rg -Fq 'PEONPAD_VISIONOS_READY=1' \
@@ -136,6 +137,18 @@ if rg -q -- '--target peonpad_sdl3_smoke' "$VISIONOS_ACCEPTANCE_SCRIPT"; then
 fi
 if rg -q 'SMOKE SHELL|NO GAMEPLAY' "$VISIONOS_ACCEPTANCE_SCRIPT"; then
   print -u2 "generic visionOS acceptance contains a smoke-only assertion"
+  exit 1
+fi
+if rg -q '\b(booted|Booted)\b' \
+    "$ROOT_DIR/scripts/build-vision-compat-simulator.sh" \
+    "$ROOT_DIR/scripts/build-visionos-shell.sh" \
+    "$ROOT_DIR/scripts/build-visionos-tabletop.sh"; then
+  print -u2 "visionOS build automation contains an ambiguous booted target"
+  exit 1
+fi
+if rg -q '\b(killall|pkill)\b' "$ROOT_DIR/scripts" "$ROOT_DIR/tests" \
+    --glob '!script-guardrails.sh'; then
+  print -u2 "visionOS automation contains forbidden name-based process termination"
   exit 1
 fi
 rg -q 'PEONPAD_VISIONOS_DEVICE_INSTALL' \
@@ -250,6 +263,7 @@ fi
 cmake -E remove_directory "$SIMCTL_TEST_ROOT"
 
 "$ROOT_DIR/tests/visionos-acceptance.sh"
+"$ROOT_DIR/tests/visionos-simulator-isolation.sh"
 
 # Native visionOS tabletop foundation: pure-logic gesture/board-manipulation/
 # directional-billboard-frame tests (fast, host-only, no Simulator needed),
@@ -533,8 +547,8 @@ rg -q 'source must be outside the repository' "$VISIONOS_STAGE_SCRIPT"
 rg -q 'git.*check-ignore' "$VISIONOS_STAGE_SCRIPT"
 
 # The inject script must use the data container (not the app bundle).
-rg -q 'get_app_container' "$VISIONOS_INJECT_SCRIPT"
-rg -Fq -- 'data 2>/dev/null' "$VISIONOS_INJECT_SCRIPT"
+rg -q 'visionos-simulator\.sh.*container' "$VISIONOS_INJECT_SCRIPT"
+rg -Fq -- '--kind data' "$VISIONOS_INJECT_SCRIPT"
 
 # The inject script must reject a missing staged directory with a clear message.
 rg -q 'staged game data not found' "$VISIONOS_INJECT_SCRIPT"

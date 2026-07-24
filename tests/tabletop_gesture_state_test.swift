@@ -462,13 +462,17 @@ func testTwoHandReleaseLeftLeavesRightHandStableDoesNotJump() {
 // MARK: - Unit billboard appearance: selection composes with direction
 
 func testUnitAppearanceQuadAlphaComposesWithSelection() {
-    expectNear(TabletopUnitAppearance.quadAlpha(selected: true), 1.0, "a selected unit's directional quad is fully opaque")
-    expectNear(TabletopUnitAppearance.quadAlpha(selected: false), 0.22, "a deselected unit's directional quad stays dim")
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: true), 0.9, "a selected fallback marker remains visible")
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: false), 0.9, "a deselected fallback marker remains visible")
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: true, hasRealSprite: true), 1.0,
+               "selected real sprite is fully opaque")
+    expectNear(TabletopUnitAppearance.quadAlpha(selected: false, hasRealSprite: true), 1.0,
+               "deselected real sprite is fully opaque")
 }
 
 func testUnitAppearanceBodyAlphaComposesWithSelection() {
-    expectNear(TabletopUnitAppearance.bodyAlpha(selected: true), 0.5, "a selected unit's cylindrical body brightens")
-    expectNear(TabletopUnitAppearance.bodyAlpha(selected: false), 0.22, "a deselected unit's cylindrical body stays dim")
+    expectNear(TabletopUnitAppearance.bodyAlpha(selected: true), 0.62, "a selected fallback marker remains visible")
+    expectNear(TabletopUnitAppearance.bodyAlpha(selected: false), 0.62, "a deselected fallback marker remains visible")
 }
 
 func testUnitAppearanceIsIndependentOfDirectionalResolution() {

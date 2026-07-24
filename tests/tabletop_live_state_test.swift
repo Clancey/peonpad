@@ -266,6 +266,36 @@ func testReconcilerDetectsAnimationFrameChange() {
            "position is NOT flagged when only the sprite frame changed")
 }
 
+func testReconcilerDetectsUnitKindAndDescriptorChanges() {
+    var before = TabletopGameplaySnapshot.demo()
+    let id = before.units[0].id
+    before.units[0].kind = "unit-footman"
+    before.assets = TabletopAssetCatalog(unitTypes: [
+        "unit-footman": TabletopUnitSpriteInfo(
+            spritePath: "graphics/human/units/footman.png",
+            frameWidth: 72, frameHeight: 72, numDirections: 5, flip: true)
+    ])
+
+    var kindChanged = before
+    kindChanged.units[0].kind = "unit-town-hall"
+    kindChanged.assets?.unitTypes["unit-town-hall"] = TabletopUnitSpriteInfo(
+        spritePath: "graphics/human/buildings/town_hall.png",
+        frameWidth: 128, frameHeight: 128, numDirections: 1, flip: false,
+        renderCategory: .building, footprintWidth: 4, footprintHeight: 4)
+    let kindDiff = TabletopBoardReconciler.diff(from: before, to: kindChanged)
+    expect(kindDiff.updatedUnits.contains(where: {
+        $0.id == id && $0.renderMetadataChanged
+    }), "unit reuse with a new kind replaces render geometry and request identity")
+
+    var descriptorChanged = before
+    descriptorChanged.assets?.unitTypes["unit-footman"]?.spritePath =
+        "graphics/human/units/footman-v2.png"
+    let descriptorDiff = TabletopBoardReconciler.diff(from: before, to: descriptorChanged)
+    expect(descriptorDiff.updatedUnits.contains(where: {
+        $0.id == id && $0.renderMetadataChanged
+    }), "sprite path change replaces render geometry and invalidates async requests")
+}
+
 func testReconcilerDetectsTerrainGraphicIndexChange() {
     let before = TabletopGameplaySnapshot.demo()
     var after = before
@@ -569,6 +599,7 @@ struct TabletopLiveStateTestRunner {
         testReconcilerDetectsHPChange()
         testReconcilerDetectsOwnerChange()
         testReconcilerDetectsAnimationFrameChange()
+        testReconcilerDetectsUnitKindAndDescriptorChanges()
         testReconcilerDetectsTerrainGraphicIndexChange()
         testReconcilerDetectsTerrainTileIndexChange()
         testReconcilerDetectsSelectionChange()

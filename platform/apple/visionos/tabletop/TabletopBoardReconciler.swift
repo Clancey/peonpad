@@ -28,6 +28,9 @@ public struct TabletopUnitDiff: Equatable {
     /// re-cropping even when its logical facing/position did not change (e.g. a
     /// walk/attack animation advancing in place).
     public let frameChanged: Bool
+    /// Unit kind or its sprite descriptor changed. The entity must be replaced
+    /// because category/footprint geometry and async sprite identity may differ.
+    public let renderMetadataChanged: Bool
     /// The unit's presence in the selection changed — the highlight needs
     /// to be toggled.
     public let selectionChanged: Bool
@@ -121,12 +124,15 @@ public enum TabletopBoardReconciler {
             let ownerChanged = old.owner != unit.owner
             let frameChanged = old.spriteFrame != unit.spriteFrame
                 || old.spriteMirror != unit.spriteMirror
+            let oldSprite = previous.assets?.sprite(forUnitKind: old.kind)
+            let newSprite = next.assets?.sprite(forUnitKind: unit.kind)
+            let renderMetadataChanged = old.kind != unit.kind || oldSprite != newSprite
             let wasSelected = previous.selection.selectedUnitID == unit.id
             let isSelected  = next.selection.selectedUnitID == unit.id
             let selChanged  = wasSelected != isSelected
 
             if posChanged || facingChanged || hpChanged || ownerChanged
-                || frameChanged || selChanged {
+                || frameChanged || renderMetadataChanged || selChanged {
                 updated.append(TabletopUnitDiff(
                     id: unit.id,
                     positionChanged: posChanged,
@@ -134,6 +140,7 @@ public enum TabletopBoardReconciler {
                     hpChanged: hpChanged,
                     ownerChanged: ownerChanged,
                     frameChanged: frameChanged,
+                    renderMetadataChanged: renderMetadataChanged,
                     selectionChanged: selChanged
                 ))
             }

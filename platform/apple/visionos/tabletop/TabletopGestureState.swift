@@ -554,33 +554,20 @@ public enum TabletopViewerAzimuth {
     }
 }
 
-/// The pure alpha math behind a unit billboard's appearance. The per-frame
-/// directional-frame update (which re-tints the quad to the resolved
-/// canonical hue) and the right-hand selection highlight (which dims/
-/// brightens that same quad, and the cylindrical body) both need to compose
-/// into a single material rather than each independently overwriting the
-/// other -- otherwise whichever one last touched the material wins and the
-/// other's visual state silently disappears. Centralizing the alpha
-/// resolution here keeps it framework-independent and unit testable, and
-/// keeps the two call sites (selection changes, once per frame) from ever
-/// fighting over the same material again.
+/// The pure alpha math behind unit appearance. Selection is communicated by
+/// the dedicated ring; real art remains fully opaque in either state, while
+/// fallback markers remain deliberately visible rather than becoming a
+/// misleading translucent silhouette.
 public enum TabletopUnitAppearance: Equatable {
-    public static let quadSelectedAlpha: Double = 1.0
-    public static let quadDeselectedAlpha: Double = 0.22
+    public static let spriteAlpha: Double = 1.0
+    public static let fallbackQuadAlpha: Double = 0.9
+    public static let fallbackBodyAlpha: Double = 0.62
 
-    public static let bodySelectedAlpha: Double = 0.5
-    public static let bodyDeselectedAlpha: Double = 0.22
-
-    /// Alpha for the small directional-facing quad, given only the current
-    /// selection state -- independent of, and composable with, whatever
-    /// canonical hue the current directional-frame resolution has picked.
-    public static func quadAlpha(selected: Bool) -> Double {
-        selected ? quadSelectedAlpha : quadDeselectedAlpha
+    public static func quadAlpha(selected _: Bool, hasRealSprite: Bool = false) -> Double {
+        hasRealSprite ? spriteAlpha : fallbackQuadAlpha
     }
 
-    /// Alpha for the translucent cylindrical body, given only the current
-    /// selection state.
-    public static func bodyAlpha(selected: Bool) -> Double {
-        selected ? bodySelectedAlpha : bodyDeselectedAlpha
+    public static func bodyAlpha(selected _: Bool) -> Double {
+        fallbackBodyAlpha
     }
 }

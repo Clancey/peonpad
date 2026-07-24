@@ -323,6 +323,20 @@ struct TabletopBoardView: View {
             guard let live = liveUnitsByID[unitDiff.id],
                   let unit = next.units.first(where: { $0.id == unitDiff.id }) else { continue }
 
+            if unitDiff.renderMetadataChanged {
+                live.root.removeFromParent()
+                materialProvider?.removeUnitOutcome(unitID: unit.id)
+                let replacement = TabletopBoardBuilder.addUnit(
+                    unit, to: boardRoot, snapshot: next, fit: fit,
+                    materialProvider: materialProvider)
+                let fp = footprint(for: unit, in: next)
+                replacement.root.position = unitPosition(
+                    fit: fit, tileX: unit.tileX, tileZ: unit.tileZ,
+                    footprintWidth: fp.w, footprintHeight: fp.h)
+                liveUnitsByID[unit.id] = replacement
+                continue
+            }
+
             if unitDiff.positionChanged {
                 let fp = footprint(for: unit, in: next)
                 live.root.position = unitPosition(
@@ -330,7 +344,7 @@ struct TabletopBoardView: View {
                     footprintWidth: fp.w, footprintHeight: fp.h)
             }
             if unitDiff.facingChanged {
-                live.currentFacingRadians = unit.facingRadians
+                live.updateFacingRadians(unit.facingRadians)
             }
             if unitDiff.ownerChanged {
                 live.updateOwnerTint(TabletopBoardBuilder.ownerTint(owner: unit.owner))
@@ -354,6 +368,7 @@ struct TabletopBoardView: View {
             if let live = liveUnitsByID.removeValue(forKey: id) {
                 live.root.removeFromParent()
             }
+            materialProvider?.removeUnitOutcome(unitID: id)
         }
 
         previousSnapshot = next
@@ -582,4 +597,3 @@ struct TabletopBoardView: View {
 private extension SIMD2 where Scalar == Float {
     var length: Float { (x * x + y * y).squareRoot() }
 }
-

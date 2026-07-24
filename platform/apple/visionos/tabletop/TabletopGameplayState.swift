@@ -181,7 +181,7 @@ public struct TabletopGameplaySelection: Codable, Equatable {
 /// discriminator lets the material provider resolve `imagePath` against the
 /// correct root explicitly, rather than inferring placement from a filename
 /// convention.
-public enum TabletopTilesetPathRoot: UInt8, Codable, Equatable, Sendable {
+public enum TabletopTilesetPathRoot: UInt8, Codable, Equatable, Hashable, Sendable {
     /// Relative to the read-only staged game-data root (the engine's `-d`).
     case dataRoot = 0
     /// Relative to the writable user/cache root (the engine's `-u`).
@@ -245,7 +245,7 @@ public struct TabletopTilesetInfo: Codable, Equatable, Sendable {
 /// How the render layer presents a unit type (mirrors `EngineRenderCategory`,
 /// ABI v4). Buildings/resources render at their tile footprint and stay
 /// map-oriented; mobile units get camera-relative directional sprites.
-public enum TabletopRenderCategory: String, Codable, Equatable {
+public enum TabletopRenderCategory: String, Codable, Equatable, Hashable, Sendable {
     case mobile
     case building
     case resource

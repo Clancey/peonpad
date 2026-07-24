@@ -2,7 +2,7 @@
 //
 // Builds the procedural, non-proprietary tabletop content: the board
 // surface, a fog-of-war overlay that stays glued to the board plane, and a
-// handful of upright transparent "cylindrical billboard" test units. None of
+// handful of upright procedural fallback markers. None of
 // this depends on real Warcraft II art or data -- it is only a stand-in to
 // prove the spatial board/billboard/gesture mechanics.
 import RealityKit
@@ -12,8 +12,8 @@ import UIKit
 /// `UnlitMaterial(color:)` does not automatically read the alpha component of
 /// the given `UIColor` into the material's blending mode -- passing a
 /// translucent color renders fully opaque unless blending is set explicitly.
-/// Every "transparent" surface in this file (cylindrical unit bodies, the
-/// fog-of-war plane, dimmed/deselected billboards) goes through this helper
+/// Every translucent surface in this file (fallback markers, the fog-of-war
+/// plane, and shadows) goes through this helper
 /// so alpha actually takes visual effect.
 func translucentUnlitMaterial(_ color: UIColor) -> UnlitMaterial {
     var material = UnlitMaterial(color: color)
@@ -93,8 +93,8 @@ enum TabletopTestRoster {
 }
 
 /// A live RealityKit unit built from a `TabletopUnitSpec`: the invisible hit
-/// box (also the unit root, positioned at the tile's feet), the transparent
-/// cylindrical body, and the inner quad that is re-oriented and re-tinted
+/// box (also the unit root, positioned at the tile's feet), an intentional
+/// opaque fallback marker, and the inner quad that is re-oriented and re-tinted
 /// every frame to face the viewer while preserving the unit's world-fixed
 /// logical facing.
 final class TabletopLiveUnit {
@@ -118,8 +118,11 @@ final class TabletopLiveUnit {
     /// is stored here and drawn on the quad instead of the procedural canonical
     /// hue. The engine already baked facing + animation + mirror into the
     /// texture, so the per-frame directional re-tint/mirror is skipped; only the
-    /// viewer-facing yaw and selection alpha are still applied.
+    /// viewer-facing yaw is still applied. Selection uses the separate ring.
     private var spriteMaterial: UnlitMaterial?
+    private var spriteRequestGeneration: UInt64 = 0
+    private var expectedSpriteIdentity: TabletopUnitSpriteRequestIdentity?
+    private var displayedSpriteIdentity: TabletopUnitSpriteRequestIdentity?
 
     /// Descriptor + latest engine state for a *directional* real sprite,
     /// retained so the per-frame billboard pass can recompute the
@@ -127,7 +130,7 @@ final class TabletopLiveUnit {
     /// the board is orbited, without rescanning the snapshot every frame. `nil`
     /// for procedural units, non-directional sprites (buildings/resources), or
     /// before a sprite descriptor has been resolved.
-    struct DirectionalSprite {
+    struct DirectionalSprite: Equatable {
         var sprite: TabletopUnitSpriteInfo
         var unit: TabletopGameplayUnit
     }
@@ -140,7 +143,7 @@ final class TabletopLiveUnit {
     /// increasing clockwise). Starts from `spec.facingRadians` and may be
     /// updated incrementally from engine snapshots without recreating the
     /// entity. Read by `applyDirectionalFrame` every SceneEvents.Update tick.
-    var currentFacingRadians: Double
+    private(set) var currentFacingRadians: Double
 
     /// The unit's current owner/team tint. Updated when an engine snapshot
     /// reports an ownership change; drives both body and quad materials.
@@ -196,11 +199,13 @@ final class TabletopLiveUnit {
         root.components.set(HoverEffectComponent())
 
         let body = ModelEntity(
-            mesh: .generateCylinder(height: unitHeight, radius: unitRadius),
-            materials: [translucentUnlitMaterial(spec.tint.withAlphaComponent(0.22))]
+            mesh: .generateBox(size: SIMD3<Float>(
+                unitRadius * 1.4, unitHeight * 0.58, unitRadius * 1.4)),
+            materials: [translucentUnlitMaterial(
+                spec.tint.withAlphaComponent(CGFloat(TabletopUnitAppearance.fallbackBodyAlpha)))]
         )
         body.name = root.name + ".body"
-        body.position = [0, unitHeight / 2, 0]
+        body.position = [0, unitHeight * 0.29, 0]
         root.addChild(body)
 
         let quad = ModelEntity(
@@ -241,11 +246,8 @@ final class TabletopLiveUnit {
         self.mirroredMaterial = translucentUnlitMaterial(spec.tint.withAlphaComponent(0.85))
     }
 
-    /// Highlights or un-highlights this unit to give visible feedback for
-    /// the right-hand selection command intent. Composes with whatever
-    /// directional hue is currently resolved rather than overwriting it, so
-    /// the next per-frame `applyDirectionalFrame` call doesn't need to
-    /// (re)decide the selection alpha itself.
+    /// Highlights or un-highlights this unit with the dedicated selection ring.
+    /// Real art and fallback markers retain their normal opacity.
     func setSelected(_ selected: Bool) {
         isSelected = selected
         selectionRing.isEnabled = selected
@@ -271,17 +273,82 @@ final class TabletopLiveUnit {
         applyBodyMaterial()
     }
 
+    /// Applies a new engine facing and immediately invalidates any directional
+    /// request derived from the prior angle. Compatible displayed art remains
+    /// visible until the next scene update requests the replacement frame.
+    func updateFacingRadians(_ facingRadians: Double) {
+        guard currentFacingRadians != facingRadians else { return }
+        currentFacingRadians = facingRadians
+        if hasDirectionalSprite {
+            spriteRequestGeneration &+= 1
+            expectedSpriteIdentity = nil
+            lastResolvedDirection = nil
+        }
+    }
+
     /// Applies a real Wargus sprite material to the quad (from the material
-    /// provider). Composes with the current selection alpha. Passing a new
-    /// material for a changed engine frame swaps the texture without recreating
+    /// provider). Passing a new material for a changed engine frame swaps the
+    /// texture without recreating
     /// the entity; passing repeatedly with the same frame is cheap (the
     /// provider caches the decoded texture).
-    func setSpriteMaterial(_ material: UnlitMaterial) {
+    @discardableResult
+    func setSpriteMaterial(
+        _ material: UnlitMaterial,
+        identity: TabletopUnitSpriteRequestIdentity,
+        generation: UInt64
+    ) -> Bool {
+        guard generation == spriteRequestGeneration,
+              identity == expectedSpriteIdentity else { return false }
         spriteMaterial = material
+        displayedSpriteIdentity = identity
+        body.isEnabled = false
         // A real sprite bakes its own mirror into the texture, so clear any
         // procedural horizontal flip left on the quad.
         quad.scale.x = abs(quad.scale.x)
         applyQuadMaterial()
+        return true
+    }
+
+    func beginSpriteRequest(
+        identity: TabletopUnitSpriteRequestIdentity
+    ) -> (generation: UInt64, displaysFallback: Bool) {
+        spriteRequestGeneration &+= 1
+        let canKeepCurrentFrame = spriteMaterial != nil
+            && displayedSpriteIdentity.map {
+                $0.unitID == identity.unitID
+                    && $0.unitKind == identity.unitKind
+                    && $0.renderCategory == identity.renderCategory
+                    && $0.relativePath == identity.relativePath
+                    && $0.owner == identity.owner
+                    && $0.root == identity.root
+            } == true
+        expectedSpriteIdentity = identity
+        if !canKeepCurrentFrame {
+            spriteMaterial = nil
+            body.isEnabled = true
+            applyQuadMaterial()
+        }
+        return (spriteRequestGeneration, !canKeepCurrentFrame)
+    }
+
+    @discardableResult
+    func setSpriteFallback(
+        identity: TabletopUnitSpriteRequestIdentity? = nil,
+        generation: UInt64? = nil
+    ) -> Bool {
+        if let identity, let generation {
+            guard generation == spriteRequestGeneration,
+                  identity == expectedSpriteIdentity else { return false }
+        } else {
+            spriteRequestGeneration &+= 1
+            expectedSpriteIdentity = nil
+        }
+        spriteMaterial = nil
+        displayedSpriteIdentity = nil
+        body.isEnabled = true
+        applyQuadMaterial()
+        applyBodyMaterial()
+        return true
     }
 
     /// Records the descriptor + latest engine state for a directional real
@@ -290,6 +357,10 @@ final class TabletopLiveUnit {
     /// camera-relative reselection. Resets the last-resolved cache so the next
     /// per-frame pass always re-requests the correct frame.
     func setDirectionalSprite(_ state: DirectionalSprite?) {
+        if directionalSprite != state {
+            spriteRequestGeneration &+= 1
+            expectedSpriteIdentity = nil
+        }
         directionalSprite = state
         lastResolvedDirection = nil
     }
@@ -322,11 +393,11 @@ final class TabletopLiveUnit {
         return (d.unit, d.sprite, resolved.frame, resolved.mirror)
     }
 
-    /// Applies the current directional hue and the current selection alpha
-    /// to the quad in one material assignment, so neither `setSelected` nor
-    /// `applyDirectionalFrame` ever clobbers the other's contribution.
+    /// Applies either fully opaque real art or the clearly visible procedural
+    /// fallback hue to the quad.
     private func applyQuadMaterial() {
-        let alpha = TabletopUnitAppearance.quadAlpha(selected: isSelected)
+        let alpha = TabletopUnitAppearance.quadAlpha(
+            selected: isSelected, hasRealSprite: spriteMaterial != nil)
         if let spriteMaterial {
             var material = spriteMaterial
             material.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
@@ -336,9 +407,7 @@ final class TabletopLiveUnit {
         quad.model?.materials = [translucentUnlitMaterial(currentHue.withAlphaComponent(CGFloat(alpha)))]
     }
 
-    /// Applies the current selection alpha to the cylindrical body using the
-    /// current owner tint. The body has no directional hue of its own, so
-    /// this only needs selection state and the current owner colour.
+    /// Applies the intentional fallback marker material using the owner tint.
     private func applyBodyMaterial() {
         let alpha = TabletopUnitAppearance.bodyAlpha(selected: isSelected)
         body.model?.materials = [translucentUnlitMaterial(currentOwnerTint.withAlphaComponent(CGFloat(alpha)))]
@@ -389,12 +458,9 @@ final class TabletopLiveUnit {
         if spriteMaterial != nil { return }
 
         // Mirroring is represented procedurally (no sprite art is embedded):
-        // a horizontally-flipped scale plus a dimmer tint stands in for
+        // a horizontally-flipped scale plus a directional tint stands in for
         // "this canonical frame is being mirrored", while the hue always
-        // reflects the resolved canonical direction. The hue is stored and
-        // composed with the current selection alpha via applyQuadMaterial()
-        // rather than assigned directly, so this per-frame call can never
-        // erase whatever setSelected last decided.
+        // reflects the resolved canonical direction.
         currentHue = TabletopTestRoster.canonicalTint(resolution.canonical, base: spec.tint)
         quad.scale.x = resolution.mirrored ? -abs(quad.scale.x) : abs(quad.scale.x)
         applyQuadMaterial()
@@ -611,8 +677,21 @@ enum TabletopBoardBuilder {
         snapshot: TabletopGameplaySnapshot,
         materialProvider: WargusTabletopMaterialProvider?
     ) {
-        guard let materialProvider,
-              let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind) else { return }
+        guard let materialProvider else {
+            liveUnit.setSpriteFallback()
+            return
+        }
+        let sprite = snapshot.assets?.sprite(forUnitKind: unit.kind)
+        guard let sprite else {
+            liveUnit.setSpriteFallback()
+            materialProvider.recordUnitFallback(
+                context: .init(
+                    unitID: unit.id, unitKind: unit.kind,
+                    renderCategory: .mobile, relativePath: "",
+                    frame: unit.spriteFrame ?? 0, root: .dataRoot),
+                reason: .catalogMiss)
+            return
+        }
         if sprite.numDirections > 1 {
             // Directional unit: the per-frame camera-relative pass owns the
             // quad texture. Record fresh engine state (facing/frame/owner) and
@@ -621,9 +700,9 @@ enum TabletopBoardBuilder {
             return
         }
         liveUnit.setDirectionalSprite(nil)
-        materialProvider.unitMaterial(unit: unit, sprite: sprite) { [weak liveUnit] material in
-            liveUnit?.setSpriteMaterial(material)
-        }
+        requestUnitSprite(
+            liveUnit, unit: unit, sprite: sprite,
+            materialProvider: materialProvider)
     }
 
     /// Per-frame pass that requests the camera-relative directional sprite for
@@ -641,11 +720,52 @@ enum TabletopBoardBuilder {
         for liveUnit in liveUnits {
             guard let resolved = liveUnit.cameraRelativeSpriteFrame(
                 viewerAzimuthRadians: viewerAzimuthRadians) else { continue }
-            materialProvider.unitMaterial(
-                unit: resolved.unit, sprite: resolved.sprite,
-                frameOverride: resolved.frame, mirrorOverride: resolved.mirror
-            ) { [weak liveUnit] material in
-                liveUnit?.setSpriteMaterial(material)
+            requestUnitSprite(
+                liveUnit, unit: resolved.unit, sprite: resolved.sprite,
+                frameOverride: resolved.frame, mirrorOverride: resolved.mirror,
+                materialProvider: materialProvider)
+        }
+    }
+
+    @MainActor
+    private static func requestUnitSprite(
+        _ liveUnit: TabletopLiveUnit,
+        unit: TabletopGameplayUnit,
+        sprite: TabletopUnitSpriteInfo,
+        frameOverride: Int? = nil,
+        mirrorOverride: Bool? = nil,
+        materialProvider: WargusTabletopMaterialProvider
+    ) {
+        switch TabletopUnitSpriteRequestResolver.resolve(
+            unit: unit, sprite: sprite,
+            frameOverride: frameOverride, mirrorOverride: mirrorOverride
+        ) {
+        case let .fallback(context, reason):
+            liveUnit.setSpriteFallback()
+            materialProvider.recordUnitFallback(context: context, reason: reason)
+        case let .real(request):
+            let token = liveUnit.beginSpriteRequest(identity: request.identity)
+            if token.displaysFallback {
+                materialProvider.recordUnitPendingFallback(
+                    context: request.diagnosticContext)
+            }
+            materialProvider.unitMaterial(request: request) { [weak liveUnit] result in
+                guard let liveUnit else { return }
+                switch result {
+                case let .success(material):
+                    if liveUnit.setSpriteMaterial(
+                        material, identity: request.identity, generation: token.generation
+                    ) {
+                        materialProvider.recordUnitReal(context: request.diagnosticContext)
+                    }
+                case let .failure(reason):
+                    if liveUnit.setSpriteFallback(
+                        identity: request.identity, generation: token.generation
+                    ) {
+                        materialProvider.recordUnitFallback(
+                            context: request.diagnosticContext, reason: reason)
+                    }
+                }
             }
         }
     }

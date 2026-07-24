@@ -27,6 +27,8 @@ public struct EngineLaunchConfig: Equatable {
     /// Map to load, relative to `dataPath` (e.g. "maps/…/scenario.smp").
     /// When nil the engine boots to its menu (not used for automated launch).
     public var scenario: String?
+    /// Player name shown by the engine. Empty names omit the `-N` option.
+    public var playerName: String
     /// argv[0] the engine sees; only affects logging/usage text.
     public var executableName: String
 
@@ -34,11 +36,13 @@ public struct EngineLaunchConfig: Equatable {
         dataPath: String,
         userPath: String,
         scenario: String? = nil,
+        playerName: String = "",
         executableName: String = "peonpad-tabletop"
     ) {
         self.dataPath = dataPath
         self.userPath = userPath
         self.scenario = scenario
+        self.playerName = playerName
         self.executableName = executableName
     }
 }
@@ -87,6 +91,9 @@ public enum EngineStartupPlanner {
     /// Builds the engine command-line argument vector.
     public static func arguments(for config: EngineLaunchConfig) -> [String] {
         var args = [config.executableName, "-d", config.dataPath, "-u", config.userPath]
+        if !config.playerName.isEmpty {
+            args.append(contentsOf: ["-N", config.playerName])
+        }
         if let scenario = config.scenario, !scenario.isEmpty {
             args.append(scenario)
         }

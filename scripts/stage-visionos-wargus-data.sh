@@ -27,8 +27,9 @@ The source directory must contain:
   maps/                     Map directory
   sounds/                   Sound directory
 
-Proprietary installer archives (.mpq, install.exe) and macOS metadata
-(.DS_Store) are excluded from the staged copy. The destination is always
+Proprietary installer archives (.mpq, install.exe) and platform metadata
+(.DS_Store, Thumbs.db, desktop.ini) are excluded from the staged copy. Symbolic
+links are rejected so the staged tree cannot reference content outside it.
 inside build/ which is git-ignored; no game assets ever enter tracked paths.
 
 To inject the staged data into a running visionOS simulator app container
@@ -77,6 +78,12 @@ case "$SOURCE_DIR/" in
     ;;
 esac
 
+SYMLINK_HIT=$(find "$SOURCE_DIR" -type l -print -quit)
+[[ -z "$SYMLINK_HIT" ]] || {
+  print -u2 "invalid extracted Wargus data; symbolic links are not allowed: $SYMLINK_HIT"
+  exit 1
+}
+
 # ── Stage to the ignored build directory ──────────────────────────────────────
 
 mkdir -p "$DEST_DIR"
@@ -84,6 +91,8 @@ rsync -a --delete --delete-excluded \
   --exclude '*.[Mm][Pp][Qq]' \
   --exclude '[Ii][Nn][Ss][Tt][Aa][Ll][Ll].[Ee][Xx][Ee]' \
   --exclude .DS_Store \
+  --exclude Thumbs.db \
+  --exclude desktop.ini \
   "$SOURCE_DIR/" "$DEST_DIR/"
 
 # ── Sanity-check the destination ──────────────────────────────────────────────

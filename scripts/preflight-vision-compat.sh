@@ -30,7 +30,6 @@ XR_SIMULATOR_SDK=$(xcrun --sdk xrsimulator --show-sdk-path) || {
   print -u2 "visionOS Simulator SDK is unavailable"
   exit 1
 }
-VISION_UDID=$("$SCRIPT_DIR/find-vision-pro-simulator.sh")
 
 cmake --fresh -S "$ROOT_DIR" -B "$BUILD_DIR" -G "Unix Makefiles" \
   -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
@@ -51,7 +50,7 @@ print
 print "Vision compatibility preflight passed:"
 print "  app SDK:      $IPHONE_SIMULATOR_SDK"
 print "  runtime SDK:  $XR_SIMULATOR_SDK"
-print "  destination:  platform=visionOS Simulator,id=$VISION_UDID"
+print "  destination:  no simulator selected or modified"
 print "  binary:       arm64 iOS Simulator (platform 7)"
 print
 print "This validates the Designed-for-iPad simulator toolchain, not Vision Pro hardware."

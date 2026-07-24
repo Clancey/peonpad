@@ -14,6 +14,7 @@ if [[ "$TEST_MODE" == 0 && \
     ( -n "${PEONPAD_VISIONOS_BUILD_SCRIPT:-}" \
       || -n "${PEONPAD_VISIONOS_VERIFY_SCRIPT:-}" \
       || -n "${PEONPAD_VISIONOS_FIND_SCRIPT:-}" \
+      || -n "${PEONPAD_VISIONOS_SIMULATOR_SCRIPT:-}" \
       || -n "${PEONPAD_VISIONOS_HOST_ACCEPTANCE_SCRIPT:-}" \
       || -n "${PEONPAD_VISIONOS_HOST_CTEST_COUNT:-}" \
       || -n "${PEONPAD_VISIONOS_ACCEPTANCE_BUILD_ROOT:-}" \
@@ -29,12 +30,14 @@ fi
 BUILD_SCRIPT=$SCRIPT_DIR/build-visionos-shell.sh
 VERIFY_SCRIPT=$SCRIPT_DIR/verify-visionos-bundle.sh
 FIND_SCRIPT=$SCRIPT_DIR/find-vision-pro-simulator.sh
+SIMULATOR_SCRIPT=$SCRIPT_DIR/visionos-simulator.sh
 READY_TOKEN='PEONPAD_VISIONOS_READY=1'
 RESIDENCY_INTERVAL=2
 if [[ "$TEST_MODE" == 1 ]]; then
   BUILD_SCRIPT=${PEONPAD_VISIONOS_BUILD_SCRIPT:-$BUILD_SCRIPT}
   VERIFY_SCRIPT=${PEONPAD_VISIONOS_VERIFY_SCRIPT:-$VERIFY_SCRIPT}
   FIND_SCRIPT=${PEONPAD_VISIONOS_FIND_SCRIPT:-$FIND_SCRIPT}
+  SIMULATOR_SCRIPT=${PEONPAD_VISIONOS_SIMULATOR_SCRIPT:-$SIMULATOR_SCRIPT}
   RESIDENCY_INTERVAL=${PEONPAD_VISIONOS_RESIDENCY_INTERVAL:-0}
 fi
 
@@ -42,10 +45,12 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/accept-visionos.sh <xrsimulator|xros|all>
   [--keep-evidence] [--evidence-dir PATH] [--result PATH]
+  [--simulator-udid UDID --allow-user-simulator]
 
 Runs fail-fast native visionOS acceptance. Evidence and the JSON result must
 remain outside the repository. Evidence is removed unless --keep-evidence is
-passed; the JSON result is always retained.
+passed; the JSON result is always retained. Simulator automation creates a
+disposable PeonPad-owned Vision Pro by default and never foregrounds Simulator.
 EOF
 }
 
@@ -71,6 +76,8 @@ esac
 KEEP_EVIDENCE=0
 EVIDENCE_DIR=""
 RESULT_PATH=""
+REQUESTED_VISION_UDID=""
+ALLOW_USER_SIMULATOR=0
 while (( $# > 0 )); do
   case "$1" in
     --keep-evidence)
@@ -83,6 +90,17 @@ while (( $# > 0 )); do
       }
       EVIDENCE_DIR=${2:A}
       shift
+      ;;
+    --simulator-udid)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      REQUESTED_VISION_UDID=$2
+      shift
+      ;;
+    --allow-user-simulator)
+      ALLOW_USER_SIMULATOR=1
       ;;
     --result)
       (( $# >= 2 )) || {
@@ -99,6 +117,22 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if [[ -z "$REQUESTED_VISION_UDID" &&
+    -n "${PEONPAD_VISION_SIMULATOR_UDID:-}" ]]; then
+  REQUESTED_VISION_UDID=$PEONPAD_VISION_SIMULATOR_UDID
+fi
+if [[ "${PEONPAD_VISIONOS_ALLOW_USER_SIMULATOR:-0}" == 1 ]]; then
+  ALLOW_USER_SIMULATOR=1
+fi
+if [[ -n "$REQUESTED_VISION_UDID" && $ALLOW_USER_SIMULATOR -ne 1 ]]; then
+  print -u2 "a user-selected simulator requires --allow-user-simulator"
+  exit 2
+fi
+if [[ -z "$REQUESTED_VISION_UDID" && $ALLOW_USER_SIMULATOR -eq 1 ]]; then
+  print -u2 "--allow-user-simulator requires --simulator-udid"
+  exit 2
+fi
 
 [[ "$RESIDENCY_INTERVAL" == <-> ]] || {
   print -u2 "PEONPAD_VISIONOS_RESIDENCY_INTERVAL must be a non-negative integer"
@@ -208,13 +242,19 @@ XROS_BUNDLE_SIGNATURE=""
 SIMULATOR_MODEL=""
 SIMULATOR_RUNTIME=""
 SIMULATOR_STATE=""
+SIMULATOR_NAME=""
 VISION_UDID=""
 FRESH_PID=0
 RELAUNCH_PID=0
 RESIDENCY_CHECKS=0
 SCREENSHOT_PATH="$EVIDENCE_DIR/simulator.png"
 INSTALLED_APP=0
+OWNED_SIMULATOR_STATE=""
+SIMULATOR_CREATED=0
+SIMULATOR_WAS_OWNED=0
 FINISHING=0
+typeset -a SIMULATOR_TARGET_ARGS
+SIMULATOR_TARGET_ARGS=()
 
 begin_check() {
   CURRENT_CHECK=$1
@@ -286,11 +326,13 @@ write_result() {
   local passed_bool=false
   local retained_bool=false
   local test_bool=false
+  local owned_simulator_bool=false
   local failed_count=$(( TEST_TOTAL - TEST_PASSED ))
   local generated_at
   [[ "$STATUS" == pass ]] && passed_bool=true
   [[ -d "$EVIDENCE_DIR" ]] && retained_bool=true
   [[ "$TEST_MODE" == 1 ]] && test_bool=true
+  (( SIMULATOR_WAS_OWNED )) && owned_simulator_bool=true
   generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ) || return 1
 
   if ! {
@@ -362,12 +404,16 @@ write_result() {
       "$result_plist" &&
     plutil -insert lanes.xrsimulator.simulator.model -string \
       "$SIMULATOR_MODEL" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.name -string \
+      "$SIMULATOR_NAME" "$result_plist" &&
     plutil -insert lanes.xrsimulator.simulator.runtime -string \
       "$SIMULATOR_RUNTIME" "$result_plist" &&
     plutil -insert lanes.xrsimulator.simulator.udid -string \
       "$VISION_UDID" "$result_plist" &&
     plutil -insert lanes.xrsimulator.simulator.state -string \
       "$SIMULATOR_STATE" "$result_plist" &&
+    plutil -insert lanes.xrsimulator.simulator.owned -bool \
+      "$owned_simulator_bool" "$result_plist" &&
     plutil -insert lanes.xrsimulator.fresh_pid -integer \
       "$FRESH_PID" "$result_plist" &&
     plutil -insert lanes.xrsimulator.relaunch_pid -integer \
@@ -423,14 +469,27 @@ cleanup() {
   local cleanup_failed=0
 
   if (( INSTALLED_APP )) && [[ -n "$VISION_UDID" && -n "$SIM_BUNDLE_ID" ]]; then
-    if ! xcrun simctl uninstall "$VISION_UDID" "$SIM_BUNDLE_ID" \
+    "$SIMULATOR_SCRIPT" terminate --udid "$VISION_UDID" \
+      --bundle "$SIM_BUNDLE_ID" "${SIMULATOR_TARGET_ARGS[@]}" \
+      >/dev/null 2>&1 || :
+    if ! "$SIMULATOR_SCRIPT" uninstall --udid "$VISION_UDID" \
+        --bundle "$SIM_BUNDLE_ID" "${SIMULATOR_TARGET_ARGS[@]}" \
         >/dev/null 2>&1; then
       cleanup_failed=1
-    elif xcrun simctl get_app_container "$VISION_UDID" "$SIM_BUNDLE_ID" app \
-        >/dev/null 2>&1; then
+    elif "$SIMULATOR_SCRIPT" container --udid "$VISION_UDID" \
+        --bundle "$SIM_BUNDLE_ID" --kind app \
+        "${SIMULATOR_TARGET_ARGS[@]}" >/dev/null 2>&1; then
       cleanup_failed=1
     else
       INSTALLED_APP=0
+    fi
+  fi
+  if (( SIMULATOR_CREATED )); then
+    if "$SIMULATOR_SCRIPT" cleanup --state "$OWNED_SIMULATOR_STATE" \
+        >/dev/null 2>&1; then
+      SIMULATOR_CREATED=0
+    else
+      cleanup_failed=1
     fi
   fi
 
@@ -645,25 +704,38 @@ run_build_lane() {
 
 select_and_boot_simulator() {
   local details
-  begin_check "select an available Apple Vision Pro on visionOS"
-  details=$("$FIND_SCRIPT" --details 2>"$EVIDENCE_DIR/simulator-selection.log") ||
-    fail_check "Apple Vision Pro simulator selection failed"
-  IFS=$'\t' read -r VISION_UDID SIMULATOR_MODEL SIMULATOR_RUNTIME SIMULATOR_STATE \
-    <<< "$details"
-  [[ "$SIMULATOR_MODEL" == "Apple Vision Pro" \
-      && "$SIMULATOR_RUNTIME" == visionOS\ * \
-      && "$SIMULATOR_STATE" == (Booted|Shutdown) ]] ||
-    fail_check "simulator selection returned an invalid model, runtime, or state"
-  pass_check
-
-  if [[ "$SIMULATOR_STATE" == Shutdown ]]; then
-    run_logged "boot selected Apple Vision Pro simulator" \
-      "$EVIDENCE_DIR/simulator-boot.log" \
-      xcrun simctl boot "$VISION_UDID"
+  begin_check "acquire an explicit isolated Apple Vision Pro simulator"
+  if [[ -z "$REQUESTED_VISION_UDID" ]]; then
+    OWNED_SIMULATOR_STATE=$("$SIMULATOR_SCRIPT" create \
+      --label acceptance --owner-pid $$ \
+      2>"$EVIDENCE_DIR/simulator-selection.log") ||
+      fail_check "isolated Apple Vision Pro simulator creation failed"
+    SIMULATOR_CREATED=1
+    SIMULATOR_WAS_OWNED=1
+    SIMULATOR_TARGET_ARGS=(--state "$OWNED_SIMULATOR_STATE")
+    details=$("$SIMULATOR_SCRIPT" details \
+      --state "$OWNED_SIMULATOR_STATE") ||
+      fail_check "owned simulator metadata validation failed"
+    IFS=$'\t' read -r VISION_UDID SIMULATOR_NAME SIMULATOR_RUNTIME \
+      SIMULATOR_STATE <<< "$details"
+  else
+    VISION_UDID=$REQUESTED_VISION_UDID
+    SIMULATOR_TARGET_ARGS=(--allow-user-simulator)
+    "$SIMULATOR_SCRIPT" boot --udid "$VISION_UDID" \
+      "${SIMULATOR_TARGET_ARGS[@]}" \
+      >"$EVIDENCE_DIR/simulator-boot.log" 2>&1 ||
+      fail_check "explicitly opted-in Apple Vision Pro simulator boot failed"
+    details=$(PEONPAD_VISION_SIMULATOR_UDID="$VISION_UDID" \
+      "$FIND_SCRIPT" --details) ||
+      fail_check "explicit simulator metadata lookup failed"
+    IFS=$'\t' read -r VISION_UDID SIMULATOR_MODEL SIMULATOR_RUNTIME \
+      SIMULATOR_STATE <<< "$details"
+    SIMULATOR_NAME=$SIMULATOR_MODEL
   fi
-  run_logged "wait for Apple Vision Pro boot completion" \
-    "$EVIDENCE_DIR/simulator-bootstatus.log" \
-    xcrun simctl bootstatus "$VISION_UDID" -b
+  SIMULATOR_MODEL="Apple Vision Pro"
+  [[ "$SIMULATOR_RUNTIME" == visionOS\ * && "$SIMULATOR_STATE" == Booted ]] ||
+    fail_check "simulator acquisition returned invalid runtime or state"
+  pass_check
   SIMULATOR_STATE=Booted
 }
 
@@ -684,12 +756,13 @@ install_fresh_app() {
   local container
   run_logged "install freshly built simulator application" \
     "$EVIDENCE_DIR/simulator-install.log" \
-    xcrun simctl install "$VISION_UDID" "$SIM_APP"
+    "$SIMULATOR_SCRIPT" install --udid "$VISION_UDID" --app "$SIM_APP" \
+      "${SIMULATOR_TARGET_ARGS[@]}"
   INSTALLED_APP=1
 
   begin_check "installed simulator application matches the fresh bundle"
-  container=$(xcrun simctl get_app_container \
-    "$VISION_UDID" "$SIM_BUNDLE_ID" app)
+  container=$("$SIMULATOR_SCRIPT" container --udid "$VISION_UDID" \
+    --bundle "$SIM_BUNDLE_ID" --kind app "${SIMULATOR_TARGET_ARGS[@]}")
   [[ -d "$container" ]] ||
     fail_check "installed application container is unavailable"
   cmp -s "$SIM_APP/Info.plist" "$container/Info.plist" ||
@@ -717,9 +790,10 @@ launch_application() {
   : > "$launch_log"
   begin_check "$ordinal fresh application launch"
   LAST_LAUNCH_EPOCH=$(date +%s)
-  if launch_result=$(xcrun simctl launch --terminate-running-process \
-      "--stdout=$stdout_file" "--stderr=$stderr_file" \
-      "$VISION_UDID" "$SIM_BUNDLE_ID" 2>"$launch_log"); then
+  if launch_result=$("$SIMULATOR_SCRIPT" launch \
+      --stdout "$stdout_file" --stderr "$stderr_file" \
+      --udid "$VISION_UDID" --bundle "$SIM_BUNDLE_ID" \
+      "${SIMULATOR_TARGET_ARGS[@]}" 2>"$launch_log"); then
     print -r -- "$launch_result" >> "$launch_log"
   else
     fail_check "$ordinal application launch failed"
@@ -875,7 +949,8 @@ capture_screenshot() {
   begin_check "capture fresh simulator screenshot"
   [[ ! -e "$SCREENSHOT_PATH" ]] ||
     fail_check "simulator screenshot path was not fresh"
-  xcrun simctl io "$VISION_UDID" screenshot "$SCREENSHOT_PATH" \
+  "$SIMULATOR_SCRIPT" screenshot --udid "$VISION_UDID" \
+    --output "$SCREENSHOT_PATH" "${SIMULATOR_TARGET_ARGS[@]}" \
     >"$EVIDENCE_DIR/screenshot.log" 2>&1
   [[ -s "$SCREENSHOT_PATH" ]] ||
     fail_check "simulator screenshot was not captured"
@@ -890,7 +965,8 @@ terminate_application() {
   local pid=$1
   run_logged "terminate first accepted application process" \
     "$EVIDENCE_DIR/terminate.log" \
-    xcrun simctl terminate "$VISION_UDID" "$SIM_BUNDLE_ID"
+    "$SIMULATOR_SCRIPT" terminate --udid "$VISION_UDID" \
+      --bundle "$SIM_BUNDLE_ID" "${SIMULATOR_TARGET_ARGS[@]}"
 
   begin_check "confirm terminated process is no longer resident"
   xcrun simctl spawn "$VISION_UDID" launchctl procinfo "$pid" \

@@ -220,6 +220,7 @@ run_acceptance() {
     PEONPAD_TEST_REAL_GIT="$REAL_GIT" \
     PEONPAD_TEST_ACCEPTANCE_STATE_DIR="$ACCEPTANCE_STATE" \
     PEONPAD_TEST_SIMCTL_DEVICES_FILE="$ACCEPTANCE_STATE/devices.txt" \
+    PEONPAD_VISIONOS_SIMULATOR_STATE_ROOT="$ACCEPTANCE_STATE/ownership" \
     PEONPAD_TEST_ACCEPTANCE_MODE="$mode" \
     PEONPAD_TEST_GIT_DIRTY_MODE="${PEONPAD_TEST_GIT_DIRTY_MODE:-}" \
     PEONPAD_TEST_RESULT_FAILURE="${PEONPAD_TEST_RESULT_FAILURE:-}" \
@@ -253,6 +254,10 @@ run_acceptance healthy xrsimulator \
 [[ "$(plutil -extract lanes.xrsimulator.residency_checks raw \
   "$HAPPY_RESULT")" == 6 ]]
 [[ "$(plutil -extract source_state raw "$HAPPY_RESULT")" == clean ]]
+[[ "$(plutil -extract lanes.xrsimulator.simulator.owned raw \
+  "$HAPPY_RESULT")" == true ]]
+[[ "$(plutil -extract lanes.xrsimulator.simulator.name raw \
+  "$HAPPY_RESULT")" == "PeonPad Agent "* ]]
 
 prepare_acceptance_state startup-ready
 STARTUP_READY_RESULT="$TEMP_ROOT/startup readiness result.json"
@@ -335,6 +340,18 @@ fi
 [[ "$(plutil -extract status raw "$LAUNCH_RESULT")" == fail ]]
 [[ ! -e "$TEMP_ROOT/launch failure evidence" ]]
 
+prepare_acceptance_state install
+INSTALL_RESULT="$TEMP_ROOT/install failure result.json"
+if run_acceptance install-failure xrsimulator \
+    --evidence-dir "$TEMP_ROOT/install failure evidence" \
+    --result "$INSTALL_RESULT" >/dev/null 2>&1; then
+  print -u2 "acceptance accepted a failed simulator install"
+  exit 1
+fi
+[[ ! -e "$ACCEPTANCE_STATE/created-device" ]]
+[[ -z "$(find "$ACCEPTANCE_STATE/ownership" -name ownership.plist \
+  -print -quit 2>/dev/null)" ]]
+
 prepare_acceptance_state fatal
 FATAL_RESULT="$TEMP_ROOT/runtime fatal result.json"
 if run_acceptance runtime-fatal xrsimulator \
@@ -409,5 +426,28 @@ PEONPAD_VISIONOS_HOST_ACCEPTANCE_SCRIPT=/usr/bin/true \
 [[ "$(plutil -extract tests.host_ctest_passed raw "$ALL_RESULT")" == 7 ]]
 [[ "$(plutil -extract lanes.xrsimulator.status raw "$ALL_RESULT")" == pass ]]
 [[ "$(plutil -extract lanes.xros.status raw "$ALL_RESULT")" == pass ]]
+
+prepare_acceptance_state user-opt-in
+USER_RESULT="$TEMP_ROOT/user simulator result.json"
+run_acceptance healthy xrsimulator \
+  --simulator-udid "$VISION_265" --allow-user-simulator \
+  --evidence-dir "$TEMP_ROOT/user simulator evidence" \
+  --result "$USER_RESULT" >/dev/null
+[[ "$(plutil -extract lanes.xrsimulator.simulator.owned raw \
+  "$USER_RESULT")" == false ]]
+if grep -Eq 'simctl (create|delete) ' "$ACCEPTANCE_STATE/xcrun.log"; then
+  print -u2 "explicit user simulator flow created or deleted a simulator"
+  exit 1
+fi
+grep -q "($VISION_265)" "$ACCEPTANCE_STATE/devices.txt"
+
+prepare_acceptance_state user-refusal
+if run_acceptance healthy xrsimulator --simulator-udid "$VISION_265" \
+    --evidence-dir "$TEMP_ROOT/user refusal evidence" \
+    --result "$TEMP_ROOT/user refusal result.json" >/dev/null 2>&1; then
+  print -u2 "acceptance used a user simulator without explicit opt-in"
+  exit 1
+fi
+[[ ! -e "$ACCEPTANCE_STATE/builds.log" ]]
 
 print "visionOS acceptance shell regressions passed"

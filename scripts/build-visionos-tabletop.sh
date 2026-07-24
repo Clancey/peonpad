@@ -8,7 +8,10 @@ ROOT_DIR=${SCRIPT_DIR:h}
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/build-visionos-tabletop.sh <xrsimulator|xros> [--launch] [--screenshot PATH]
+Usage: ./scripts/build-visionos-tabletop.sh <xrsimulator|xros>
+  [--launch] [--screenshot PATH] [--inject-wargus-data]
+  [--child-env NAME=VALUE]
+  [--simulator-udid UDID --allow-user-simulator]
 
 Builds the native visionOS tabletop app: a SwiftUI + RealityKit executable
 compiled directly with swiftc (no Xcode project) and linked against the real
@@ -16,7 +19,10 @@ Stratagus/Wargus SDL3 engine + the tabletop bridge, so it boots a live
 scenario and renders it on the placeable 3D board. This is separate from the
 SDL3 smoke shell built by build-visionos-shell.sh -- distinct bundle id,
 executable, and app bundle -- and from the Designed-for-iPad Warcraft II app.
---launch and --screenshot are supported only for xrsimulator. The engine
+Simulator automation creates and cleans up a disposable PeonPad-owned Vision Pro
+by default and never foregrounds Simulator. A user simulator requires an
+explicit UDID plus --allow-user-simulator. --launch and --screenshot are
+supported only for xrsimulator. The engine
 static libraries are built on demand via build-visionos-engine-libs.sh. No
 proprietary game data or art is bundled; the app reads staged data at runtime.
 EOF
@@ -35,6 +41,11 @@ TARGET=$1
 shift
 LAUNCH=0
 SCREENSHOT=""
+INJECT_WARGUS_DATA=0
+VISION_UDID=""
+ALLOW_USER_SIMULATOR=0
+typeset -a CHILD_ENV
+CHILD_ENV=()
 while (( $# > 0 )); do
   case "$1" in
     --launch)
@@ -48,6 +59,28 @@ while (( $# > 0 )); do
       SCREENSHOT=${2:A}
       shift
       ;;
+    --inject-wargus-data)
+      INJECT_WARGUS_DATA=1
+      ;;
+    --child-env)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      CHILD_ENV+=("$2")
+      shift
+      ;;
+    --simulator-udid)
+      (( $# >= 2 )) || {
+        usage >&2
+        exit 2
+      }
+      VISION_UDID=$2
+      shift
+      ;;
+    --allow-user-simulator)
+      ALLOW_USER_SIMULATOR=1
+      ;;
     *)
       usage >&2
       exit 2
@@ -55,6 +88,25 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if [[ -z "$VISION_UDID" && -n "${PEONPAD_VISION_SIMULATOR_UDID:-}" ]]; then
+  VISION_UDID=$PEONPAD_VISION_SIMULATOR_UDID
+fi
+if [[ "${PEONPAD_VISIONOS_ALLOW_USER_SIMULATOR:-0}" == 1 ]]; then
+  ALLOW_USER_SIMULATOR=1
+fi
+if [[ -n "$VISION_UDID" && $ALLOW_USER_SIMULATOR -ne 1 ]]; then
+  print -u2 "a user-selected simulator requires --allow-user-simulator"
+  exit 2
+fi
+if [[ -z "$VISION_UDID" && $ALLOW_USER_SIMULATOR -eq 1 ]]; then
+  print -u2 "--allow-user-simulator requires --simulator-udid"
+  exit 2
+fi
+if (( INJECT_WARGUS_DATA && ! LAUNCH )); then
+  print -u2 "--inject-wargus-data requires --launch"
+  exit 2
+fi
 
 case "$TARGET" in
   xrsimulator)
@@ -283,27 +335,60 @@ if (( ! LAUNCH )); then
   exit 0
 fi
 
-VISION_UDID=$("$SCRIPT_DIR/find-vision-pro-simulator.sh")
-STATE=$(xcrun simctl list devices available | awk -v id="$VISION_UDID" '
-  index($0, "(" id ")") {
-    if ($0 ~ /\(Booted\)/) print "Booted"
-    else if ($0 ~ /\(Shutdown\)/) print "Shutdown"
-    else print "Unknown"
-    exit
-  }
-')
-case "$STATE" in
-  Booted) ;;
-  Shutdown) xcrun simctl boot "$VISION_UDID" ;;
-  *)
-    print -u2 "unexpected Vision Pro simulator state: ${STATE:-missing}"
-    exit 1
-    ;;
-esac
-xcrun simctl bootstatus "$VISION_UDID" -b
-xcrun simctl install "$VISION_UDID" "$APP"
-LAUNCH_RESULT=$(xcrun simctl launch --terminate-running-process \
-  "$VISION_UDID" "$BUNDLE_IDENTIFIER")
+SIMULATOR_STATE=""
+SIMULATOR_CREATED=0
+APP_LAUNCHED=0
+typeset -a TARGET_ARGS
+TARGET_ARGS=()
+
+finish_simulator() {
+  local exit_code=$?
+  local cleanup_failed=0
+  trap - EXIT INT TERM
+  set +e
+  if (( APP_LAUNCHED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" terminate \
+      --udid "$VISION_UDID" --bundle "$BUNDLE_IDENTIFIER" \
+      "${TARGET_ARGS[@]}" >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  if (( SIMULATOR_CREATED )); then
+    "$SCRIPT_DIR/visionos-simulator.sh" cleanup \
+      --state "$SIMULATOR_STATE" >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  (( exit_code != 0 || cleanup_failed == 0 )) || exit_code=1
+  exit "$exit_code"
+}
+trap finish_simulator EXIT
+trap 'exit 130' INT TERM
+
+if [[ -z "$VISION_UDID" ]]; then
+  SIMULATOR_STATE=$("$SCRIPT_DIR/visionos-simulator.sh" create \
+    --label tabletop --owner-pid $$)
+  SIMULATOR_CREATED=1
+  DETAILS=$("$SCRIPT_DIR/visionos-simulator.sh" details \
+    --state "$SIMULATOR_STATE")
+  VISION_UDID=${DETAILS%%$'\t'*}
+  TARGET_ARGS=(--state "$SIMULATOR_STATE")
+else
+  TARGET_ARGS=(--allow-user-simulator)
+  "$SCRIPT_DIR/visionos-simulator.sh" boot --udid "$VISION_UDID" \
+    "${TARGET_ARGS[@]}"
+fi
+"$SCRIPT_DIR/visionos-simulator.sh" install --udid "$VISION_UDID" \
+  --app "$APP" "${TARGET_ARGS[@]}"
+if (( INJECT_WARGUS_DATA )); then
+  PEONPAD_VISIONOS_BUNDLE_IDENTIFIER="$BUNDLE_IDENTIFIER" \
+    "$SCRIPT_DIR/inject-visionos-wargus-data.sh" \
+      --udid "$VISION_UDID" "${TARGET_ARGS[@]}"
+fi
+typeset -a LAUNCH_ARGS
+LAUNCH_ARGS=(--udid "$VISION_UDID" --bundle "$BUNDLE_IDENTIFIER")
+for assignment in "${CHILD_ENV[@]}"; do
+  LAUNCH_ARGS+=(--env "$assignment")
+done
+LAUNCH_RESULT=$("$SCRIPT_DIR/visionos-simulator.sh" launch \
+  "${LAUNCH_ARGS[@]}" "${TARGET_ARGS[@]}")
+APP_LAUNCHED=1
 print "$LAUNCH_RESULT"
 PID=$(awk -F ': ' -v id="$BUNDLE_IDENTIFIER" '$1 == id {print $2}' \
   <<< "$LAUNCH_RESULT")
@@ -313,15 +398,17 @@ PID=$(awk -F ': ' -v id="$BUNDLE_IDENTIFIER" '$1 == id {print $2}' \
 }
 sleep 5
 xcrun simctl spawn "$VISION_UDID" launchctl procinfo "$PID" >/dev/null
-CONTAINER=$(xcrun simctl get_app_container \
-  "$VISION_UDID" "$BUNDLE_IDENTIFIER" app)
+CONTAINER=$("$SCRIPT_DIR/visionos-simulator.sh" container \
+  --udid "$VISION_UDID" --bundle "$BUNDLE_IDENTIFIER" --kind app \
+  "${TARGET_ARGS[@]}")
 [[ -d "$CONTAINER" ]] || {
   print -u2 "installed visionOS tabletop app container is unavailable"
   exit 1
 }
 
 if [[ -n "$SCREENSHOT" ]]; then
-  xcrun simctl io "$VISION_UDID" screenshot "$SCREENSHOT"
+  "$SCRIPT_DIR/visionos-simulator.sh" screenshot \
+    --udid "$VISION_UDID" --output "$SCREENSHOT" "${TARGET_ARGS[@]}"
   [[ -s "$SCREENSHOT" ]] || {
     print -u2 "simulator screenshot was not captured"
     exit 1

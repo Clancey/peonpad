@@ -59,13 +59,17 @@ committed. The script also verifies this invariant explicitly with
 ## Step 2 — Build and install the native shell
 
 ```sh
-./scripts/build-visionos-shell.sh xrsimulator --launch
+STATE=$(./scripts/visionos-simulator.sh create --label wargus-data)
+DETAILS=$(./scripts/visionos-simulator.sh details --state "$STATE")
+UDID=${DETAILS%%$'\t'*}
+./scripts/build-visionos-shell.sh xrsimulator
+./scripts/visionos-simulator.sh install --state "$STATE" --udid "$UDID" \
+  --app build/visionos-xrsimulator/PeonPadVisionShell.app
 ```
 
-This builds the Release native visionOS shell, boots the Apple Vision Pro
-simulator if needed, installs the app, and confirms it is resident. The smoke
-shell renders a static SDL3 frame and reports `PEONPAD_VISIONOS_READY=1`; it
-does not yet run Stratagus or load game data.
+This creates an isolated owned Apple Vision Pro and installs the Release native
+visionOS shell on its explicit UDID. Use a shell trap to run
+`visionos-simulator.sh cleanup --state "$STATE"` if the sequence is interrupted.
 
 ---
 
@@ -74,12 +78,11 @@ does not yet run Stratagus or load game data.
 After the app is installed and has created its data container:
 
 ```sh
-./scripts/inject-visionos-wargus-data.sh
+./scripts/inject-visionos-wargus-data.sh --state "$STATE"
 ```
 
-The script locates the Apple Vision Pro simulator, resolves the app's data
-container via `simctl get_app_container … data`, and stages the read-only game
-data into:
+The script validates the ownership record, resolves the explicit simulator
+app-data container, and stages the read-only game data into:
 
 ```
 <data-container>/Documents/wargus-data/      ← read-only game data
@@ -88,6 +91,15 @@ data into:
 It also pre-creates the writable user directory:
 
 ```
+
+When finished, terminate the app if launched and delete only the owned device:
+
+```sh
+./scripts/visionos-simulator.sh cleanup --state "$STATE"
+```
+
+See [`visionos-simulator-automation.md`](visionos-simulator-automation.md) for
+the user-simulator opt-in and interactive foreground workflow.
 <data-container>/Library/Application Support/org.peonpad.visionos/user/
 ```
 

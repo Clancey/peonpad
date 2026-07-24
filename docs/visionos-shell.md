@@ -52,9 +52,10 @@ viewport/input, and script-guardrail checks rather than reproducing them:
 ```
 
 Every lane is Release and builds the complete default/all target. The simulator
-lane selects only an available Apple Vision Pro on a visionOS runtime, preferring
-the newest booted match deterministically. It boots when necessary, installs the
-freshly compared bundle, launches with the previous process terminated, requires
+lane creates a uniquely named, disposable PeonPad-owned Apple Vision Pro on the
+newest available visionOS runtime. It records and revalidates ownership, boots
+that exact UDID, installs the freshly compared bundle, launches with the
+previous process terminated, requires
 three parsed residency checks, captures process-scoped logs and a fresh
 screenshot, requires the exact stable `PEONPAD_VISIONOS_READY=1` token, scans
 first-party output for fatal/SDL/Metal/render/viewport/safe-area failures, then
@@ -73,8 +74,10 @@ default build, runs every configured CTest (currently 7/7), the direct
 compatibility preflight. Before any configure or build, acceptance rejects
 staged, unstaged, or untracked source changes. Ignored generated build paths
 remain allowed, and explicit evidence paths must remain outside the repository.
-Any failed build, test, lifecycle check, log scan, cleanup, or result write
-fails the command immediately.
+Any failed build, test, lifecycle check, log scan, owned-device cleanup, or
+result write fails the command immediately. The user's active simulator is not
+selected, foregrounded, shut down, or deleted. See
+[`visionos-simulator-automation.md`](visionos-simulator-automation.md).
 
 The command writes a transactional JSON result outside the repository. It
 validates conversion output before an atomic move, validates the installed JSON
@@ -169,18 +172,17 @@ controller, eye/hand targeting, or gameplay evidence.
 
 ## Simulator install and launch
 
-The discovery helper accepts only a device named Apple Vision Pro inside a
-visionOS runtime. An override is validated by the same rule:
+Build launch automation creates and later deletes an isolated `PeonPad Agent`
+Vision Pro by default:
 
 ```sh
-PEONPAD_VISION_SIMULATOR_UDID="SIMULATOR-UDID" \
-  ./scripts/build-visionos-shell.sh xrsimulator --launch
+./scripts/build-visionos-shell.sh xrsimulator --launch
 ```
 
-Without an override, the newest available Vision Pro is selected. The launch
-route boots it when needed, waits for boot completion, installs the ad-hoc
-signed app, launches `org.peonpad.visionos`, waits three seconds, and verifies
-the reported PID with simulator `launchctl procinfo`.
+The launch route waits for boot completion, installs the ad-hoc signed app,
+launches `org.peonpad.visionos`, waits three seconds, verifies the reported PID
+with simulator `launchctl procinfo`, terminates the app, and cleans up only the
+device named in its ownership record. It never foregrounds Simulator.
 
 Optional screenshot evidence must stay outside the repository:
 
@@ -188,6 +190,18 @@ Optional screenshot evidence must stay outside the repository:
 ./scripts/build-visionos-shell.sh xrsimulator --launch \
   --screenshot /tmp/peonpad-visionos-smoke.png
 ```
+
+An existing user simulator requires both an exact UDID and explicit opt-in:
+
+```sh
+./scripts/build-visionos-shell.sh xrsimulator --launch \
+  --simulator-udid <UDID> --allow-user-simulator
+```
+
+For interactive control, separately run
+`./scripts/open-visionos-simulator.sh <UDID>`. Full ownership, stale cleanup,
+child-environment, and migration details are in
+[`visionos-simulator-automation.md`](visionos-simulator-automation.md).
 
 On July 18, 2026, the automated xrsimulator lane passed on Xcode 26.6, CMake
 4.3.1, and the visionOS 26.5 Simulator SDK. Fresh install, launch, three

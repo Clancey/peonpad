@@ -161,6 +161,11 @@ The existing iPad target has a separate compatibility-simulator build path:
 ./scripts/build-vision-compat-simulator.sh --launch
 ```
 
+The build now creates a disposable PeonPad-owned Vision Pro destination and
+deletes only that device on exit. It never selects or foregrounds the user's
+active simulator. See
+[`visionos-simulator-automation.md`](visionos-simulator-automation.md).
+
 Xcode 26.6 selects a `visionOS Simulator` destination labeled
 `Designed for [iPad,iPhone]`, but compiles the app with the iPhoneSimulator
 26.5 SDK. The verified executable is arm64 iOS Simulator platform 7, not a

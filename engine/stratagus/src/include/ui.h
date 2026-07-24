@@ -266,6 +266,9 @@ public:
 	void Update();
 	void DoClicked(int button);
 	bool DoKey(int key);
+	bool IsEnabled(int button) const;
+	ButtonTargetKind TargetKind(int button) const;
+	unsigned Status(int button) const;
 
 private:
 	void DoClicked_SelectTarget(int button);

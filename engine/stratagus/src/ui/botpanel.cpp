@@ -1096,6 +1096,75 @@ void CButtonPanel::Update()
 	}
 }
 
+bool CButtonPanel::IsEnabled(int button) const
+{
+	if (button < 0 || static_cast<size_t>(button) >= CurrentButtons.size()
+	    || CurrentButtons[button].Pos == -1 || Selected.empty()
+	    || GameObserve || GamePaused || GameEstablishing) {
+		return false;
+	}
+	if (!ranges::all_of(Selected, [](const CUnit *unit) {
+		    return unit && unit->Player
+		        && (unit->Player == ThisPlayer || ThisPlayer->IsTeamed(*unit));
+	    })) {
+		return false;
+	}
+	return ranges::all_of(Selected, [button](const CUnit *unit) {
+		return unit && IsButtonAllowed(*unit, CurrentButtons[button]);
+	});
+}
+
+ButtonTargetKind CButtonPanel::TargetKind(int button) const
+{
+	if (!IsEnabled(button)) {
+		return ButtonTargetKind::None;
+	}
+	const ButtonAction &action = CurrentButtons[button];
+	switch (action.Action) {
+		case ButtonCmd::Move:
+		case ButtonCmd::Attack:
+		case ButtonCmd::Repair:
+		case ButtonCmd::Harvest:
+		case ButtonCmd::Patrol:
+		case ButtonCmd::AttackGround:
+			return ButtonTargetKind::Map;
+		case ButtonCmd::SpellCast:
+			if (action.Value >= 0
+			    && static_cast<size_t>(action.Value) < SpellTypeTable.size()
+			    && !SpellTypeTable[action.Value]->IsCasterOnly()) {
+				return ButtonTargetKind::Map;
+			}
+			return ButtonTargetKind::None;
+		case ButtonCmd::Unload:
+			if ((Selected.size() == 1
+			     && Selected[0]->CurrentAction() == UnitAction::Still
+			     && Selected[0]->Type->MoveType == EMovement::Naval
+			     && Map.Field(Selected[0]->tilePos)->CoastOnMap())
+			    || !Selected[0]->CanMove()) {
+				return ButtonTargetKind::None;
+			}
+			return ButtonTargetKind::Map;
+		case ButtonCmd::Build:
+			if (action.Value >= 0
+			    && static_cast<size_t>(action.Value) < getUnitTypes().size()
+			    && !Selected[0]->Player->CheckUnitType(*getUnitTypes()[action.Value])) {
+				return ButtonTargetKind::Build;
+			}
+			return ButtonTargetKind::None;
+		default:
+			return ButtonTargetKind::None;
+	}
+}
+
+unsigned CButtonPanel::Status(int button) const
+{
+	if (button < 0 || static_cast<size_t>(button) >= CurrentButtons.size()
+	    || CurrentButtons[button].Pos == -1) {
+		return 0;
+	}
+	return static_cast<unsigned>(GetButtonStatus(CurrentButtons[button], -1));
+}
+
 void CButtonPanel::DoClicked_SelectTarget(int button)
 {
 	// Select target.

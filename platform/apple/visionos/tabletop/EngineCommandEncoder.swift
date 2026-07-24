@@ -19,25 +19,50 @@ public enum EngineCommandEncoder {
     ///   limit. `deselectAll` always succeeds.
     public static func encode(
         _ command: TabletopGameplayCommand,
-        maxMapDim: Int32 = 1024
+        maxMapDim: Int32 = 1024,
+        requestID: UInt64 = 0
     ) -> EngineCommand? {
         switch command {
         case .deselectAll:
-            return EngineCommand(kind: .deselectAll)
+            return EngineCommand(kind: .deselectAll, requestID: requestID)
 
         case .selectUnit(let id):
             guard let unitID = parseUnitID(id) else { return nil }
-            return EngineCommand(kind: .select, unitID: unitID)
+            return EngineCommand(kind: .select, unitID: unitID, requestID: requestID)
 
         case .stopUnit(let id):
             guard let unitID = parseUnitID(id) else { return nil }
-            return EngineCommand(kind: .stop, unitID: unitID)
+            return EngineCommand(kind: .stop, unitID: unitID, requestID: requestID)
 
         case .moveUnit(let id, let toTileX, let toTileZ):
             guard let unitID = parseUnitID(id) else { return nil }
             guard let tx = clampTile(toTileX, maxMapDim: maxMapDim),
                   let tz = clampTile(toTileZ, maxMapDim: maxMapDim) else { return nil }
-            return EngineCommand(kind: .move, unitID: unitID, tileX: tx, tileY: tz)
+            return EngineCommand(
+                kind: .move, unitID: unitID, tileX: tx, tileY: tz,
+                requestID: requestID)
+
+        case .activateAction(let id, let slot):
+            guard id != 0, slot < 64 else { return nil }
+            return EngineCommand(
+                kind: .activateAction, actionID: id,
+                requestID: requestID, actionSlot: slot)
+
+        case .submitActionTarget(let tileX, let tileZ):
+            guard let tx = clampTile(tileX, maxMapDim: maxMapDim),
+                  let tz = clampTile(tileZ, maxMapDim: maxMapDim) else { return nil }
+            return EngineCommand(
+                kind: .targetAction, tileX: tx, tileY: tz,
+                requestID: requestID)
+
+        case .cancelAction:
+            return EngineCommand(kind: .cancelAction, requestID: requestID)
+
+        case .pause:
+            return EngineCommand(kind: .pause, requestID: requestID)
+
+        case .resume:
+            return EngineCommand(kind: .resume, requestID: requestID)
         }
     }
 

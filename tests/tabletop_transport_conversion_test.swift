@@ -58,7 +58,9 @@ private func makeEngineSnapshot(
     height: UInt32 = 2,
     terrain: [EngineTerrainCell]? = nil,
     units: [EngineUnitRecord] = [],
-    types: [EngineUnitType] = []
+    types: [EngineUnitType] = [],
+    actions: [EngineActionDescriptor] = [],
+    actionState: EngineActionState = EngineActionState()
 ) -> EngineSnapshot {
     let cells = terrain ?? Array(
         repeating: EngineTerrainCell(tileIndex: 0,
@@ -68,7 +70,8 @@ private func makeEngineSnapshot(
     return EngineSnapshot(
         abiVersion: abiVersion, generation: 1,
         mapWidth: width, mapHeight: height,
-        terrain: cells, units: units, unitTypes: types)
+        terrain: cells, units: units, unitTypes: types,
+        actions: actions, actionState: actionState)
 }
 
 // MARK: - Converter: ABI + structural guards
@@ -283,14 +286,50 @@ func testConversionMapsUnknownTypeToEmptyKind() {
 // MARK: - Command encoder
 
 func testCommandEncoding() {
-    expectEqual(EngineCommandEncoder.encode(.deselectAll),
-                EngineCommand(kind: .deselectAll), "deselectAll always encodes")
-    expectEqual(EngineCommandEncoder.encode(.selectUnit(id: "42")),
-                EngineCommand(kind: .select, unitID: 42), "select encodes id")
-    expectEqual(EngineCommandEncoder.encode(.stopUnit(id: "7")),
-                EngineCommand(kind: .stop, unitID: 7), "stop encodes id")
-    expectEqual(EngineCommandEncoder.encode(.moveUnit(id: "3", toTileX: 5, toTileZ: 9)),
-                EngineCommand(kind: .move, unitID: 3, tileX: 5, tileY: 9), "move encodes")
+    expectEqual(EngineCommandEncoder.encode(.deselectAll, requestID: 77),
+                EngineCommand(kind: .deselectAll, requestID: 77),
+                "deselectAll preserves request id")
+    expectEqual(EngineCommandEncoder.encode(.selectUnit(id: "42"), requestID: 78),
+                EngineCommand(kind: .select, unitID: 42, requestID: 78),
+                "select preserves request id")
+    expectEqual(EngineCommandEncoder.encode(.stopUnit(id: "7"), requestID: 79),
+                EngineCommand(kind: .stop, unitID: 7, requestID: 79),
+                "stop preserves request id")
+    expectEqual(EngineCommandEncoder.encode(
+        .moveUnit(id: "3", toTileX: 5, toTileZ: 9), requestID: 80),
+        EngineCommand(
+            kind: .move, unitID: 3, tileX: 5, tileY: 9, requestID: 80),
+        "move preserves request id")
+    expectEqual(EngineCommandEncoder.encode(
+        .activateAction(id: 0x1234, slot: 7), requestID: 81),
+        EngineCommand(kind: .activateAction, actionID: 0x1234,
+                     requestID: 81, actionSlot: 7),
+        "exact action identity and slot encode")
+    expectEqual(EngineCommandEncoder.encode(
+        .submitActionTarget(tileX: 11, tileZ: 12), requestID: 82),
+        EngineCommand(kind: .targetAction, tileX: 11, tileY: 12, requestID: 82),
+        "pending action target encodes")
+    expectEqual(EngineCommandEncoder.encode(.cancelAction, requestID: 83),
+                EngineCommand(kind: .cancelAction, requestID: 83),
+                "target cancellation encodes")
+    expectEqual(EngineCommandEncoder.encode(.pause, requestID: 84),
+                EngineCommand(kind: .pause, requestID: 84), "pause encodes")
+    expectEqual(EngineCommandEncoder.encode(.resume, requestID: 85),
+                EngineCommand(kind: .resume, requestID: 85), "resume encodes")
+}
+
+func testConsecutiveLegacyCommandRequestIDsRemainDistinct() {
+    let commands: [TabletopGameplayCommand] = [
+        .selectUnit(id: "4"),
+        .moveUnit(id: "4", toTileX: 2, toTileZ: 3),
+        .stopUnit(id: "4"),
+        .deselectAll,
+    ]
+    let encoded = zip(commands, UInt64(301)...).compactMap {
+        EngineCommandEncoder.encode($0.0, requestID: $0.1)
+    }
+    expectEqual(encoded.map(\.requestID), [301, 302, 303, 304],
+                "consecutive legacy commands keep distinct correlations")
 }
 
 func testCommandEncodingRejectsBadInput() {
@@ -302,6 +341,91 @@ func testCommandEncodingRejectsBadInput() {
            "tile beyond max map dim rejected")
     expect(EngineCommandEncoder.encode(.moveUnit(id: "1", toTileX: 1023, toTileZ: 0)) != nil,
            "tile at max-1 accepted")
+    expect(EngineCommandEncoder.encode(.activateAction(id: 0, slot: 1)) == nil,
+           "zero action id rejected")
+    expect(EngineCommandEncoder.encode(.activateAction(id: 1, slot: 64)) == nil,
+           "action slot beyond ABI limit rejected")
+    expect(EngineCommandEncoder.encode(.submitActionTarget(tileX: 1024, tileZ: 0)) == nil,
+           "action target beyond ABI limit rejected")
+}
+
+// MARK: - ABI v6 actions
+
+func testConversionCarriesAuthoritativeActions() {
+    let build = EngineActionDescriptor(
+        id: 0xabc, slot: 3, panelLevel: 1, kind: 4,
+        visible: true, enabled: true, selected: false, autocast: false,
+        targetKind: 2, value: 17, hotkey: 98,
+        iconFrame: 4, iconWidth: 46, iconHeight: 38,
+        costs: [
+            EngineActionCost(resourceID: 0, amount: 100),
+            EngineActionCost(resourceID: 1, amount: 500),
+            EngineActionCost(resourceID: 2, amount: 250),
+        ],
+        ident: "icon-build-farm", valueIdent: "unit-human-farm",
+        text: "Build Farm", tooltip: "Provides food",
+        iconPath: "human/icons/farm.png")
+    let disabledResearch = EngineActionDescriptor(
+        id: 0xdef, slot: 7, panelLevel: 0, kind: 15,
+        visible: true, enabled: false, selected: true, autocast: false,
+        targetKind: 0, valueIdent: "upgrade-sword1", text: "Upgrade Swords")
+    let state = EngineActionState(
+        paused: true, targetKind: 2, targetCommandKind: 4, panelLevel: 1,
+        targetSlot: 3, targetActionID: 0xabc, lastRequestID: 44,
+        lastResult: 1, queueOverflowCount: 2, rejectedCommandCount: 3)
+    let snap = makeEngineSnapshot(
+        width: 1, height: 1, actions: [build, disabledResearch],
+        actionState: state)
+
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "ABI v6 action snapshot converts")
+        return
+    }
+    expectEqual(ui.actions.count, 2, "both authoritative actions preserved")
+    expectEqual(ui.actions[0].id, 0xabc, "stable action id preserved")
+    expectEqual(ui.actions[0].slot, 3, "exact engine slot preserved")
+    expectEqual(ui.actions[0].kind, .build, "build kind mapped")
+    expectEqual(ui.actions[0].targetKind, .buildPlacement,
+                "build placement target mapped")
+    expectEqual(ui.actions[0].costs,
+                [TabletopActionCost(resourceID: 0, amount: 100),
+                 TabletopActionCost(resourceID: 1, amount: 500),
+                 TabletopActionCost(resourceID: 2, amount: 250)],
+                "resource and time costs preserved")
+    expectEqual(ui.actions[0].valueIdent, "unit-human-farm",
+                "localization-safe value ident preserved")
+    expectEqual(ui.actions[0].iconPath, "human/icons/farm.png",
+                "engine icon descriptor preserved")
+    expect(!ui.actions[1].isEnabled, "disabled engine action remains disabled")
+    expect(ui.actions[1].isSelected, "selected status remains selected")
+
+    expect(ui.actionState.isPaused, "pause state preserved")
+    expect(ui.actionState.isAwaitingBoardTarget, "target state is explicit")
+    expectEqual(ui.actionState.targetActionKind, .build, "target command kind mapped")
+    expectEqual(ui.actionState.targetActionID, 0xabc, "target action identity preserved")
+    expectEqual(ui.actionState.lastRequestID, 44, "request correlation preserved")
+    expectEqual(ui.actionState.lastResult, .accepted, "execution result mapped")
+    expectEqual(TabletopEngineCommandResult(rawValue: -9), .rejectedUnitNotFound,
+                "missing-unit execution result mapped")
+    expectEqual(ui.actionState.queueOverflowCount, 2, "queue overflow surfaced")
+    expectEqual(ui.actionState.rejectedCommandCount, 3, "rejection count surfaced")
+}
+
+func testUnknownActionValuesMapSafely() {
+    let action = EngineActionDescriptor(
+        id: 1, slot: 0, panelLevel: 0, kind: 65000, targetKind: 200)
+    let state = EngineActionState(targetKind: 200, targetCommandKind: 65000,
+                                  lastResult: -999)
+    let snap = makeEngineSnapshot(width: 1, height: 1, actions: [action],
+                                  actionState: state)
+    guard let ui = try? TabletopSnapshotConverter.convert(snap) else {
+        expect(false, "unknown future action values convert defensively")
+        return
+    }
+    expectEqual(ui.actions[0].kind, .unknown, "unknown action kind is explicit")
+    expectEqual(ui.actions[0].targetKind, .none, "unknown target kind is non-targeting")
+    expectEqual(ui.actionState.lastResult, .rejectedUnsupported,
+                "unknown result never appears successful")
 }
 
 // MARK: - Map fit
@@ -628,7 +752,10 @@ struct TransportConversionTests {
         testRenderCategoryMapping()
         testConversionCarriesCategoryAndFootprint()
         testConversionOmitsCatalogForProceduralSnapshot()
+        testConversionCarriesAuthoritativeActions()
+        testUnknownActionValuesMapSafely()
         testCommandEncoding()
+        testConsecutiveLegacyCommandRequestIDsRemainDistinct()
         testCommandEncodingRejectsBadInput()
         testMapFitTileSizeAndCentering()
         testMapFitRoundTrip()

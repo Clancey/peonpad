@@ -15,7 +15,7 @@ import Foundation
 /// `PEONPAD_TABLETOP_ABI_VERSION` in PeonPadTabletopBridge.h. The transport
 /// rejects any engine snapshot whose embedded version differs, rather than
 /// misreading struct fields at a stale layout.
-public let kPeonPadTabletopABIVersion: UInt32 = 5
+public let kPeonPadTabletopABIVersion: UInt32 = 6
 
 /// Fog-of-war state of a single tile (mirrors `PeonPadFogState`).
 public enum EngineFogState: UInt8, Equatable {
@@ -177,6 +177,101 @@ public struct EngineTilesetDescriptor: Equatable {
     }
 }
 
+public struct EngineActionCost: Equatable {
+        public var resourceID: UInt8
+        public var amount: Int32
+        public init(resourceID: UInt8, amount: Int32) {
+            self.resourceID = resourceID
+            self.amount = amount
+        }
+    }
+
+    public struct EngineActionDescriptor: Equatable {
+        public var id: UInt64
+        public var slot: UInt16
+        public var panelLevel: UInt16
+        public var kind: UInt16
+        public var visible: Bool
+        public var enabled: Bool
+        public var selected: Bool
+        public var autocast: Bool
+        public var targetKind: UInt8
+        public var value: Int32
+        public var hotkey: UInt32
+        public var iconFrame: UInt16
+        public var iconWidth: UInt16
+        public var iconHeight: UInt16
+        public var costs: [EngineActionCost]
+        public var ident: String
+        public var valueIdent: String
+        public var text: String
+        public var tooltip: String
+        public var iconPath: String
+
+        public init(
+            id: UInt64, slot: UInt16, panelLevel: UInt16, kind: UInt16,
+            visible: Bool = true, enabled: Bool = true, selected: Bool = false,
+            autocast: Bool = false, targetKind: UInt8 = 0, value: Int32 = 0,
+            hotkey: UInt32 = 0, iconFrame: UInt16 = 0,
+            iconWidth: UInt16 = 0, iconHeight: UInt16 = 0,
+            costs: [EngineActionCost] = [], ident: String = "",
+            valueIdent: String = "", text: String = "", tooltip: String = "",
+            iconPath: String = ""
+        ) {
+            self.id = id
+            self.slot = slot
+            self.panelLevel = panelLevel
+            self.kind = kind
+            self.visible = visible
+            self.enabled = enabled
+            self.selected = selected
+            self.autocast = autocast
+            self.targetKind = targetKind
+            self.value = value
+            self.hotkey = hotkey
+            self.iconFrame = iconFrame
+            self.iconWidth = iconWidth
+            self.iconHeight = iconHeight
+            self.costs = costs
+            self.ident = ident
+            self.valueIdent = valueIdent
+            self.text = text
+            self.tooltip = tooltip
+            self.iconPath = iconPath
+        }
+    }
+
+    public struct EngineActionState: Equatable {
+        public var paused: Bool
+        public var targetKind: UInt8
+        public var targetCommandKind: UInt16
+        public var panelLevel: UInt8
+        public var targetSlot: UInt16
+        public var targetActionID: UInt64
+        public var lastRequestID: UInt64
+        public var lastResult: Int32
+        public var queueOverflowCount: UInt32
+        public var rejectedCommandCount: UInt32
+
+        public init(
+            paused: Bool = false, targetKind: UInt8 = 0,
+            targetCommandKind: UInt16 = UInt16.max, panelLevel: UInt8 = 0,
+            targetSlot: UInt16 = 0, targetActionID: UInt64 = 0,
+            lastRequestID: UInt64 = 0, lastResult: Int32 = 0,
+            queueOverflowCount: UInt32 = 0, rejectedCommandCount: UInt32 = 0
+        ) {
+            self.paused = paused
+            self.targetKind = targetKind
+            self.targetCommandKind = targetCommandKind
+            self.panelLevel = panelLevel
+            self.targetSlot = targetSlot
+            self.targetActionID = targetActionID
+            self.lastRequestID = lastRequestID
+            self.lastResult = lastResult
+            self.queueOverflowCount = queueOverflowCount
+            self.rejectedCommandCount = rejectedCommandCount
+        }
+    }
 /// A coherent engine snapshot, in framework-free Swift form.
 public struct EngineSnapshot: Equatable {
     public var abiVersion: UInt32
@@ -189,6 +284,8 @@ public struct EngineSnapshot: Equatable {
     /// The active map's tileset descriptor (ABI v3), or `nil` when the snapshot
     /// carries no tileset (synthetic or terrain-less snapshots).
     public var tileset: EngineTilesetDescriptor?
+    public var actions: [EngineActionDescriptor]
+    public var actionState: EngineActionState
 
     public init(
         abiVersion: UInt32,
@@ -198,7 +295,9 @@ public struct EngineSnapshot: Equatable {
         terrain: [EngineTerrainCell],
         units: [EngineUnitRecord],
         unitTypes: [EngineUnitType],
-        tileset: EngineTilesetDescriptor? = nil
+        tileset: EngineTilesetDescriptor? = nil,
+        actions: [EngineActionDescriptor] = [],
+        actionState: EngineActionState = EngineActionState()
     ) {
         self.abiVersion = abiVersion
         self.generation = generation
@@ -208,6 +307,8 @@ public struct EngineSnapshot: Equatable {
         self.units = units
         self.unitTypes = unitTypes
         self.tileset = tileset
+        self.actions = actions
+        self.actionState = actionState
     }
 }
 
@@ -222,17 +323,31 @@ public struct EngineCommand: Equatable {
         case move = 3
         case stop = 4
         case deselectAll = 5
+        case activateAction = 6
+        case targetAction = 7
+        case cancelAction = 8
+        case pause = 9
+        case resume = 10
     }
 
     public var kind: Kind
     public var unitID: UInt32
     public var tileX: Int32
     public var tileY: Int32
+    public var actionID: UInt64
+    public var requestID: UInt64
+    public var actionSlot: UInt16
 
-    public init(kind: Kind, unitID: UInt32 = 0, tileX: Int32 = 0, tileY: Int32 = 0) {
+    public init(
+        kind: Kind, unitID: UInt32 = 0, tileX: Int32 = 0, tileY: Int32 = 0,
+        actionID: UInt64 = 0, requestID: UInt64 = 0, actionSlot: UInt16 = 0
+    ) {
         self.kind = kind
         self.unitID = unitID
         self.tileX = tileX
         self.tileY = tileY
+        self.actionID = actionID
+        self.requestID = requestID
+        self.actionSlot = actionSlot
     }
 }

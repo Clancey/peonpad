@@ -85,6 +85,12 @@ enum class ButtonCmd {
 	CallbackAction
 };
 
+enum class ButtonTargetKind {
+	None,
+	Map,
+	Build
+};
+
 class ButtonAction;
 using ButtonCheckFunc = bool (*)(const CUnit &, const ButtonAction &);
 
@@ -283,6 +289,10 @@ extern void AddButton(int pos, int level, const std::string &IconIdent,
 					  const std::string &popup, bool alwaysShow);
 // Check if the button is allowed for the unit.
 extern bool IsButtonAllowed(const CUnit &unit, const ButtonAction &buttonaction);
+/// Submit a pending command-panel map/build target on the simulation thread.
+extern bool SubmitButtonTarget(const Vec2i &tilePos);
+/// Cancel pending target/build placement and return to the root button level.
+extern void CancelButtonTarget();
 
 //
 // in mouse.cpp

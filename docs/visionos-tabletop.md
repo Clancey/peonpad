@@ -138,8 +138,10 @@ slice:
 - **`TabletopGameplaySnapshot`** -- a versioned (`version: Int`), `Codable`,
   value-type record containing the full battlefield: `mapSize`, per-tile
   `terrain` (`[TabletopTerrainTile]`), per-tile `fogMask` (`[TabletopFogTile]`),
-  `units` (`[TabletopGameplayUnit]`), and `selection`
-  (`TabletopGameplaySelection`). The `validatedSelectedUnit` computed property
+  `units` (`[TabletopGameplayUnit]`), `selection`
+  (`TabletopGameplaySelection`), authoritative ABI v6 `actions`, and explicit
+  `actionState` (pause, submenu, target, result, and queue counters). The
+  `validatedSelectedUnit` computed property
   returns the currently selected unit only if it is alive (`hp > 0`),
   preventing dead-unit visual state from persisting after a unit is killed.
 
@@ -147,13 +149,14 @@ slice:
   `owner` (player/team index), `hp`, `maxHP`, `facingRadians`, `tileX`, and
   `tileZ`. `isAlive` is `hp > 0`.
 
-- **`TabletopGameplayCommand`** -- a `Codable` enum covering the four
-  operations the right-hand command reducer can dispatch: `selectUnit(id:)`,
-  `deselectAll`, `moveUnit(id:toTileX:toTileZ:)`, and `stopUnit(id:)`.
+- **`TabletopGameplayCommand`** -- a `Codable` enum covering selection and
+  legacy movement plus exact engine-slot activation, target submission,
+  cancel/back, pause, and resume. Availability remains engine-owned; Swift
+  validates descriptor identity/state but does not reproduce Wargus rules.
 
 - **`TabletopGameplayCommandReducer`** -- two static pure functions:
-  - `validate(_:command:)` returns `.valid`, `.rejectedUnitNotFound(id:)`, or
-    `.rejectedDeadUnit(id:hp:)`.
+  - `validate(_:command:)` returns `.valid` or an explicit unit/action/target
+    rejection.
   - `reduce(_:command:)` validates then applies the command, returning the
     new snapshot unchanged when the command is invalid. Dead units (`hp == 0`)
     are rejected by every command; the snapshot never partially mutates on
@@ -262,6 +265,19 @@ are appended (or repurpose reserved padding), and a consumer must check
 `peonpad_snapshot_abi_version()` -- a v2 consumer safely discards a v3 snapshot.
 Struct layout and round-trip are covered by `tests/tabletop_bridge_test.cpp`.
 
+ABI v6 appends the authoritative Stratagus action model. Each simulation-thread
+snapshot runs `UI.ButtonPanel.Update()` and copies bounded POD descriptors from
+`CurrentButtons`: selection-bound stable action ID, exact `DoClicked` slot,
+engine command kind,
+visible/enabled/selected/autocast state, localized hint/description, authored
+identifiers, icon frame/path, costs, and target kind. Commands activate an exact
+ID/slot, submit or cancel map/build targets through the engine's mouse placement
+paths, and pause/resume through the engine API. Mutable engine pointers never
+cross the ABI, and queue overflow/rejection plus request/result state are
+published in the same coherent snapshot.
+Snapshot publication generations advance independently of `GameCycle`, so
+pause/resume results remain observable while simulation time is frozen.
+
 ### Swift resolution and rendering pipeline
 
 - **`TabletopAssetResolution.swift`** (framework-free, host-tested): staged-data
@@ -293,13 +309,13 @@ With no staged data the board renders fully procedurally.
 `TabletopCommandHarness.swift` is an opt-in, non-production probe that proves the
 command path is accepted end-to-end when immersive gesture injection is
 unavailable in the Simulator. Enabled only when
-`PEONPAD_TABLETOP_COMMAND_HARNESS` is set, it submits `select -> move -> stop`
-through the **exact production `TabletopTransport.send(_:)`** and only advances
-each step when it **observes the engine's state change on the same live snapshot
-stream the board reconciles** (e.g. the unit becomes selected, then its tile
-changes), logging `PASS`/`FAIL` verdicts. It never bypasses the command path and
-is disabled by default, so no automation controls run in production. Gating and
-the select/move/stop sequencing are host-tested
+`PEONPAD_TABLETOP_COMMAND_HARNESS` is set, it selects a unit, activates the exact
+engine Move descriptor, observes target mode, cancels it, activates again and
+submits a board target, then opens a nontrivial engine submenu and returns before
+issuing legacy Stop. Every step uses **production `TabletopTransport.send(_:)`**
+and advances only after the same live snapshot stream the board reconciles shows
+the corresponding engine state change. It never bypasses the command path and is
+disabled by default. Gating and sequencing are host-tested
 (`scripts/test-visionos-tabletop-harness.sh`).
 
 ## Host tests (no Simulator)

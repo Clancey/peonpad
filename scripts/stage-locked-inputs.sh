@@ -169,6 +169,7 @@ STRATAGUS_INPUT_INTENT_PATCH="$ROOT_DIR/patches/stratagus/0008-input-intent-rout
 STRATAGUS_CONTROLLER_INPUT_PATCH="$ROOT_DIR/patches/stratagus/0009-game-controller-input.patch"
 STRATAGUS_SDL3_ENGINE_PATCH="$ROOT_DIR/patches/stratagus/0010-direct-sdl3-engine.patch"
 STRATAGUS_VISION_CONTROLS_PATCH="$ROOT_DIR/patches/stratagus/0011-visionos-indirect-controls.patch"
+STRATAGUS_TABLETOP_BRIDGE_PATCH="$ROOT_DIR/patches/stratagus/0012-tabletop-bridge-gamehook.patch"
 WARGUS_PATCH="$ROOT_DIR/patches/wargus/0001-xcode-26-apple-vendored-deps.patch"
 WARGUS_IOS_PATCH="$ROOT_DIR/patches/wargus/0002-ios-data-layer-library.patch"
 ALEONA_KOTH_PATCH="$ROOT_DIR/patches/aleonas-tales/0001-fix-king-of-the-hill-map-syntax.patch"
@@ -268,6 +269,13 @@ print "PATCHED Stratagus with the direct SDL3 engine compatibility layer"
 patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
   < "$STRATAGUS_VISION_CONTROLS_PATCH"
 print "PATCHED Stratagus with PeonPad Vision indirect controls"
+[[ -f "$STRATAGUS_TABLETOP_BRIDGE_PATCH" ]] || {
+  print -u2 "required Stratagus tabletop bridge patch is missing"
+  exit 1
+}
+patch -s -d "$ROOT_DIR/engine/stratagus" -p1 \
+  < "$STRATAGUS_TABLETOP_BRIDGE_PATCH"
+print "PATCHED Stratagus with the visionOS tabletop action bridge"
 EXPECTED_STRATAGUS_TREE_SHA=$(manifest_value \
   "sources.stratagus" "staged_tree_sha256")
 ACTUAL_STRATAGUS_TREE_SHA=$(

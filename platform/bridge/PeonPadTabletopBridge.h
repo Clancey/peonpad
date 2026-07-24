@@ -114,7 +114,18 @@ extern "C" {
 ///     prior field moved.
 /// A v4 consumer must discard a v5 snapshot (the version differs), so the
 /// PeonPadTilesetDescriptor growth is safe.
-#define PEONPAD_TABLETOP_ABI_VERSION 5u
+///
+/// ABI v6 (authoritative engine-action extension of v5):
+///   • Snapshots append a bounded array of PeonPadActionDescriptor values copied
+///     from Stratagus `CurrentButtons` after `UI.ButtonPanel.Update()`, plus one
+///     PeonPadActionState describing submenu/target/pause and command results.
+///   • PeonPadCommand keeps every v5 field and offset, then appends exact action
+///     identity/slot and request correlation fields.
+///   • New commands activate an exact engine button, submit/cancel its pending
+///     map target/build placement, and pause/resume the simulation.
+/// Consumers must reject snapshots whose version differs. No engine pointers,
+/// callbacks, C++ strings, or mutable UI objects cross this ABI.
+#define PEONPAD_TABLETOP_ABI_VERSION 6u
 
 // ── Hard limits ─────────────────────────────────────────────────────────────
 
@@ -133,6 +144,14 @@ extern "C" {
 /// relative to the read-only game-data root; a tileset `image_path` is
 /// relative to whichever root `image_path_root` names (ABI v5).
 #define PEONPAD_TABLETOP_MAX_PATH    128u
+/// Maximum number of command-panel slots copied into one snapshot (ABI v6).
+#define PEONPAD_TABLETOP_MAX_ACTIONS 64u
+/// Maximum number of resource/status costs attached to one action (ABI v6).
+#define PEONPAD_TABLETOP_MAX_ACTION_COSTS 8u
+/// Maximum action label length, including the terminating NUL (ABI v6).
+#define PEONPAD_TABLETOP_MAX_ACTION_TEXT 96u
+/// Maximum tooltip/description length, including the terminating NUL (ABI v6).
+#define PEONPAD_TABLETOP_MAX_ACTION_DETAIL 128u
 
 // ── Fog-of-war cell state ─────────────────────────────────────────────────
 
@@ -287,6 +306,109 @@ typedef struct PeonPadTilesetDescriptor {
     uint8_t  _pad5;            ///< Must be zero; reserved for future payload (ABI v5).
 } PeonPadTilesetDescriptor;
 
+// ── Authoritative action panel (ABI v6) ───────────────────────────────────
+
+/// Stable transport command kinds. Values intentionally mirror the current
+/// Stratagus ButtonCmd order, but are frozen here so future engine enum changes
+/// cannot silently change the C ABI.
+typedef enum PeonPadActionKind {
+    PEONPAD_ACTION_MOVE = 0,
+    PEONPAD_ACTION_ATTACK = 1,
+    PEONPAD_ACTION_REPAIR = 2,
+    PEONPAD_ACTION_HARVEST = 3,
+    PEONPAD_ACTION_BUILD = 4,
+    PEONPAD_ACTION_PATROL = 5,
+    PEONPAD_ACTION_EXPLORE = 6,
+    PEONPAD_ACTION_ATTACK_GROUND = 7,
+    PEONPAD_ACTION_SPELL_CAST = 8,
+    PEONPAD_ACTION_UNLOAD = 9,
+    PEONPAD_ACTION_STOP = 10,
+    PEONPAD_ACTION_SUBMENU = 11,
+    PEONPAD_ACTION_TRAIN = 12,
+    PEONPAD_ACTION_STAND_GROUND = 13,
+    PEONPAD_ACTION_RETURN = 14,
+    PEONPAD_ACTION_RESEARCH = 15,
+    PEONPAD_ACTION_UPGRADE_TO = 16,
+    PEONPAD_ACTION_CANCEL = 17,
+    PEONPAD_ACTION_CANCEL_UPGRADE = 18,
+    PEONPAD_ACTION_CANCEL_TRAIN = 19,
+    PEONPAD_ACTION_CANCEL_BUILD = 20,
+    PEONPAD_ACTION_CALLBACK = 21,
+    PEONPAD_ACTION_UNKNOWN = 0xffff
+} PeonPadActionKind;
+
+/// What the board must collect after activation.
+typedef enum PeonPadActionTargetKind {
+    PEONPAD_ACTION_TARGET_NONE = 0,
+    PEONPAD_ACTION_TARGET_MAP = 1,
+    PEONPAD_ACTION_TARGET_BUILD_PLACEMENT = 2
+} PeonPadActionTargetKind;
+
+/// Simulation-thread execution result, correlated through request_id.
+typedef enum PeonPadCommandResult {
+    PEONPAD_COMMAND_RESULT_NONE = 0,
+    PEONPAD_COMMAND_RESULT_ACCEPTED = 1,
+    PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION = -1,
+    PEONPAD_COMMAND_RESULT_REJECTED_STALE_ACTION = -2,
+    PEONPAD_COMMAND_RESULT_REJECTED_HIDDEN = -3,
+    PEONPAD_COMMAND_RESULT_REJECTED_DISABLED = -4,
+    PEONPAD_COMMAND_RESULT_REJECTED_NO_TARGET = -5,
+    PEONPAD_COMMAND_RESULT_REJECTED_BAD_TARGET = -6,
+    PEONPAD_COMMAND_RESULT_REJECTED_UNSUPPORTED = -7,
+    PEONPAD_COMMAND_RESULT_REJECTED_PAUSED = -8,
+    PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND = -9
+} PeonPadCommandResult;
+
+/// One engine-defined resource/status cost.
+typedef struct PeonPadActionCost {
+    uint8_t resource_id; ///< Stratagus CostType index; 0 is time.
+    uint8_t _pad[3];     ///< Must be zero.
+    int32_t amount;
+} PeonPadActionCost;
+
+/// Immutable copy of one current Stratagus button-panel slot.
+typedef struct PeonPadActionDescriptor {
+    uint64_t action_id;       ///< Stable hash of selection/level/slot/kind/value identifiers.
+    uint16_t slot;            ///< Zero-based exact CurrentButtons/DoClicked slot.
+    uint16_t panel_level;     ///< CurrentButtonLevel that produced this descriptor.
+    uint16_t command_kind;    ///< PeonPadActionKind.
+    uint8_t visible;          ///< 1 when the slot is present in CurrentButtons.
+    uint8_t enabled;          ///< Authoritative IsButtonAllowed result.
+    uint8_t selected;         ///< Engine button status includes IconSelected.
+    uint8_t autocast;         ///< Engine button status includes IconAutoCast.
+    uint8_t target_kind;      ///< PeonPadActionTargetKind after activation.
+    uint8_t cost_count;       ///< Number of valid entries in costs[].
+    int32_t value;            ///< Engine action value (unit/spell/upgrade/submenu id).
+    uint32_t hotkey;          ///< Engine key code; 0 when no hotkey.
+    uint16_t icon_frame;      ///< Frame within icon_path; 0 when unavailable.
+    uint16_t icon_width;      ///< Icon frame width in pixels; 0 when unavailable.
+    uint16_t icon_height;     ///< Icon frame height in pixels; 0 when unavailable.
+    uint8_t _pad0[2];         ///< Must be zero.
+    PeonPadActionCost costs[PEONPAD_TABLETOP_MAX_ACTION_COSTS];
+    char ident[PEONPAD_TABLETOP_MAX_IDENT];       ///< Stable authored icon/action ident.
+    char value_ident[PEONPAD_TABLETOP_MAX_IDENT]; ///< Authored unit/spell/upgrade ident.
+    char text[PEONPAD_TABLETOP_MAX_ACTION_TEXT];  ///< Engine-localized display hint.
+    char tooltip[PEONPAD_TABLETOP_MAX_ACTION_DETAIL]; ///< Engine-localized description/dependencies.
+    char icon_path[PEONPAD_TABLETOP_MAX_PATH];    ///< Data-root-relative icon sheet path.
+} PeonPadActionDescriptor;
+
+/// Coherent action-panel and pending-target state captured with the snapshot.
+typedef struct PeonPadActionState {
+    uint64_t target_action_id;
+    uint64_t last_request_id;
+    int32_t last_result;         ///< PeonPadCommandResult.
+    uint32_t queue_overflow_count;
+    uint32_t rejected_command_count;
+    uint16_t target_slot;
+    uint16_t action_count;
+    uint16_t target_command_kind; ///< PeonPadActionKind, or PEONPAD_ACTION_UNKNOWN.
+    uint8_t paused;
+    uint8_t target_kind;         ///< PeonPadActionTargetKind.
+    uint8_t panel_level;
+    uint8_t _pad[3];
+    uint8_t _reserved[8];
+} PeonPadActionState;
+
 // ── Snapshot (opaque, reference-counted) ─────────────────────────────────
 
 /// An immutable, coherent snapshot of game state captured at one simulation
@@ -298,7 +420,7 @@ typedef struct PeonPadSnapshot PeonPadSnapshot;
 /// A consumer that sees a different value must discard the snapshot.
 uint32_t peonpad_snapshot_abi_version(const PeonPadSnapshot *s);
 
-/// Monotonically-increasing generation counter (== GameCycle at publish time).
+/// Monotonically-increasing publication generation, independent of GameCycle.
 /// Zero means the snapshot was produced via peonpad_tabletop_publish_synthetic.
 uint64_t peonpad_snapshot_generation(const PeonPadSnapshot *s);
 
@@ -340,6 +462,15 @@ const PeonPadUnitType *peonpad_snapshot_unit_types(const PeonPadSnapshot *s);
 /// Valid until peonpad_snapshot_release() drops the last reference.
 const PeonPadTilesetDescriptor *peonpad_snapshot_tileset(const PeonPadSnapshot *s);
 
+/// Number of authoritative action descriptors (ABI v6).
+uint32_t peonpad_snapshot_action_count(const PeonPadSnapshot *s);
+
+/// Pointer to the immutable action descriptor array, or NULL when empty.
+const PeonPadActionDescriptor *peonpad_snapshot_actions(const PeonPadSnapshot *s);
+
+/// Pointer to the immutable action/target state (always present for v6 snapshots).
+const PeonPadActionState *peonpad_snapshot_action_state(const PeonPadSnapshot *s);
+
 /// Increment the reference count.  Returns 0 on success, -1 if s is NULL.
 int peonpad_snapshot_retain(PeonPadSnapshot *s);
 
@@ -360,6 +491,11 @@ typedef enum PeonPadCommandType {
                                   ///<   unit_id == 0: move all currently-selected units.
     PEONPAD_CMD_STOP         = 4, ///< Order unit_id to stop its current action.
     PEONPAD_CMD_DESELECT_ALL = 5, ///< Clear the entire selection (unit_id ignored).
+    PEONPAD_CMD_ACTIVATE_ACTION = 6, ///< Activate exact action_slot/action_id.
+    PEONPAD_CMD_TARGET_ACTION = 7, ///< Submit pending target at tile_x/tile_y.
+    PEONPAD_CMD_CANCEL_ACTION = 8, ///< Cancel target/build placement or go back.
+    PEONPAD_CMD_PAUSE = 9,
+    PEONPAD_CMD_RESUME = 10,
 } PeonPadCommandType;
 
 /// A single command posted from the UI thread to the simulation thread.
@@ -371,7 +507,13 @@ typedef struct PeonPadCommand {
                             ///< For MOVE: if non-zero, select this unit then move.
     int32_t  tile_x;        ///< Target tile column (MOVE only).
     int32_t  tile_y;        ///< Target tile row (MOVE only).
-    uint8_t  _reserved[8];  ///< Must be zero; reserved for future payload.
+    uint8_t  _reserved[8];  ///< Must be zero; retained at the ABI v1-v5 offset.
+    uint8_t  _pad_v6[4];    ///< Must be zero; explicit alignment for v6 fields.
+    uint64_t action_id;     ///< Exact descriptor id for ACTIVATE_ACTION.
+    uint64_t request_id;    ///< Caller correlation id reflected in action state.
+    uint16_t action_slot;   ///< Exact zero-based engine panel slot.
+    uint16_t flags;         ///< Must be zero; reserved for future modifiers.
+    uint8_t  _reserved_v6[12]; ///< Must be zero.
 } PeonPadCommand;
 
 // ── Bridge lifecycle ───────────────────────────────────────────────────────
@@ -398,7 +540,7 @@ void peonpad_tabletop_begin_visibility_epoch(void);
 void peonpad_tabletop_publish_snapshot(void);
 
 /// Called by the simulation thread before each game tick to apply queued UI
-/// commands (select/deselect/move/stop) to the game state.
+/// commands, including exact engine actions and target placement, to game state.
 /// No-ops if the bridge is not initialized.
 void peonpad_tabletop_drain_commands(void);
 
@@ -479,6 +621,24 @@ int peonpad_tabletop_publish_synthetic_v3(
     const PeonPadUnitType          *types,
     uint32_t                        type_count,
     const PeonPadTilesetDescriptor *tileset
+);
+
+/// Synthetic publish including ABI v6 actions and coherent action state.
+/// Arrays and strings are copied; no caller-owned memory is retained.
+int peonpad_tabletop_publish_synthetic_v6(
+    uint64_t                        generation,
+    uint32_t                        map_width,
+    uint32_t                        map_height,
+    const PeonPadTerrainCell       *terrain,
+    uint32_t                        terrain_count,
+    const PeonPadUnitRecord        *units,
+    uint32_t                        unit_count,
+    const PeonPadUnitType          *types,
+    uint32_t                        type_count,
+    const PeonPadTilesetDescriptor *tileset,
+    const PeonPadActionDescriptor  *actions,
+    uint32_t                        action_count,
+    const PeonPadActionState       *action_state
 );
 
 #ifdef __cplusplus

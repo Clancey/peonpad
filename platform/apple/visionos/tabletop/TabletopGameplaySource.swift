@@ -2,8 +2,8 @@
 //
 // The live-state consumer seam: a `TabletopGameplaySource` publishes versioned
 // coherent gameplay snapshots via an `AsyncStream`; a `TabletopCommandSink`
-// accepts player intents (select, move, stop, deselectAll) from the
-// gesture/palette layer and forwards them to the backend.
+// accepts player intents (selection, legacy movement, exact engine actions,
+// targeting, cancellation, and pause state) and forwards them to the backend.
 //
 // Three concrete implementations are provided:
 //

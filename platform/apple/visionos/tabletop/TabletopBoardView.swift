@@ -203,9 +203,10 @@ struct TabletopBoardView: View {
             // surfaces the diagnostic to the developer.
         }
         // Opt-in command integration harness (disabled unless
-        // PEONPAD_TABLETOP_COMMAND_HARNESS is set): submits select→move→stop
-        // through the production transport and logs whether the engine changed
-        // state, as observed on the same live stream the board reconciles.
+        // PEONPAD_TABLETOP_COMMAND_HARNESS is set): selects a unit, activates
+        // exact engine slots, cancels/submits targeting, opens a submenu, and
+        // stops through the production transport. It judges each step from the
+        // same live stream the board reconciles.
         .task {
             guard let harnessTransport else { return }
             _ = TabletopCommandHarnessDriver.runIfEnabled(transport: harnessTransport)
@@ -582,4 +583,3 @@ struct TabletopBoardView: View {
 private extension SIMD2 where Scalar == Float {
     var length: Float { (x * x + y * y).squareRoot() }
 }
-

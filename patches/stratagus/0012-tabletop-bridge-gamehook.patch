@@ -82,7 +82,7 @@ diff --git a/src/ui/botpanel.cpp b/src/ui/botpanel.cpp
 index d739471..4cb4776 100644
 --- a/src/ui/botpanel.cpp
 +++ b/src/ui/botpanel.cpp
-@@ -1096,6 +1096,73 @@ void CButtonPanel::Update()
+@@ -1096,6 +1096,75 @@ void CButtonPanel::Update()
  	}
  }
  
@@ -93,8 +93,10 @@ index d739471..4cb4776 100644
 +	    || GameObserve || GamePaused || GameEstablishing) {
 +		return false;
 +	}
-+	if (!(ThisPlayer->IsTeamed(*Selected[0])
-+	      || Selected[0]->Player->Index == PlayerMax - 1)) {
++	if (!ranges::all_of(Selected, [](const CUnit *unit) {
++		    return unit && unit->Player
++		        && (unit->Player == ThisPlayer || ThisPlayer->IsTeamed(*unit));
++	    })) {
 +		return false;
 +	}
 +	return ranges::all_of(Selected, [button](const CUnit *unit) {

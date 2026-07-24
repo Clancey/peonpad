@@ -506,6 +506,72 @@ func testSelectionChangeCancelsPendingTarget() {
                 "selection change still applies")
     expect(!snap.actionState.isAwaitingBoardTarget,
            "selection change explicitly cancels stale target state")
+    expectEqual(snap.actionState.panelLevel, 0,
+                "selection change returns to the root panel")
+    expect(snap.actions.isEmpty,
+           "selection change discards stale descriptors pending recomputation")
+}
+
+func testSelectionChangeResetsSubmenuState() {
+    var snap = makeActionSnapshot(targetKind: .none)
+    snap.actionState.panelLevel = 3
+    snap = TabletopGameplayCommandReducer.reduce(
+        snap, command: .selectUnit(id: "sentry.east"))
+    expectEqual(snap.actionState.panelLevel, 0,
+                "selection mutation exits a stale submenu")
+    expect(snap.actions.isEmpty,
+           "selection mutation requires authoritative descriptor refresh")
+}
+
+func testMoveSelectionResetsActionState() {
+    var snap = makeActionSnapshot()
+    snap.actionState.panelLevel = 2
+    snap = TabletopGameplayCommandReducer.reduce(
+        snap, command: .moveUnit(id: "sentry.east", toTileX: 2, toTileZ: 3))
+    expectEqual(snap.selection.selectedUnitID, "sentry.east",
+                "explicit move mirrors production single-unit selection")
+    expect(!snap.actionState.isAwaitingBoardTarget,
+           "explicit move clears stale targeting")
+    expectEqual(snap.actionState.panelLevel, 0,
+                "explicit move exits a stale submenu")
+    expect(snap.actions.isEmpty,
+           "explicit move discards descriptors for the prior selection")
+}
+
+func testPausedActionActivationIsRejectedWithoutMutation() {
+    let fixtures: [TabletopEngineAction] = [
+        TabletopEngineAction(
+            id: 0x501, slot: 0, kind: .stop, targetKind: .none),
+        TabletopEngineAction(
+            id: 0x502, slot: 1, kind: .submenu, targetKind: .none, value: 3),
+        TabletopEngineAction(
+            id: 0x503, slot: 2, kind: .move, targetKind: .map),
+    ]
+    for action in fixtures {
+        var snap = makeActionSnapshot(targetKind: .none)
+        snap.actions = [action]
+        snap.actionState.isPaused = true
+        snap.actionState.panelLevel = 1
+        let validation = TabletopGameplayCommandReducer.validate(
+            snap, command: .activateAction(id: action.id, slot: action.slot))
+        expectEqual(validation, .rejectedPaused,
+                    "paused \(action.kind) activation is rejected")
+        let reduced = TabletopGameplayCommandReducer.reduce(
+            snap, command: .activateAction(id: action.id, slot: action.slot))
+        expectEqual(reduced.actionState.lastResult, .rejectedPaused,
+                    "paused \(action.kind) reports production rejection")
+        expectEqual(reduced.actionState.panelLevel, 1,
+                    "paused \(action.kind) cannot change submenu state")
+        expect(!reduced.actionState.isAwaitingBoardTarget,
+               "paused \(action.kind) cannot enter targeting")
+    }
+
+    var resumed = makeActionSnapshot()
+    resumed.actionState.isPaused = true
+    resumed = TabletopGameplayCommandReducer.reduce(resumed, command: .resume)
+    let validation = TabletopGameplayCommandReducer.validate(
+        resumed, command: .activateAction(id: 0x123, slot: 4))
+    expectEqual(validation, .valid, "resume permits authoritative activation")
 }
 
 @main
@@ -541,6 +607,9 @@ struct TabletopGameplayStateTestRunner {
         testPauseResumeTransitions()
         testSubmenuActivationTransitionsPanelLevel()
         testSelectionChangeCancelsPendingTarget()
+        testSelectionChangeResetsSubmenuState()
+        testMoveSelectionResetsActionState()
+        testPausedActionActivationIsRejectedWithoutMutation()
 
         if failureCount > 0 {
             print("FAILED: \(failureCount)/\(checkCount) checks failed")

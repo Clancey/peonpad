@@ -1103,8 +1103,10 @@ bool CButtonPanel::IsEnabled(int button) const
 	    || GameObserve || GamePaused || GameEstablishing) {
 		return false;
 	}
-	if (!(ThisPlayer->IsTeamed(*Selected[0])
-	      || Selected[0]->Player->Index == PlayerMax - 1)) {
+	if (!ranges::all_of(Selected, [](const CUnit *unit) {
+		    return unit && unit->Player
+		        && (unit->Player == ThisPlayer || ThisPlayer->IsTeamed(*unit));
+	    })) {
 		return false;
 	}
 	return ranges::all_of(Selected, [button](const CUnit *unit) {

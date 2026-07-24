@@ -14,6 +14,7 @@
 
 #include "PeonPadTabletopBridge.h"
 #include "TabletopSeenTerrainCache.h"
+#include "TabletopSelectionPolicy.h"
 #include "TabletopTilesetPath.h"
 
 #include <algorithm>
@@ -853,19 +854,54 @@ static void RecordResult(const PeonPadCommand &cmd,
     g_bridge.last_result = result;
 }
 
-static CUnit *FindAliveUnit(uint32_t id, bool owned) noexcept
+static bool IsLocallyControllable(const CUnit &unit) noexcept
+{
+    return ThisPlayer && unit.Player
+        && (unit.Player == ThisPlayer || ThisPlayer->IsTeamed(unit));
+}
+
+static bool IsVisibleToLocalPlayer(const CUnit &unit) noexcept
+{
+    if (!ThisPlayer) return false;
+    if (IsLocallyControllable(unit)) return true;
+    return ReplayRevealMap || Map.NoFogOfWar || unit.IsVisibleAsGoal(*ThisPlayer);
+}
+
+static bool SelectionIsLocallyControllable() noexcept
+{
+    const bool all_controllable =
+        ranges::all_of(Selected, [](const CUnit *unit) {
+            return unit && unit->IsAliveOnMap() && IsLocallyControllable(*unit);
+        });
+    return TabletopSelectionPolicy::CanDispatch(
+        !Selected.empty(), all_controllable);
+}
+
+static CUnit *FindAccessibleUnit(uint32_t id, bool controllable) noexcept
 {
     if (!UnitManager) return nullptr;
     const unsigned slot_count = UnitManager->GetUsedSlotCount();
     for (unsigned i = 0; i < slot_count; ++i) {
         CUnit &unit = UnitManager->GetSlotUnit(static_cast<int>(i));
+        const bool accessible = IsVisibleToLocalPlayer(unit)
+            && (!controllable || IsLocallyControllable(unit));
         if (unit.IsAliveOnMap()
             && static_cast<uint32_t>(UnitNumber(unit)) == id
-            && (!owned || unit.Player == ThisPlayer)) {
+            && TabletopSelectionPolicy::CanInspect(accessible)) {
             return &unit;
         }
     }
     return nullptr;
+}
+
+static void ResetSelectionActionState() noexcept
+{
+    if (g_bridge.target_kind != PEONPAD_ACTION_TARGET_NONE
+        || CursorBuilding || CursorState == CursorStates::Select) {
+        CancelButtonTarget();
+    }
+    ClearTargetState();
+    SelectionChanged();
 }
 
 // Drain queued commands and apply them to the running game state.
@@ -899,19 +935,39 @@ void peonpad_tabletop_drain_commands(void)
 
     for (const PeonPadCommand &cmd : batch) {
         if (cmd.type == PEONPAD_CMD_SELECT || cmd.type == PEONPAD_CMD_DESELECT) {
-            if (g_bridge.target_kind != PEONPAD_ACTION_TARGET_NONE) {
-                CancelButtonTarget();
-                ClearTargetState();
-            }
-            CUnit *target = FindAliveUnit(cmd.unit_id, false);
+            CUnit *target = FindAccessibleUnit(cmd.unit_id, false);
             if (target) {
                 if (cmd.type == PEONPAD_CMD_SELECT) {
-                    SelectUnit(*target);
-                    SelectedUnitChanged();
+                    const bool controllable = IsLocallyControllable(*target);
+                    const bool can_add = TabletopSelectionPolicy::CanAdd(
+                        true,
+                        controllable,
+                        target->Type->Building,
+                        Selected.empty(),
+                        SelectionIsLocallyControllable(),
+                        ranges::any_of(Selected, [](const CUnit *unit) {
+                            return unit && unit->Type->Building;
+                        }));
+                    bool selected = false;
+                    if (Selected.empty()) {
+                        selected = SelectUnit(*target);
+                    } else if (can_add) {
+                        selected = target->Selected || SelectUnit(*target);
+                    }
+                    if (!selected) {
+                        RecordResult(
+                            cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
+                        continue;
+                    }
                 } else {
+                    if (!target->Selected) {
+                        RecordResult(
+                            cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
+                        continue;
+                    }
                     UnSelectUnit(*target);
-                    SelectedUnitChanged();
                 }
+                ResetSelectionActionState();
                 RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
             } else {
                 RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
@@ -932,11 +988,15 @@ void peonpad_tabletop_drain_commands(void)
             if (cmd.unit_id != 0) {
                 // unit_id != 0: select just that unit, then move it.
                 // Matches Swift TabletopTransport.send(.moveUnit(id, dest)).
-                CUnit *target = FindAliveUnit(cmd.unit_id, true);
+                CUnit *target = FindAccessibleUnit(cmd.unit_id, true);
                 if (target) {
                     UnSelectAll();
-                    SelectUnit(*target);
-                    SelectedUnitChanged();
+                    if (!SelectUnit(*target)) {
+                        RecordResult(
+                            cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
+                        continue;
+                    }
+                    ResetSelectionActionState();
                     SendCommandMove(*target, dest, EFlushMode::On);
                     RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
                 } else {
@@ -944,24 +1004,25 @@ void peonpad_tabletop_drain_commands(void)
                 }
             } else {
                 // unit_id == 0: move all currently-selected units.
-                bool issued = false;
-                for (CUnit *u : Selected) {
-                    if (u && u->IsAliveOnMap() && u->Player == ThisPlayer) {
-                        SendCommandMove(*u, dest, EFlushMode::On);
-                        issued = true;
-                    }
+                if (!SelectionIsLocallyControllable()) {
+                    RecordResult(
+                        cmd, Selected.empty()
+                            ? PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION
+                            : PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
+                    continue;
                 }
-                RecordResult(cmd, issued
-                    ? PEONPAD_COMMAND_RESULT_ACCEPTED
-                    : PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION);
+                for (CUnit *u : Selected) {
+                    SendCommandMove(*u, dest, EFlushMode::On);
+                }
+                RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
             }
         } else if (cmd.type == PEONPAD_CMD_DESELECT_ALL) {
             // Clear the entire selection; matches Swift TabletopTransport.send(.deselectAll).
             UnSelectAll();
-            SelectedUnitChanged();
+            ResetSelectionActionState();
             RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
         } else if (cmd.type == PEONPAD_CMD_STOP) {
-            if (CUnit *unit = FindAliveUnit(cmd.unit_id, true)) {
+            if (CUnit *unit = FindAccessibleUnit(cmd.unit_id, true)) {
                 SendCommandStopUnit(*unit);
                 RecordResult(cmd, PEONPAD_COMMAND_RESULT_ACCEPTED);
             } else {
@@ -974,6 +1035,11 @@ void peonpad_tabletop_drain_commands(void)
             }
             if (Selected.empty()) {
                 RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_NO_SELECTION);
+                continue;
+            }
+            if (!SelectionIsLocallyControllable()) {
+                RecordResult(
+                    cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
                 continue;
             }
             UI.ButtonPanel.Update();
@@ -1016,6 +1082,13 @@ void peonpad_tabletop_drain_commands(void)
         } else if (cmd.type == PEONPAD_CMD_TARGET_ACTION) {
             if (g_bridge.target_kind == PEONPAD_ACTION_TARGET_NONE) {
                 RecordResult(cmd, PEONPAD_COMMAND_RESULT_REJECTED_NO_TARGET);
+                continue;
+            }
+            if (!SelectionIsLocallyControllable()) {
+                CancelButtonTarget();
+                ClearTargetState();
+                RecordResult(
+                    cmd, PEONPAD_COMMAND_RESULT_REJECTED_UNIT_NOT_FOUND);
                 continue;
             }
             if (Selected.empty()

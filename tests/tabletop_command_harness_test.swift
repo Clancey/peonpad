@@ -60,7 +60,7 @@ func testGating() {
 // MARK: - Happy-path authoritative action round-trip
 
 func testFullRoundTrip() {
-    let harness = TabletopCommandHarness()
+    let harness = TabletopCommandHarness(runAdversarialSelectionProbe: false)
     let unit = makeUnit(id: "7", owner: 0, x: 3, z: 3)
     let move = TabletopEngineAction(
         id: 0x100, slot: 0, kind: .move, targetKind: .map, text: "Move")
@@ -171,7 +171,8 @@ func testFullRoundTrip() {
 // MARK: - Timeout / failure
 
 func testSelectTimeoutFails() {
-    let harness = TabletopCommandHarness(maxSnapshotsPerPhase: 3)
+    let harness = TabletopCommandHarness(
+        maxSnapshotsPerPhase: 3, runAdversarialSelectionProbe: false)
     let unit = makeUnit(id: "7", owner: 0, x: 3, z: 3)
     // First submits select.
     _ = harness.advance(with: makeSnapshot(units: [unit]))
@@ -186,7 +187,8 @@ func testSelectTimeoutFails() {
 }
 
 func testNoUnitTimeoutFails() {
-    let harness = TabletopCommandHarness(maxSnapshotsPerPhase: 2)
+    let harness = TabletopCommandHarness(
+        maxSnapshotsPerPhase: 2, runAdversarialSelectionProbe: false)
     var reports: [TabletopCommandHarnessReport] = []
     for _ in 0..<2 {
         reports = harness.advance(with: makeSnapshot(units: [])).reports
@@ -194,6 +196,96 @@ func testNoUnitTimeoutFails() {
     expect(reports.contains(where: { $0.step == "select" && !$0.passed }),
            "fails when no live unit ever appears")
     expectEqual(harness.phase, .failed, "failed with no units")
+}
+
+func testAdversarialSelectionAndDispatchProbe() {
+    let harness = TabletopCommandHarness()
+    let own = makeUnit(id: "7", owner: 0, x: 3, z: 3)
+    let enemy = makeUnit(id: "9", owner: 1, x: 4, z: 3)
+    let move = TabletopEngineAction(
+        id: 0x100, slot: 0, kind: .move, targetKind: .map, text: "Move")
+    let units = [own, enemy]
+
+    var (commands, _) = harness.advance(with: makeSnapshot(units: units))
+    expectEqual(commands, [.selectUnit(id: "7")],
+                "adversarial probe begins with owned selection")
+
+    (commands, _) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "7", actions: [move]))
+    expectEqual(commands, [.selectUnit(id: String(UInt32.max - 1))],
+                "probe submits an inaccessible unit id")
+
+    var state = TabletopEngineActionState(
+        lastRequestID: 1, lastResult: .rejectedUnitNotFound)
+    var reports: [TabletopCommandHarnessReport] = []
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "7", actions: [move], actionState: state))
+    expectEqual(commands, [.selectUnit(id: "9")],
+                "probe attempts additive enemy selection")
+    expect(reports.contains(where: { $0.step == "hidden-select" && $0.passed }),
+           "inaccessible selection rejection is observed")
+
+    state = TabletopEngineActionState(
+        lastRequestID: 2, lastResult: .rejectedUnitNotFound)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "7", actions: [move], actionState: state))
+    expectEqual(commands, [.deselectAll],
+                "enemy additive rejection proceeds to inspection setup")
+    expect(reports.contains(where: { $0.step == "enemy-additive" && $0.passed }),
+           "owned and enemy units cannot be mixed")
+
+    state = TabletopEngineActionState(lastRequestID: 3, lastResult: .accepted)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, actionState: state))
+    expectEqual(commands, [.selectUnit(id: "9")],
+                "visible enemy is selected only after clearing owned selection")
+    expect(reports.contains(where: { $0.step == "selection-reset" && $0.passed }),
+           "deselect reset is observed")
+
+    state = TabletopEngineActionState(lastRequestID: 4, lastResult: .accepted)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "9", actionState: state))
+    expectEqual(commands, [.stopUnit(id: "9")],
+                "enemy inspection probes stop authorization")
+
+    state = TabletopEngineActionState(
+        lastRequestID: 5, lastResult: .rejectedUnitNotFound)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "9", actionState: state))
+    expectEqual(commands, [.moveUnit(id: "9", toTileX: 4, toTileZ: 3)],
+                "enemy inspection probes move authorization")
+    expect(reports.contains(where: { $0.step == "enemy-stop" && $0.passed }),
+           "enemy stop rejection is observed")
+
+    state = TabletopEngineActionState(
+        lastRequestID: 6, lastResult: .rejectedUnitNotFound)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "9", actionState: state))
+    expectEqual(commands, [.activateAction(id: 0x100, slot: 0)],
+                "enemy inspection probes exact action authorization")
+
+    state = TabletopEngineActionState(
+        lastRequestID: 7, lastResult: .rejectedUnitNotFound)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "9", actionState: state))
+    expectEqual(commands, [.deselectAll],
+                "rejected enemy action proceeds to restore owned selection")
+    expect(reports.contains(where: { $0.step == "enemy-action" && $0.passed }),
+           "enemy exact action rejection is observed")
+
+    state = TabletopEngineActionState(lastRequestID: 8, lastResult: .accepted)
+    (commands, _) = harness.advance(with: makeSnapshot(
+        units: units, actionState: state))
+    expectEqual(commands, [.selectUnit(id: "7")],
+                "probe reselects the owned unit")
+
+    state = TabletopEngineActionState(lastRequestID: 9, lastResult: .accepted)
+    (commands, reports) = harness.advance(with: makeSnapshot(
+        units: units, selectedID: "7", actions: [move], actionState: state))
+    expectEqual(commands, [.activateAction(id: 0x100, slot: 0)],
+                "normal exact action flow resumes after adversarial probes")
+    expect(reports.contains(where: { $0.step == "restore-selection" && $0.passed }),
+           "owned selection restoration is observed")
 }
 
 // MARK: - Prefers a mobile unit for the move probe
@@ -222,7 +314,7 @@ func testPrefersMobileUnitForMoveProbe() {
         terrain: [], fogMask: [], units: [building, worker],
         selection: TabletopGameplaySelection(), assets: catalog)
 
-    let harness = TabletopCommandHarness()
+    let harness = TabletopCommandHarness(runAdversarialSelectionProbe: false)
     let (cmds, _) = harness.advance(with: snap)
     expectEqual(cmds, [.selectUnit(id: "peon")],
                 "harness selects the mobile worker, not the building listed first")
@@ -237,6 +329,7 @@ struct CommandHarnessTests {
         testFullRoundTrip()
         testSelectTimeoutFails()
         testNoUnitTimeoutFails()
+        testAdversarialSelectionAndDispatchProbe()
         testPrefersMobileUnitForMoveProbe()
 
         if failures == 0 {

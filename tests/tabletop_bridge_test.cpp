@@ -18,6 +18,7 @@
 
 #include "PeonPadTabletopBridge.h"
 #include "TabletopSeenTerrainCache.h"
+#include "TabletopSelectionPolicy.h"
 
 #include <atomic>
 #include <cassert>
@@ -229,6 +230,37 @@ static bool test_enum_values()
     EXPECT(static_cast<int>(PEONPAD_TILESET_PATH_ROOT_DATA)  == 0);
     EXPECT(static_cast<int>(PEONPAD_TILESET_PATH_ROOT_CACHE) == 1);
 
+    return true;
+}
+
+static bool test_selection_authorization_policy()
+{
+    EXPECT(TabletopSelectionPolicy::CanInspect(true));
+    EXPECT(!TabletopSelectionPolicy::CanInspect(false));
+
+    // Empty selections may inspect visible enemies, but inaccessible units
+    // cannot be selected and foreign units cannot join an owned selection.
+    EXPECT(TabletopSelectionPolicy::CanAdd(
+        true, false, false, true, false, false));
+    EXPECT(!TabletopSelectionPolicy::CanAdd(
+        false, false, false, true, false, false));
+    EXPECT(!TabletopSelectionPolicy::CanAdd(
+        true, false, false, false, true, false));
+
+    // Only local or teamed units are controllable. Mixed authority and
+    // building selections follow the canonical mouse-selection exclusions.
+    EXPECT(!TabletopSelectionPolicy::CanAdd(
+        true, true, false, false, false, false));
+    EXPECT(!TabletopSelectionPolicy::CanAdd(
+        true, true, true, false, true, false));
+    EXPECT(!TabletopSelectionPolicy::CanAdd(
+        true, true, false, false, true, true));
+    EXPECT(TabletopSelectionPolicy::CanAdd(
+        true, true, false, false, true, false));
+
+    EXPECT(!TabletopSelectionPolicy::CanDispatch(false, true));
+    EXPECT(!TabletopSelectionPolicy::CanDispatch(true, false));
+    EXPECT(TabletopSelectionPolicy::CanDispatch(true, true));
     return true;
 }
 
@@ -1359,6 +1391,7 @@ int main()
     Run("struct_sizes",             test_struct_sizes);
     Run("struct_field_offsets",     test_struct_field_offsets);
     Run("enum_values",              test_enum_values);
+    Run("selection_policy",         test_selection_authorization_policy);
 
     // Lifecycle
     Run("init_cleanup",             test_init_cleanup);

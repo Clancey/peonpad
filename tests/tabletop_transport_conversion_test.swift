@@ -286,14 +286,20 @@ func testConversionMapsUnknownTypeToEmptyKind() {
 // MARK: - Command encoder
 
 func testCommandEncoding() {
-    expectEqual(EngineCommandEncoder.encode(.deselectAll),
-                EngineCommand(kind: .deselectAll), "deselectAll always encodes")
-    expectEqual(EngineCommandEncoder.encode(.selectUnit(id: "42")),
-                EngineCommand(kind: .select, unitID: 42), "select encodes id")
-    expectEqual(EngineCommandEncoder.encode(.stopUnit(id: "7")),
-                EngineCommand(kind: .stop, unitID: 7), "stop encodes id")
-    expectEqual(EngineCommandEncoder.encode(.moveUnit(id: "3", toTileX: 5, toTileZ: 9)),
-                EngineCommand(kind: .move, unitID: 3, tileX: 5, tileY: 9), "move encodes")
+    expectEqual(EngineCommandEncoder.encode(.deselectAll, requestID: 77),
+                EngineCommand(kind: .deselectAll, requestID: 77),
+                "deselectAll preserves request id")
+    expectEqual(EngineCommandEncoder.encode(.selectUnit(id: "42"), requestID: 78),
+                EngineCommand(kind: .select, unitID: 42, requestID: 78),
+                "select preserves request id")
+    expectEqual(EngineCommandEncoder.encode(.stopUnit(id: "7"), requestID: 79),
+                EngineCommand(kind: .stop, unitID: 7, requestID: 79),
+                "stop preserves request id")
+    expectEqual(EngineCommandEncoder.encode(
+        .moveUnit(id: "3", toTileX: 5, toTileZ: 9), requestID: 80),
+        EngineCommand(
+            kind: .move, unitID: 3, tileX: 5, tileY: 9, requestID: 80),
+        "move preserves request id")
     expectEqual(EngineCommandEncoder.encode(
         .activateAction(id: 0x1234, slot: 7), requestID: 81),
         EngineCommand(kind: .activateAction, actionID: 0x1234,
@@ -310,6 +316,20 @@ func testCommandEncoding() {
                 EngineCommand(kind: .pause, requestID: 84), "pause encodes")
     expectEqual(EngineCommandEncoder.encode(.resume, requestID: 85),
                 EngineCommand(kind: .resume, requestID: 85), "resume encodes")
+}
+
+func testConsecutiveLegacyCommandRequestIDsRemainDistinct() {
+    let commands: [TabletopGameplayCommand] = [
+        .selectUnit(id: "4"),
+        .moveUnit(id: "4", toTileX: 2, toTileZ: 3),
+        .stopUnit(id: "4"),
+        .deselectAll,
+    ]
+    let encoded = zip(commands, UInt64(301)...).compactMap {
+        EngineCommandEncoder.encode($0.0, requestID: $0.1)
+    }
+    expectEqual(encoded.map(\.requestID), [301, 302, 303, 304],
+                "consecutive legacy commands keep distinct correlations")
 }
 
 func testCommandEncodingRejectsBadInput() {
@@ -735,6 +755,7 @@ struct TransportConversionTests {
         testConversionCarriesAuthoritativeActions()
         testUnknownActionValuesMapSafely()
         testCommandEncoding()
+        testConsecutiveLegacyCommandRequestIDsRemainDistinct()
         testCommandEncodingRejectsBadInput()
         testMapFitTileSizeAndCentering()
         testMapFitRoundTrip()

@@ -24,21 +24,23 @@ public enum EngineCommandEncoder {
     ) -> EngineCommand? {
         switch command {
         case .deselectAll:
-            return EngineCommand(kind: .deselectAll)
+            return EngineCommand(kind: .deselectAll, requestID: requestID)
 
         case .selectUnit(let id):
             guard let unitID = parseUnitID(id) else { return nil }
-            return EngineCommand(kind: .select, unitID: unitID)
+            return EngineCommand(kind: .select, unitID: unitID, requestID: requestID)
 
         case .stopUnit(let id):
             guard let unitID = parseUnitID(id) else { return nil }
-            return EngineCommand(kind: .stop, unitID: unitID)
+            return EngineCommand(kind: .stop, unitID: unitID, requestID: requestID)
 
         case .moveUnit(let id, let toTileX, let toTileZ):
             guard let unitID = parseUnitID(id) else { return nil }
             guard let tx = clampTile(toTileX, maxMapDim: maxMapDim),
                   let tz = clampTile(toTileZ, maxMapDim: maxMapDim) else { return nil }
-            return EngineCommand(kind: .move, unitID: unitID, tileX: tx, tileY: tz)
+            return EngineCommand(
+                kind: .move, unitID: unitID, tileX: tx, tileY: tz,
+                requestID: requestID)
 
         case .activateAction(let id, let slot):
             guard id != 0, slot < 64 else { return nil }

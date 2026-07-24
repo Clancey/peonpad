@@ -50,7 +50,7 @@ revision = "3d87c93f7fd8c0b62ee1be5df0a6d9efc72ca6cc"
 dependencies_revision = "58de69c9ef44d1bc915fce9924333d395c7a40d2"
 # SHA-256 over path, executable bit, symlink target, and contents for every
 # tracked file beneath engine/stratagus after applying the ordered patch stack.
-staged_tree_sha256 = "69fd5f22c16d7592059e2139c81359ebc7fe1806b93a304e638e3f33ceed6f58"
+staged_tree_sha256 = "209eeef1a5bd76933e8b573cf2faf42468e482e1191cf02c373c5516a6c8bda5"
 license = "GPL-2.0-or-later"
 license_sha256 = "db296f2f7f35bca3a174efb0eb392b3b17bd94b341851429a3dff411b1c2fc73"
 

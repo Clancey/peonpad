@@ -557,6 +557,7 @@ public enum TabletopCommandValidation: Equatable {
     case rejectedDeadUnit(id: String, hp: Int)
     case rejectedActionNotFound(id: UInt64, slot: UInt16)
     case rejectedActionDisabled(id: UInt64, slot: UInt16)
+    case rejectedPaused
     case rejectedNoPendingTarget
     case rejectedTargetOutOfBounds(tileX: Int, tileZ: Int)
 }
@@ -583,6 +584,9 @@ public enum TabletopGameplayCommandReducer {
         case .stopUnit(let id):
             return validateUnit(id, in: snapshot)
         case .activateAction(let id, let slot):
+            guard !snapshot.actionState.isPaused else {
+                return .rejectedPaused
+            }
             guard let action = snapshot.actions.first(where: {
                 $0.id == id && $0.slot == slot && $0.isVisible
             }) else {
@@ -613,22 +617,31 @@ public enum TabletopGameplayCommandReducer {
         _ snapshot: TabletopGameplaySnapshot,
         command: TabletopGameplayCommand
     ) -> TabletopGameplaySnapshot {
-        guard validate(snapshot, command: command) == .valid else {
+        let validation = validate(snapshot, command: command)
+        guard validation == .valid else {
+            if validation == .rejectedPaused,
+               case .activateAction = command {
+                var rejected = snapshot
+                rejected.actionState.lastResult = .rejectedPaused
+                return rejected
+            }
             return snapshot
         }
         var next = snapshot
         switch command {
         case .deselectAll:
             next.selection = TabletopGameplaySelection()
-            clearTargetState(&next.actionState)
+            resetSelectionActionState(&next)
         case .selectUnit(let id):
             next.selection = TabletopGameplaySelection(selectedUnitID: id)
-            clearTargetState(&next.actionState)
+            resetSelectionActionState(&next)
         case .moveUnit(let id, let toTileX, let toTileZ):
             if let idx = next.units.firstIndex(where: { $0.id == id }) {
                 next.units[idx].tileX = toTileX
                 next.units[idx].tileZ = toTileZ
             }
+            next.selection = TabletopGameplaySelection(selectedUnitID: id)
+            resetSelectionActionState(&next)
         case .stopUnit:
             // Pure-state model: no velocity to clear. Validation above
             // ensures the unit exists and is alive; nothing else to update.
@@ -674,6 +687,14 @@ public enum TabletopGameplayCommandReducer {
         state.targetActionKind = .unknown
         state.targetActionID = 0
         state.targetSlot = 0
+    }
+
+    private static func resetSelectionActionState(
+        _ snapshot: inout TabletopGameplaySnapshot
+    ) {
+        clearTargetState(&snapshot.actionState)
+        snapshot.actionState.panelLevel = 0
+        snapshot.actions = []
     }
 
     private static func validateUnit(

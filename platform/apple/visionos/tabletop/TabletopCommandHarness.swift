@@ -52,6 +52,15 @@ public final class TabletopCommandHarness {
 
     public enum Phase: Equatable {
         case selecting
+        case probingHiddenSelection
+        case probingEnemyAdditive
+        case clearingForEnemyInspection
+        case selectingEnemyInspection
+        case stoppingEnemy
+        case movingEnemy
+        case activatingEnemy
+        case clearingEnemyInspection
+        case restoringOwnedSelection
         case activatingTargetForCancel
         case cancellingTarget
         case activatingTargetForSubmit
@@ -69,16 +78,23 @@ public final class TabletopCommandHarness {
     public let maxSnapshotsPerPhase: Int
 
     private var targetUnitID: String?
+    private var enemyUnitID: String?
     private var baselineTile: (x: Int, z: Int)?
     private var moveTarget: (x: Int, z: Int)?
     private var targetAction: TabletopEngineAction?
     private var nontrivialAction: TabletopEngineAction?
     private var baselinePanelLevel: UInt8 = 0
     private var stopRequestBaseline: UInt64 = 0
+    private var adversarialRequestBaseline: UInt64 = 0
+    private let runAdversarialSelectionProbe: Bool
     private var waited = 0
 
-    public init(maxSnapshotsPerPhase: Int = 600) {
+    public init(
+        maxSnapshotsPerPhase: Int = 600,
+        runAdversarialSelectionProbe: Bool = true
+    ) {
         self.maxSnapshotsPerPhase = max(1, maxSnapshotsPerPhase)
+        self.runAdversarialSelectionProbe = runAdversarialSelectionProbe
     }
 
     public var isComplete: Bool { phase == .finished || phase == .failed }
@@ -116,13 +132,209 @@ public final class TabletopCommandHarness {
                     return timeoutOrWait("action")
                 }
                 targetAction = action
-                phase = .activatingTargetForCancel
                 waited = 0
                 let pass = report("select", true,
                                   "unit \(id) selected in engine snapshot")
+                if runAdversarialSelectionProbe {
+                    guard let enemy = pickEnemyUnit(in: snapshot) else {
+                        return timeoutOrWait("enemy-visible")
+                    }
+                    enemyUnitID = enemy.id
+                    adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                    phase = .probingHiddenSelection
+                    return ([.selectUnit(id: String(UInt32.max - 1))], [pass])
+                }
+                phase = .activatingTargetForCancel
                 return ([.activateAction(id: action.id, slot: action.slot)], [pass])
             }
             return timeoutOrWait("select")
+
+        case .probingHiddenSelection:
+            guard let ownID = targetUnitID else {
+                return fail("hidden-select", "missing owned unit")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .rejectedUnitNotFound,
+                      snapshot.selection.selectedUnitID == ownID else {
+                    return fail("hidden-select",
+                                "inaccessible id changed selection or leaked a result")
+                }
+                guard let enemyID = enemyUnitID else {
+                    return fail("enemy-additive", "missing visible enemy")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .probingEnemyAdditive
+                waited = 0
+                return ([.selectUnit(id: enemyID)], [
+                    report("hidden-select", true,
+                           "inaccessible id rejected without changing selection"),
+                ])
+            }
+            return timeoutOrWait("hidden-select")
+
+        case .probingEnemyAdditive:
+            guard let ownID = targetUnitID else {
+                return fail("enemy-additive", "missing owned unit")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .rejectedUnitNotFound,
+                      snapshot.selection.selectedUnitID == ownID else {
+                    return fail("enemy-additive",
+                                "enemy was mixed into the owned selection")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .clearingForEnemyInspection
+                waited = 0
+                return ([.deselectAll], [
+                    report("enemy-additive", true,
+                           "visible enemy could not join an owned selection"),
+                ])
+            }
+            return timeoutOrWait("enemy-additive")
+
+        case .clearingForEnemyInspection:
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .accepted,
+                      snapshot.selection.selectedUnitID == nil,
+                      snapshot.actionState.panelLevel == 0,
+                      !snapshot.actionState.isAwaitingBoardTarget else {
+                    return fail("selection-reset",
+                                "deselect did not clear panel and target state")
+                }
+                guard let enemyID = enemyUnitID else {
+                    return fail("enemy-inspect", "missing visible enemy")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .selectingEnemyInspection
+                waited = 0
+                return ([.selectUnit(id: enemyID)], [
+                    report("selection-reset", true,
+                           "deselect reset target and submenu state"),
+                ])
+            }
+            return timeoutOrWait("selection-reset")
+
+        case .selectingEnemyInspection:
+            guard let enemyID = enemyUnitID else {
+                return fail("enemy-inspect", "missing visible enemy")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .accepted,
+                      snapshot.selection.selectedUnitID == enemyID else {
+                    return fail("enemy-inspect",
+                                "visible enemy inspection selection was not reflected")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .stoppingEnemy
+                waited = 0
+                return ([.stopUnit(id: enemyID)], [
+                    report("enemy-inspect", true,
+                           "visible enemy can be inspected without command authority"),
+                ])
+            }
+            return timeoutOrWait("enemy-inspect")
+
+        case .stoppingEnemy:
+            guard let enemyID = enemyUnitID else {
+                return fail("enemy-stop", "missing visible enemy")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .rejectedUnitNotFound,
+                      snapshot.selection.selectedUnitID == enemyID else {
+                    return fail("enemy-stop", "enemy stop was not rejected")
+                }
+                let enemy = snapshot.units.first(where: { $0.id == enemyID })
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .movingEnemy
+                waited = 0
+                return ([.moveUnit(
+                    id: enemyID,
+                    toTileX: enemy?.tileX ?? 0,
+                    toTileZ: enemy?.tileZ ?? 0
+                )], [
+                    report("enemy-stop", true,
+                           "enemy stop rejected through the production queue"),
+                ])
+            }
+            return timeoutOrWait("enemy-stop")
+
+        case .movingEnemy:
+            guard let enemyID = enemyUnitID, let action = targetAction else {
+                return fail("enemy-move", "missing adversarial fixture")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .rejectedUnitNotFound,
+                      snapshot.selection.selectedUnitID == enemyID else {
+                    return fail("enemy-move", "enemy move was not rejected")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .activatingEnemy
+                waited = 0
+                return ([.activateAction(id: action.id, slot: action.slot)], [
+                    report("enemy-move", true,
+                           "enemy move rejected through the production queue"),
+                ])
+            }
+            return timeoutOrWait("enemy-move")
+
+        case .activatingEnemy:
+            guard let enemyID = enemyUnitID else {
+                return fail("enemy-action", "missing visible enemy")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .rejectedUnitNotFound,
+                      snapshot.selection.selectedUnitID == enemyID,
+                      !snapshot.actionState.isAwaitingBoardTarget else {
+                    return fail("enemy-action",
+                                "enemy exact action was not rejected")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .clearingEnemyInspection
+                waited = 0
+                return ([.deselectAll], [
+                    report("enemy-action", true,
+                           "enemy exact action rejected before dispatch"),
+                ])
+            }
+            return timeoutOrWait("enemy-action")
+
+        case .clearingEnemyInspection:
+            guard let ownID = targetUnitID else {
+                return fail("restore-selection", "missing owned unit")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .accepted,
+                      snapshot.selection.selectedUnitID == nil else {
+                    return fail("restore-selection",
+                                "enemy inspection did not clear")
+                }
+                adversarialRequestBaseline = snapshot.actionState.lastRequestID
+                phase = .restoringOwnedSelection
+                waited = 0
+                return ([.selectUnit(id: ownID)], [])
+            }
+            return timeoutOrWait("restore-selection")
+
+        case .restoringOwnedSelection:
+            guard let ownID = targetUnitID else {
+                return fail("restore-selection", "missing owned unit")
+            }
+            if snapshot.actionState.lastRequestID != adversarialRequestBaseline {
+                guard snapshot.actionState.lastResult == .accepted,
+                      snapshot.selection.selectedUnitID == ownID,
+                      let action = pickTargetAction(in: snapshot) else {
+                    return fail("restore-selection",
+                                "owned selection or actions were not restored")
+                }
+                targetAction = action
+                phase = .activatingTargetForCancel
+                waited = 0
+                return ([.activateAction(id: action.id, slot: action.slot)], [
+                    report("restore-selection", true,
+                           "owned selection restored after adversarial probes"),
+                ])
+            }
+            return timeoutOrWait("restore-selection")
 
         case .activatingTargetForCancel:
             guard let action = targetAction else {
@@ -274,6 +486,18 @@ public final class TabletopCommandHarness {
         })
     }
 
+    private func pickEnemyUnit(
+        in snapshot: TabletopGameplaySnapshot
+    ) -> TabletopGameplayUnit? {
+        guard let ownID = targetUnitID,
+              let own = snapshot.units.first(where: { $0.id == ownID }) else {
+            return nil
+        }
+        return snapshot.units.first(where: {
+            $0.isAlive && $0.owner != own.owner && $0.owner != 15
+        })
+    }
+
     /// Prefer a unit owned by the local player (owner 0), else any live unit.
     private func pickUnit(in snapshot: TabletopGameplaySnapshot) -> TabletopGameplayUnit? {
         let live = snapshot.units.filter { $0.isAlive }
@@ -317,6 +541,14 @@ public final class TabletopCommandHarness {
                                  + "\(maxSnapshotsPerPhase) snapshots")])
         }
         return ([], [])
+    }
+
+    private func fail(
+        _ step: String,
+        _ detail: String
+    ) -> (commands: [TabletopGameplayCommand], reports: [TabletopCommandHarnessReport]) {
+        phase = .failed
+        return ([], [report(step, false, detail)])
     }
 
     private func report(_ step: String, _ passed: Bool, _ detail: String)

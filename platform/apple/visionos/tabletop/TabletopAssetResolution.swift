@@ -240,6 +240,206 @@ public struct TabletopAssetPlacement: Equatable, Sendable {
     }
 }
 
+// MARK: - Unit sprite render identity
+
+/// Why a unit sprite request could not produce real art. These values are also
+/// used by the app's bounded diagnostics, so every fallback has an explicit,
+/// stable cause instead of silently retaining placeholder geometry.
+public enum TabletopUnitSpriteFailureReason: String, Error, Equatable, Sendable {
+    case catalogMiss
+    case invalidPlacement
+    case pathResolution
+    case fileRead
+    case imageDecode
+    case invalidFrame
+    case imageCrop
+    case imageRender
+    case textureCreation
+}
+
+/// Root-qualified identity for one requested unit image. It includes every
+/// field that changes decoded pixels or presentation, allowing the RealityKit
+/// layer to reject stale async completions after unit reuse or descriptor/frame
+/// changes.
+public struct TabletopUnitSpriteRequestIdentity: Equatable, Hashable, Sendable {
+    public var unitID: String
+    public var unitKind: String
+    public var renderCategory: TabletopRenderCategory
+    public var relativePath: String
+    public var frame: Int
+    public var mirror: Bool
+    public var owner: Int
+    public var root: TabletopTilesetPathRoot
+
+    public init(
+        unitID: String,
+        unitKind: String,
+        renderCategory: TabletopRenderCategory,
+        relativePath: String,
+        frame: Int,
+        mirror: Bool,
+        owner: Int,
+        root: TabletopTilesetPathRoot = .dataRoot
+    ) {
+        self.unitID = unitID
+        self.unitKind = unitKind
+        self.renderCategory = renderCategory
+        self.relativePath = relativePath
+        self.frame = frame
+        self.mirror = mirror
+        self.owner = owner
+        self.root = root
+    }
+}
+
+/// Diagnostic fields retained even when no valid placement can be produced.
+public struct TabletopUnitSpriteDiagnosticContext: Equatable, Sendable {
+    public var unitID: String
+    public var unitKind: String
+    public var renderCategory: TabletopRenderCategory
+    public var relativePath: String
+    public var frame: Int
+    public var root: TabletopTilesetPathRoot
+
+    public var deduplicationKey: String {
+        "\(unitID)#\(unitKind)#\(renderCategory.rawValue)#\(relativePath)#\(frame)#\(root.rawValue)"
+    }
+}
+
+public struct TabletopUnitSpriteRequest: Equatable, Sendable {
+    public var identity: TabletopUnitSpriteRequestIdentity
+    public var placement: TabletopAssetPlacement
+    public var diagnosticContext: TabletopUnitSpriteDiagnosticContext
+}
+
+public enum TabletopUnitSpriteDecision: Equatable, Sendable {
+    case real(TabletopUnitSpriteRequest)
+    case fallback(TabletopUnitSpriteDiagnosticContext, TabletopUnitSpriteFailureReason)
+}
+
+/// Pure decision seam between snapshot descriptors and asynchronous material
+/// creation. Invalid metadata never gets normalized into a plausible-looking
+/// request: it becomes an intentional, diagnosable fallback.
+public enum TabletopUnitSpriteRequestResolver {
+    public static func resolve(
+        unit: TabletopGameplayUnit,
+        sprite: TabletopUnitSpriteInfo?,
+        frameOverride: Int? = nil,
+        mirrorOverride: Bool? = nil
+    ) -> TabletopUnitSpriteDecision {
+        let frame = frameOverride ?? unit.spriteFrame ?? 0
+        let category = sprite?.renderCategory ?? .mobile
+        let rawPath = sprite?.spritePath ?? ""
+        let context = TabletopUnitSpriteDiagnosticContext(
+            unitID: unit.id,
+            unitKind: unit.kind,
+            renderCategory: category,
+            relativePath: rawPath,
+            frame: frame,
+            root: .dataRoot)
+
+        guard let sprite else {
+            return .fallback(context, .catalogMiss)
+        }
+        guard frame >= 0,
+              sprite.frameWidth > 0,
+              sprite.frameHeight > 0,
+              let path = TabletopAssetPath.confine(sprite.spritePath)
+        else {
+            return .fallback(context, .invalidPlacement)
+        }
+
+        let mirror = mirrorOverride ?? unit.spriteMirror ?? false
+        let placement = TabletopAssetPlacement(
+            relativePath: path,
+            frame: frame,
+            cellWidth: sprite.frameWidth,
+            cellHeight: sprite.frameHeight,
+            mirror: mirror,
+            teamTint: sprite.teamColorCount > 0
+                ? TabletopTeamPalette.tint(owner: unit.owner)
+                : nil)
+        let identity = TabletopUnitSpriteRequestIdentity(
+            unitID: unit.id,
+            unitKind: unit.kind,
+            renderCategory: sprite.renderCategory,
+            relativePath: path,
+            frame: frame,
+            mirror: mirror,
+            owner: unit.owner)
+        return .real(TabletopUnitSpriteRequest(
+            identity: identity,
+            placement: placement,
+            diagnosticContext: TabletopUnitSpriteDiagnosticContext(
+                unitID: unit.id,
+                unitKind: unit.kind,
+                renderCategory: sprite.renderCategory,
+                relativePath: path,
+                frame: frame,
+                root: .dataRoot)))
+    }
+}
+
+public struct TabletopUnitSpriteOutcomeCounts: Equatable, Sendable {
+    public var real: Int
+    public var fallback: Int
+}
+
+/// Tracks the current real-vs-fallback outcome per live unit and bounds failure
+/// diagnostic keys. The app owns logging; this pure seam keeps counter and
+/// deduplication behavior host-testable.
+public final class TabletopUnitSpriteOutcomeTracker {
+    private var realByUnitID: [String: Bool] = [:]
+    private var emittedFailureKeys: Set<String> = []
+    private var failureKeyOrder: [String] = []
+    private let diagnosticCapacity: Int
+
+    public init(diagnosticCapacity: Int = 128) {
+        self.diagnosticCapacity = max(1, diagnosticCapacity)
+    }
+
+    public var counts: TabletopUnitSpriteOutcomeCounts {
+        let real = realByUnitID.values.filter { $0 }.count
+        return TabletopUnitSpriteOutcomeCounts(
+            real: real,
+            fallback: realByUnitID.count - real)
+    }
+
+    @discardableResult
+    public func recordReal(unitID: String) -> Bool {
+        let changed = realByUnitID[unitID] != true
+        realByUnitID[unitID] = true
+        return changed
+    }
+
+    @discardableResult
+    public func recordDisplayedFallback(unitID: String) -> Bool {
+        let changed = realByUnitID[unitID] != false
+        realByUnitID[unitID] = false
+        return changed
+    }
+
+    /// Returns true only for the first occurrence of this bounded diagnostic
+    /// identity. Counters are updated even when the message is deduplicated.
+    public func recordFallback(
+        _ context: TabletopUnitSpriteDiagnosticContext,
+        reason: TabletopUnitSpriteFailureReason
+    ) -> Bool {
+        _ = recordDisplayedFallback(unitID: context.unitID)
+        let key = "\(context.deduplicationKey)#\(reason.rawValue)"
+        guard emittedFailureKeys.insert(key).inserted else { return false }
+        failureKeyOrder.append(key)
+        if failureKeyOrder.count > diagnosticCapacity {
+            emittedFailureKeys.remove(failureKeyOrder.removeFirst())
+        }
+        return true
+    }
+
+    public func remove(unitID: String) {
+        realByUnitID.removeValue(forKey: unitID)
+    }
+}
+
 // MARK: - Production staged-data resolver
 
 /// Resolves engine-owned art descriptors into staged-data placements. Pure and
@@ -295,7 +495,8 @@ public final class WargusStagedAssetResolver: @unchecked Sendable {
               sprite.frameHeight > 0,
               let path = TabletopAssetPath.confine(sprite.spritePath)
         else { return nil }
-        let frame = max(0, frameOverride ?? unit.spriteFrame ?? 0)
+        let frame = frameOverride ?? unit.spriteFrame ?? 0
+        guard frame >= 0 else { return nil }
         let mirror = mirrorOverride ?? unit.spriteMirror ?? false
         let teamTint = sprite.teamColorCount > 0
             ? TabletopTeamPalette.tint(owner: unit.owner)

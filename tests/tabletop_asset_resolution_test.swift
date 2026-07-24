@@ -277,12 +277,142 @@ func testUnitPlacement() {
     expect(resolver.unitPlacement(unit: unit, sprite: badPath) == nil,
            "unconfinable sprite path => nil")
 
-    // Negative engine frame is clamped to 0.
+    // Negative engine frame is invalid rather than silently selecting frame 0.
     let negUnit = TabletopGameplayUnit(
         id: "2", owner: 0, hp: 60, maxHP: 60, facingRadians: 0, tileX: 0, tileZ: 0,
         kind: "unit-footman", spriteFrame: -3, spriteMirror: false)
-    expectEqual(resolver.unitPlacement(unit: negUnit, sprite: sprite)?.frame, 0,
-                "negative frame clamped to 0")
+    expect(resolver.unitPlacement(unit: negUnit, sprite: sprite) == nil,
+           "negative frame produces no placement")
+}
+
+func testUnitSpriteRenderDecisionsAndIdentity() {
+    let unit = TabletopGameplayUnit(
+        id: "17", owner: 1, hp: 60, maxHP: 60, facingRadians: 0,
+        tileX: 2, tileZ: 3, kind: "unit-footman",
+        spriteFrame: 12, spriteMirror: true)
+    let mobile = TabletopUnitSpriteInfo(
+        spritePath: "graphics/human/units/footman.png",
+        frameWidth: 72, frameHeight: 72, numDirections: 5, flip: true,
+        teamColorStart: 208, teamColorCount: 4,
+        renderCategory: .mobile)
+
+    guard case let .real(request) = TabletopUnitSpriteRequestResolver.resolve(
+        unit: unit, sprite: mobile
+    ) else {
+        expect(false, "valid mobile descriptor produces a real request")
+        return
+    }
+    expectEqual(request.identity.unitID, "17", "identity carries stable unit id")
+    expectEqual(request.identity.unitKind, "unit-footman", "identity carries unit ident")
+    expectEqual(request.identity.renderCategory, .mobile, "identity carries mobile category")
+    expectEqual(request.identity.relativePath, "graphics/human/units/footman.png",
+                "identity carries confined path")
+    expectEqual(request.identity.frame, 12, "identity carries frame")
+    expectEqual(request.identity.mirror, true, "identity carries mirror")
+    expectEqual(request.identity.owner, 1, "identity carries team owner")
+    expectEqual(request.identity.root, .dataRoot, "unit art is data-root qualified")
+
+    guard case let .real(nextFrame) = TabletopUnitSpriteRequestResolver.resolve(
+        unit: unit, sprite: mobile, frameOverride: 13, mirrorOverride: false
+    ) else {
+        expect(false, "valid frame override produces a real request")
+        return
+    }
+    expect(request.identity != nextFrame.identity,
+           "frame/mirror changes produce a distinct async request identity")
+
+    let building = TabletopUnitSpriteInfo(
+        spritePath: "graphics/human/buildings/town_hall.png",
+        frameWidth: 128, frameHeight: 128, numDirections: 1, flip: false,
+        renderCategory: .building, footprintWidth: 4, footprintHeight: 4)
+    guard case let .real(buildingRequest) = TabletopUnitSpriteRequestResolver.resolve(
+        unit: TabletopGameplayUnit(
+            id: "18", owner: 0, hp: 1200, maxHP: 1200, facingRadians: 0,
+            tileX: 4, tileZ: 4, kind: "unit-town-hall", spriteFrame: 0),
+        sprite: building
+    ) else {
+        expect(false, "valid building descriptor produces a real request")
+        return
+    }
+    expectEqual(buildingRequest.identity.renderCategory, .building,
+                "building request preserves fixed-orientation category")
+
+    let resource = TabletopUnitSpriteInfo(
+        spritePath: "graphics/neutral/buildings/gold_mine.png",
+        frameWidth: 96, frameHeight: 96, numDirections: 1, flip: false,
+        renderCategory: .resource, footprintWidth: 3, footprintHeight: 3)
+    guard case let .real(resourceRequest) = TabletopUnitSpriteRequestResolver.resolve(
+        unit: TabletopGameplayUnit(
+            id: "19", owner: 15, hp: 5000, maxHP: 5000, facingRadians: 0,
+            tileX: 8, tileZ: 8, kind: "unit-gold-mine", spriteFrame: 0),
+        sprite: resource
+    ) else {
+        expect(false, "valid resource descriptor produces a real request")
+        return
+    }
+    expectEqual(resourceRequest.identity.renderCategory, .resource,
+                "resource request preserves fixed-orientation category")
+
+    guard case let .fallback(missing, missingReason) =
+        TabletopUnitSpriteRequestResolver.resolve(unit: unit, sprite: nil)
+    else {
+        expect(false, "catalog miss produces fallback")
+        return
+    }
+    expectEqual(missingReason, .catalogMiss, "catalog miss has explicit reason")
+    expectEqual(missing.unitKind, "unit-footman", "fallback retains ident")
+
+    var invalid = mobile
+    invalid.spritePath = "../escape.png"
+    guard case let .fallback(_, invalidReason) =
+        TabletopUnitSpriteRequestResolver.resolve(unit: unit, sprite: invalid)
+    else {
+        expect(false, "invalid path produces fallback")
+        return
+    }
+    expectEqual(invalidReason, .invalidPlacement, "invalid placement has explicit reason")
+}
+
+func testUnitSpriteOutcomeCountersAndDeduplication() {
+    let tracker = TabletopUnitSpriteOutcomeTracker(diagnosticCapacity: 2)
+    let context = TabletopUnitSpriteDiagnosticContext(
+        unitID: "1", unitKind: "unit-footman", renderCategory: .mobile,
+        relativePath: "graphics/footman.png", frame: 0, root: .dataRoot)
+
+    expect(tracker.recordDisplayedFallback(unitID: "1"),
+           "a first pending request records its visible fallback")
+    expectEqual(tracker.counts, TabletopUnitSpriteOutcomeCounts(real: 0, fallback: 1),
+                "pending visible fallback is included in current counters")
+    expect(!tracker.recordDisplayedFallback(unitID: "1"),
+           "repeated pending state does not emit an outcome transition")
+    expect(tracker.recordFallback(context, reason: .fileRead),
+           "first failure emits a diagnostic")
+    expect(!tracker.recordFallback(context, reason: .fileRead),
+           "identical failure is deduplicated")
+    expectEqual(tracker.counts, TabletopUnitSpriteOutcomeCounts(real: 0, fallback: 1),
+                "fallback counter tracks current unit outcome")
+    expect(tracker.recordReal(unitID: "1"), "transition to real art is observable")
+    expectEqual(tracker.counts, TabletopUnitSpriteOutcomeCounts(real: 1, fallback: 0),
+                "real counter replaces fallback outcome")
+    expect(!tracker.recordReal(unitID: "1"), "repeated real outcome is unchanged")
+    expect(!tracker.recordFallback(context, reason: .fileRead),
+           "previously emitted failure detail stays deduplicated after a real transition")
+    expectEqual(tracker.counts, TabletopUnitSpriteOutcomeCounts(real: 0, fallback: 1),
+                "deduplicated failure still updates the current outcome counters")
+
+    var context2 = context
+    context2.unitID = "2"
+    var context3 = context
+    context3.unitID = "3"
+    expect(tracker.recordFallback(context2, reason: .imageDecode),
+           "second unique failure emits")
+    expect(tracker.recordFallback(context3, reason: .invalidFrame),
+           "third unique failure emits and evicts oldest key")
+    expect(tracker.recordFallback(context, reason: .fileRead),
+           "evicted diagnostic identity may emit again")
+    tracker.remove(unitID: "1")
+    expectEqual(tracker.counts, TabletopUnitSpriteOutcomeCounts(real: 0, fallback: 2),
+                "removing a unit keeps active counters accurate")
 }
 
 func testPlacementSourceRectAndKey() {
@@ -363,6 +493,8 @@ struct AssetResolutionTests {
         testTeamPalette()
         testTerrainPlacement()
         testUnitPlacement()
+        testUnitSpriteRenderDecisionsAndIdentity()
+        testUnitSpriteOutcomeCountersAndDeduplication()
         testPlacementSourceRectAndKey()
         testLRUCache()
 

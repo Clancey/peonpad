@@ -37,7 +37,8 @@ public final class WargusTabletopMaterialProvider {
     /// one graphic index) so a single decode serves *all* waiting callers rather
     /// than only the first — otherwise repeated tiles/sprites would stay
     /// procedural forever.
-    private var pending: [String: [(UnlitMaterial) -> Void]] = [:]
+    private var pending: [String: [(Result<UnlitMaterial, TabletopUnitSpriteFailureReason>) -> Void]] = [:]
+    private let unitOutcomes = TabletopUnitSpriteOutcomeTracker()
     /// Serial background queue for file I/O + pixel work, off the main actor.
     private let decodeQueue = DispatchQueue(
         label: "org.peonpad.visionos.tabletop.assetdecode", qos: .userInitiated)
@@ -97,7 +98,11 @@ public final class WargusTabletopMaterialProvider {
     ) {
         guard let placement = resolver.terrainPlacement(
             graphicIndex: graphicIndex, tileset: tileset) else { return }
-        material(for: placement, completion: completion)
+        material(for: placement) { result in
+            if case let .success(material) = result {
+                completion(material)
+            }
+        }
     }
 
     /// Requests the real unit sprite material for a snapshot unit's current
@@ -107,16 +112,53 @@ public final class WargusTabletopMaterialProvider {
     /// directional frame (see `TabletopSpriteDirection`) rather than the unit's
     /// own map-relative one; when `nil` the unit's engine frame/mirror are used.
     public func unitMaterial(
-        unit: TabletopGameplayUnit,
-        sprite: TabletopUnitSpriteInfo?,
-        frameOverride: Int? = nil,
-        mirrorOverride: Bool? = nil,
-        completion: @escaping (UnlitMaterial) -> Void
+        request: TabletopUnitSpriteRequest,
+        completion: @escaping (Result<UnlitMaterial, TabletopUnitSpriteFailureReason>) -> Void
     ) {
-        guard let placement = resolver.unitPlacement(
-            unit: unit, sprite: sprite,
-            frameOverride: frameOverride, mirrorOverride: mirrorOverride) else { return }
-        material(for: placement, completion: completion)
+        material(for: request.placement, completion: completion)
+    }
+
+    public func recordUnitReal(context: TabletopUnitSpriteDiagnosticContext) {
+        guard unitOutcomes.recordReal(unitID: context.unitID) else { return }
+        let counts = unitOutcomes.counts
+        tabletopEngineLog(
+            "[Tabletop] unit sprite real ident=\(context.unitKind) "
+            + "category=\(context.renderCategory.rawValue) path=\(context.relativePath) "
+            + "frame=\(context.frame) root=\(context.root.rawValue) "
+            + "real=\(counts.real) fallback=\(counts.fallback)")
+    }
+
+    public func recordUnitPendingFallback(context: TabletopUnitSpriteDiagnosticContext) {
+        guard unitOutcomes.recordDisplayedFallback(unitID: context.unitID) else { return }
+        let counts = unitOutcomes.counts
+        tabletopEngineLog(
+            "[Tabletop] unit sprite outcome=pending unit=\(context.unitID) "
+            + "real=\(counts.real) fallback=\(counts.fallback)")
+    }
+
+    public func recordUnitFallback(
+        context: TabletopUnitSpriteDiagnosticContext,
+        reason: TabletopUnitSpriteFailureReason
+    ) {
+        let previousCounts = unitOutcomes.counts
+        let shouldLog = unitOutcomes.recordFallback(context, reason: reason)
+        let counts = unitOutcomes.counts
+        if shouldLog {
+            tabletopEngineLog(
+                "[Tabletop] unit sprite fallback reason=\(reason.rawValue) "
+                + "unit=\(context.unitID) ident=\(context.unitKind) "
+                + "category=\(context.renderCategory.rawValue) path=\(context.relativePath) "
+                + "frame=\(context.frame) root=\(context.root.rawValue) "
+                + "real=\(counts.real) fallback=\(counts.fallback)")
+        } else if counts != previousCounts {
+            tabletopEngineLog(
+                "[Tabletop] unit sprite outcome=fallback unit=\(context.unitID) "
+                + "real=\(counts.real) fallback=\(counts.fallback)")
+        }
+    }
+
+    public func removeUnitOutcome(unitID: String) {
+        unitOutcomes.remove(unitID: unitID)
     }
 
     /// Evicts every cached material (call when tearing down a scenario).
@@ -176,9 +218,11 @@ public final class WargusTabletopMaterialProvider {
             for entry in slotMap.slotEntries {
                 guard let placement = resolver.terrainPlacement(
                     graphicIndex: entry.graphicIndex, tileset: tileset) else { continue }
-                guard let img = WargusTabletopMaterialProvider.decode(
-                    root: root, placement: placement) else { continue }
-                slotImages[entry.slotIndex] = img
+                if case let .success(image) = WargusTabletopMaterialProvider.decode(
+                    root: root, placement: placement
+                ) {
+                    slotImages[entry.slotIndex] = image
+                }
             }
 
             guard !slotImages.isEmpty else {
@@ -231,11 +275,11 @@ public final class WargusTabletopMaterialProvider {
 
     private func material(
         for placement: TabletopAssetPlacement,
-        completion: @escaping (UnlitMaterial) -> Void
+        completion: @escaping (Result<UnlitMaterial, TabletopUnitSpriteFailureReason>) -> Void
     ) {
         let key = placement.cacheKey
         if let cached = cache.value(forKey: key) {
-            completion(cached)
+            completion(.success(cached))
             return
         }
         // Coalesce: if a decode for this key is already running, just queue this
@@ -248,32 +292,50 @@ public final class WargusTabletopMaterialProvider {
 
         let root = self.root(for: placement)
         decodeQueue.async { [weak self] in
-            let cgImage = WargusTabletopMaterialProvider.decode(root: root, placement: placement)
+            let decoded = WargusTabletopMaterialProvider.decode(root: root, placement: placement)
             Task { @MainActor in
                 guard let self else { return }
                 let waiters = self.pending.removeValue(forKey: key) ?? []
-                // Per-asset fallback: on any decode failure every waiter keeps
-                // its procedural content (no completion is invoked).
-                guard let cgImage,
-                      let material = self.makeMaterial(cgImage: cgImage) else { return }
+                let cgImage: CGImage
+                switch decoded {
+                case let .success(image):
+                    cgImage = image
+                case let .failure(reason):
+                    for waiter in waiters { waiter(.failure(reason)) }
+                    return
+                }
+                let material: UnlitMaterial
+                switch self.makeMaterial(cgImage: cgImage) {
+                case let .success(value):
+                    material = value
+                case let .failure(reason):
+                    for waiter in waiters { waiter(.failure(reason)) }
+                    return
+                }
                 self.cache.setValue(material, forKey: key)
-                for waiter in waiters { waiter(material) }
+                for waiter in waiters { waiter(.success(material)) }
             }
         }
     }
 
     /// Main-actor RealityKit material creation from a fully-processed CGImage.
-    private func makeMaterial(cgImage: CGImage) -> UnlitMaterial? {
-        guard let texture = try? TextureResource(
-            image: cgImage,
-            options: TextureResource.CreateOptions(semantic: .color)
-        ) else { return nil }
+    private func makeMaterial(
+        cgImage: CGImage
+    ) -> Result<UnlitMaterial, TabletopUnitSpriteFailureReason> {
+        let texture: TextureResource
+        do {
+            texture = try TextureResource(
+                image: cgImage,
+                options: TextureResource.CreateOptions(semantic: .color))
+        } catch {
+            return .failure(.textureCreation)
+        }
         var material = UnlitMaterial()
         material.color = .init(tint: .white, texture: .init(texture))
         // Sprites and cut-out tiles carry alpha; blend so transparency shows.
         material.blending = .transparent(opacity: .init(floatLiteral: 1.0))
         material.opacityThreshold = 0.5
-        return material
+        return .success(material)
     }
 
     /// Main-actor lit terrain-atlas material. Terrain is opaque (gray-filled
@@ -299,12 +361,21 @@ public final class WargusTabletopMaterialProvider {
     /// out-of-bounds frame) so the caller keeps procedural content.
     nonisolated static func decode(
         root: URL, placement: TabletopAssetPlacement
-    ) -> CGImage? {
+    ) -> Result<CGImage, TabletopUnitSpriteFailureReason> {
         guard let url = TabletopAssetPath.resolvedURL(
-            root: root, relative: placement.relativePath) else { return nil }
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-              let uiImage = UIImage(data: data),
-              let full = uiImage.cgImage else { return nil }
+            root: root, relative: placement.relativePath) else {
+            return .failure(.pathResolution)
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url, options: .mappedIfSafe)
+        } catch {
+            return .failure(.fileRead)
+        }
+        guard let uiImage = UIImage(data: data),
+              let full = uiImage.cgImage else {
+            return .failure(.imageDecode)
+        }
 
         let imageWidth = full.width
         let imageHeight = full.height
@@ -313,17 +384,24 @@ public final class WargusTabletopMaterialProvider {
         let cropped: CGImage
         if let rect = placement.sourceRect(imageWidth: imageWidth, imageHeight: imageHeight) {
             guard let sub = full.cropping(to: CGRect(
-                x: rect.x, y: rect.y, width: rect.width, height: rect.height)) else { return nil }
+                x: rect.x, y: rect.y, width: rect.width, height: rect.height)) else {
+                return .failure(.imageCrop)
+            }
             cropped = sub
         } else if placement.cellWidth > 0 {
             // A grid was requested but the frame fell out of bounds: fail so the
             // caller keeps procedural content rather than showing a wrong tile.
-            return nil
+            return .failure(.invalidFrame)
         } else {
             cropped = full
         }
 
-        return render(cropped, mirror: placement.mirror, tint: placement.teamTint)
+        guard let rendered = render(
+            cropped, mirror: placement.mirror, tint: placement.teamTint
+        ) else {
+            return .failure(.imageRender)
+        }
+        return .success(rendered)
     }
 
     /// Draws `image` into a fresh ARGB context, applying a horizontal mirror
